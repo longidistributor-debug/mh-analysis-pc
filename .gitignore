@@ -1,0 +1,10 @@
+# Local/runtime data
+*.log
+.DS_Store
+Thumbs.db
+
+# Go build cache / local binaries
+*.tmp
+*.test
+
+# Runtime settings are stored outside the repository under %LOCALAPPDATA%\MHAnalysis
