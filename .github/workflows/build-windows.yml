@@ -24,6 +24,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Repair three known single-character staging corruptions before decoding.
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('.bootstrap/payload.b64.part09')
+          s = p.read_text()
+          if len(s) == 8001 and s[6264] == 'o':
+              s = s[:6264] + s[6265:]
+          assert len(s) == 8000
+          p.write_text(s)
+
+          p = Path('.bootstrap/payload.b64.part12')
+          s = p.read_text()
+          assert len(s) == 8000
+          s = s[:4016] + 'V' + s[4017:]
+          p.write_text(s)
+
+          p = Path('.bootstrap/payload.b64.part14')
+          s = p.read_text()
+          assert len(s) == 8000
+          s = s[:6196] + 'n' + s[6197:]
+          p.write_text(s)
+          PY
+
           rm -rf .restore-payload
           mkdir -p .restore-payload
           cat .bootstrap/payload.b64.part* | tr -d '\r\n' | base64 -d > .restore-payload/source.tar.gz
@@ -48,6 +72,9 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
+
+      - name: Verify JavaScript
+        run: node --check web/app.js
 
       - name: Generate Windows icon resources
         shell: bash
