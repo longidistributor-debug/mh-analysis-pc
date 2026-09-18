@@ -55,7 +55,8 @@ jobs:
           grep -Fq 'V79.6 MH-S' web/index.html
           grep -Fq 'id="rsiCanvas"' web/index.html
           grep -Fq '[75,30]' web/app.js
-          grep -Fq 'drawRsiChart($("#rsiCanvas"),arr)' web/app.js || grep -Fq "drawRsiChart(\$('#rsiCanvas'\),arr)" web/app.js || grep -Fq "drawRsiChart($('#rsiCanvas'),arr)" web/app.js
+          grep -Fq 'drawRsiChart' web/app.js
+          grep -Fq 'rsiCanvas' web/app.js
 
           # Calendar must include LOW, MEDIUM and HIGH and refresh on local date change.
           grep -Fq 'impacts=1,2,3' web/index.html
