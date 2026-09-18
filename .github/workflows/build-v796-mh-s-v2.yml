@@ -1,0 +1,157 @@
+name: Build V79.6 MH-S v2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v796-mh-s]
+    paths:
+      - 'tools/v796_mhs_patch.py'
+      - 'tools/v796_mhs_startup_repair.py'
+      - 'assets/mh_logo_user.b64'
+      - '.github/workflows/build-v796-mh-s-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout V79.6 MH-S branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify historical V79.6 sender baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f main.go
+          test -f web/app.js
+          test -f web/index.html
+          test -f web/styles.css
+          grep -Fq "const STORAGE_AUTO='mhAutoSignalEnabledV796'" web/app.js
+          grep -Fq 'func processWhatsAppQueue()' main.go
+          grep -Fq 'time.AfterFunc(4*time.Second, func() { postMessage(hostHWND, wmWhatsAppClick, 0, 0) })' main.go
+          grep -Fq "document.querySelector('[data-icon=\"send\"]')" main.go
+          grep -Fq 'b.click();return true;' main.go
+          cp main.go /tmp/main-v796-original.go
+
+      - name: Vendor chart library locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            'https://cdn.jsdelivr.net/npm/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js' \
+            --output web/lightweight-charts.standalone.production.js
+          test -s web/lightweight-charts.standalone.production.js
+
+      - name: Apply requested MH-S features
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v796_mhs_patch.py
+          python tools/v796_mhs_startup_repair.py
+          node --check web/app.js
+
+          grep -Fq 'V79.6 MH-S' web/index.html
+          grep -Fq 'id="rsiCanvas"' web/index.html
+          grep -Fq '[75,30]' web/app.js
+          grep -Fq 'impacts=1,2,3' web/index.html
+          grep -Fq 'Math.floor(minute/15)+1' web/app.js
+          grep -Fq 'startMs+5*60*1000' web/app.js
+          grep -Fq 'startMs+15*60*1000' web/app.js
+          grep -Fq "runScheduledAutoAction('NEW',p.key)" web/app.js
+          grep -Fq "runScheduledAutoAction('REEVAL',p.key)" web/app.js
+          grep -Fq '1H Phase ${p.phase}' web/app.js
+          grep -Fq '*MH ANALYSIS SIGNAL*' web/app.js
+          grep -Fq '*MH ANALYSIS RE-EVALUATE*' web/app.js
+          grep -Fq "isSell?'🔴':'🟢'" web/app.js
+
+          # Startup must now match the historical working path, not the prior
+          # delayed-window experiment that closed on the user's PC.
+          grep -Fq 'pShowWindow.Call(hostHWND, swMaximize)' main.go
+          grep -Fq 'pUpdateWindow.Call(hostHWND)' main.go
+          grep -Fq 'HbrBackground: 6' main.go
+          ! grep -Fq 'wmShowReady' main.go
+          ! grep -Fq 'pGetStockObject' main.go
+          ! grep -Fq '450*time.Millisecond' main.go
+
+          # Critical: sender remains byte-for-byte historical V79.6.
+          python - <<'PY'
+          from pathlib import Path
+          def between(t,a,b):
+              i=t.index(a); j=t.index(b,i); return t[i:j]
+          a=Path('/tmp/main-v796-original.go').read_text()
+          b=Path('main.go').read_text()
+          assert between(a,'func sendWhatsappHandler','// --- Native Windows host') == between(b,'func sendWhatsappHandler','// --- Native Windows host')
+          assert between(a,'func processWhatsAppQueue','func runHost') == between(b,'func processWhatsAppQueue','func runHost')
+          print('Historical V79.6 WhatsApp sender unchanged')
+          PY
+
+      - name: Install supplied MH logo in app and EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d assets/mh_logo_user.b64 > web/mh-logo.png
+          python - <<'PY'
+          from pathlib import Path
+          raw=Path('web/mh-logo.png').read_bytes()
+          assert raw[:8] == b'\x89PNG\r\n\x1a\n'
+          print('Supplied MH logo installed:', len(raw), 'bytes')
+          PY
+          python -m pip install --disable-pip-version-check --quiet pillow
+          python - <<'PY'
+          from PIL import Image
+          im=Image.open('web/mh-logo.png').convert('RGBA')
+          im.save('web/mh-analysis.ico',format='ICO',sizes=[(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])
+          PY
+
+      - name: Simulate fixed real-clock cycle rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'JS'
+          function info(h,m,s=0){const d=new Date(2026,8,19,h,m,s);const minute=d.getMinutes(),phase=Math.floor(minute/15)+1,startMinute=Math.floor(minute/15)*15;const st=new Date(d);st.setMinutes(startMinute,0,0);return{phase,start:st.getTime(),reeval:st.getTime()+5*60000,end:st.getTime()+15*60000}}
+          const a=info(4,57); if(a.phase!==4 || Math.round((a.end-new Date(2026,8,19,4,57,0).getTime())/60000)!==3) throw Error('04:57 must show 3m to 05:00');
+          const b=info(4,3); if(new Date(b.reeval).getMinutes()!==5 || new Date(b.end).getMinutes()!==15) throw Error('04:03 rules wrong');
+          const c=info(4,7); if(c.reeval>=new Date(2026,8,19,4,7).getTime()) throw Error('04:07 must miss re-eval');
+          const d=info(4,14,50); if(d.end-new Date(2026,8,19,4,14,50).getTime()!==10000) throw Error('04:14:50 must have 10 sec');
+          console.log('Fixed clock scenarios passed');
+          JS
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Embed Windows icon resource
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/akavel/rsrc@latest
+          "$(go env GOPATH)/bin/rsrc" -ico web/mh-analysis.ico -o rsrc_windows_amd64.syso
+          test -s rsrc_windows_amd64.syso
+
+      - name: Build Windows x64 V79.6 MH-S v2
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go
+          mkdir -p dist-mhs
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist-mhs/MH Analysis V79.6 MH-S.exe' .
+          file 'dist-mhs/MH Analysis V79.6 MH-S.exe'
+          sha256sum 'dist-mhs/MH Analysis V79.6 MH-S.exe' | tee dist-mhs/SHA256SUMS.txt
+          (cd dist-mhs && zip -9 'MH-Analysis-V79.6-MH-S-v2.zip' 'MH Analysis V79.6 MH-S.exe' SHA256SUMS.txt >/dev/null)
+
+      - name: Upload V79.6 MH-S v2
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V79.6-MH-S-v2
+          path: |
+            dist-mhs/MH Analysis V79.6 MH-S.exe
+            dist-mhs/MH-Analysis-V79.6-MH-S-v2.zip
+            dist-mhs/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
