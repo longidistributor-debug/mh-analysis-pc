@@ -1,0 +1,1 @@
+98960798a752b1ade79eb23bdb0a51a05552b3cbc2d07218b642b5b457ed2df1  dist/MH Analysis Desktop v80.0 Native WebView2 Portable.exe
