@@ -1,18 +1,20 @@
-name: Build and Sync MH Analysis PC
+name: Build MH Analysis PC
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - '.bootstrap/**'
+      - 'main.go'
+      - 'go.mod'
+      - 'web/**'
       - '.github/workflows/build-windows.yml'
 
 permissions:
   contents: write
 
 jobs:
-  build-sync:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -20,61 +22,23 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Restore staged v80 source
-        shell: bash
-        run: |
-          set -euo pipefail
-          # Repair three known single-character staging corruptions before decoding.
-          python - <<'PY'
-          from pathlib import Path
-
-          p = Path('.bootstrap/payload.b64.part09')
-          s = p.read_text()
-          if len(s) == 8001 and s[6264] == 'o':
-              s = s[:6264] + s[6265:]
-          assert len(s) == 8000
-          p.write_text(s)
-
-          p = Path('.bootstrap/payload.b64.part12')
-          s = p.read_text()
-          assert len(s) == 8000
-          s = s[:4016] + 'V' + s[4017:]
-          p.write_text(s)
-
-          p = Path('.bootstrap/payload.b64.part14')
-          s = p.read_text()
-          assert len(s) == 8000
-          s = s[:6196] + 'n' + s[6197:]
-          p.write_text(s)
-          PY
-
-          rm -rf .restore-payload
-          mkdir -p .restore-payload
-          cat .bootstrap/payload.b64.part* | tr -d '\r\n' | base64 -d > .restore-payload/source.tar.gz
-          mkdir -p .restore-payload/extracted
-          tar -xzf .restore-payload/source.tar.gz -C .restore-payload/extracted
-          ROOT="$(dirname "$(find .restore-payload/extracted -type f -name go.mod | head -n 1)")"
-          if [ -z "$ROOT" ] || [ ! -f "$ROOT/go.mod" ]; then
-            echo 'Could not locate restored Go source.' >&2
-            exit 1
-          fi
-          cp -a "$ROOT/." ./
-          rm -rf .restore-payload
-          test -f main.go
-          test -f go.mod
-          test -f web/app.js
-          test -f web/index.html
-          test -f web/styles.css
-          test -f web/mh-logo.png
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
 
-      - name: Verify JavaScript
-        run: node --check web/app.js
+      - name: Verify project source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f main.go
+          test -f go.mod
+          test -f web/app.js
+          test -f web/index.html
+          test -f web/styles.css
+          test -f web/mh-logo.png
+          node --check web/app.js
 
       - name: Generate Windows icon resources
         shell: bash
@@ -101,17 +65,18 @@ jobs:
           rm -f 'dist/MH-Analysis-Desktop-v80.0-Native-WebView2-Portable.zip'
           (cd dist && zip -9 'MH-Analysis-Desktop-v80.0-Native-WebView2-Portable.zip' 'MH Analysis Desktop v80.0 Native WebView2 Portable.exe' SHA256SUMS.txt >/dev/null)
 
-      - name: Sync source and generated EXE back to main
+      - name: Sync generated resources and clean staging
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .gitignore go.mod main.go web rsrc_windows_amd64.syso dist
+          rm -rf .bootstrap
+          git add -A .bootstrap web/mh-analysis.ico rsrc_windows_amd64.syso dist
           if git diff --cached --quiet; then
             echo 'Repository is already synchronized.'
           else
-            git commit -m 'Sync MH Analysis PC v80.0 source and Windows EXE'
+            git commit -m 'Finalize MH Analysis PC v80.0 repository sync'
             git push origin HEAD:main
           fi
 
