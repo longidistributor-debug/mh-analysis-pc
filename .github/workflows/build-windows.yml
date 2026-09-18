@@ -1,0 +1,100 @@
+name: Build and Sync MH Analysis PC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.bootstrap/**'
+      - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore staged v80 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .restore-payload
+          mkdir -p .restore-payload
+          cat .bootstrap/payload.b64.part* | tr -d '\r\n' | base64 -d > .restore-payload/source.tar.gz
+          mkdir -p .restore-payload/extracted
+          tar -xzf .restore-payload/source.tar.gz -C .restore-payload/extracted
+          ROOT="$(dirname "$(find .restore-payload/extracted -type f -name go.mod | head -n 1)")"
+          if [ -z "$ROOT" ] || [ ! -f "$ROOT/go.mod" ]; then
+            echo 'Could not locate restored Go source.' >&2
+            exit 1
+          fi
+          cp -a "$ROOT/." ./
+          rm -rf .restore-payload
+          test -f main.go
+          test -f go.mod
+          test -f web/app.js
+          test -f web/index.html
+          test -f web/styles.css
+          test -f web/mh-logo.png
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Generate Windows icon resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet pillow
+          python - <<'PY'
+          from PIL import Image
+          img = Image.open('web/mh-logo.png').convert('RGBA')
+          sizes = [(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)]
+          img.save('web/mh-analysis.ico', format='ICO', sizes=sizes)
+          PY
+          go install github.com/akavel/rsrc@latest
+          "$(go env GOPATH)/bin/rsrc" -ico web/mh-analysis.ico -o rsrc_windows_amd64.syso
+
+      - name: Build Windows x64 portable EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis Desktop v80.0 Native WebView2 Portable.exe' .
+          file 'dist/MH Analysis Desktop v80.0 Native WebView2 Portable.exe'
+          sha256sum 'dist/MH Analysis Desktop v80.0 Native WebView2 Portable.exe' | tee dist/SHA256SUMS.txt
+          rm -f 'dist/MH-Analysis-Desktop-v80.0-Native-WebView2-Portable.zip'
+          (cd dist && zip -9 'MH-Analysis-Desktop-v80.0-Native-WebView2-Portable.zip' 'MH Analysis Desktop v80.0 Native WebView2 Portable.exe' SHA256SUMS.txt >/dev/null)
+
+      - name: Sync source and generated EXE back to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .gitignore go.mod main.go web rsrc_windows_amd64.syso dist
+          if git diff --cached --quiet; then
+            echo 'Repository is already synchronized.'
+          else
+            git commit -m 'Sync MH Analysis PC v80.0 source and Windows EXE'
+            git push origin HEAD:main
+          fi
+
+      - name: Upload portable build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-PC-v80.0
+          path: |
+            dist/MH Analysis Desktop v80.0 Native WebView2 Portable.exe
+            dist/MH-Analysis-Desktop-v80.0-Native-WebView2-Portable.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
