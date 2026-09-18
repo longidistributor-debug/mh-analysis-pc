@@ -6,6 +6,8 @@ on:
     branches: [v796-mh-s]
     paths:
       - 'tools/v796_mhs_patch.py'
+      - 'tools/v796_startup_restore.py'
+      - 'assets/mh_logo_user.b64'
       - '.github/workflows/build-v796-mh-s.yml'
 
 permissions:
@@ -28,6 +30,7 @@ jobs:
           test -f web/app.js
           test -f web/index.html
           test -f web/styles.css
+          test -f assets/mh_logo_user.b64
           grep -Fq "const STORAGE_AUTO='mhAutoSignalEnabledV796'" web/app.js
           grep -Fq 'func processWhatsAppQueue()' main.go
           grep -Fq 'time.AfterFunc(4*time.Second, func() { postMessage(hostHWND, wmWhatsAppClick, 0, 0) })' main.go
@@ -43,13 +46,25 @@ jobs:
             --output web/lightweight-charts.standalone.production.js
           test -s web/lightweight-charts.standalone.production.js
 
-      - name: Apply requested V79.6 MH-S changes only
+      - name: Apply requested V79.6 MH-S changes and restore original startup
         shell: bash
         run: |
           set -euo pipefail
           cp main.go /tmp/main-v796-before.go
           python tools/v796_mhs_patch.py
+          python tools/v796_startup_restore.py
           node --check web/app.js
+
+          # Use the user's supplied MH logo inside MH Analysis.
+          python - <<'PY'
+          from pathlib import Path
+          import base64
+          raw = base64.b64decode(Path('assets/mh_logo_user.b64').read_text().strip(), validate=True)
+          if raw[:8] != b'\x89PNG\r\n\x1a\n':
+              raise SystemExit('Supplied MH logo is not a PNG')
+          Path('web/mh-logo.png').write_bytes(raw)
+          print('Installed supplied MH logo into web/mh-logo.png')
+          PY
 
           # Visible label and RSI.
           grep -Fq 'V79.6 MH-S' web/index.html
@@ -87,11 +102,17 @@ jobs:
           grep -Fq '*SL:* ${fmt(sig.sl)}' web/app.js
           grep -Fq "isSell?'🔴':'🟢'" web/app.js
 
-          # Responsive map/startup fixes.
+          # Market map spacing remains fixed.
           grep -Fq '#mapEq{white-space:nowrap;overflow:visible' web/styles.css
-          grep -Fq 'pGetStockObject.Call(4)' main.go
-          grep -Fq 'wmShowReady' main.go
-          grep -Fq '450*time.Millisecond' main.go
+
+          # Startup must now be the original immediate V79.6 path: no delayed
+          # reveal, no extra GDI brush and no wmShowReady experiment.
+          grep -Fq 'pShowWindow.Call(hostHWND, swMaximize)' main.go
+          grep -Fq 'pUpdateWindow.Call(hostHWND)' main.go
+          grep -Fq 'HbrBackground: 6' main.go
+          if grep -Eq 'wmShowReady|pGetStockObject|450\*time.Millisecond|gdi32' main.go; then
+            echo 'Experimental startup code is still present'; exit 1
+          fi
 
           # Critical: historical V79.6 WhatsApp sender must be unchanged byte-for-byte.
           python - <<'PY'
@@ -125,6 +146,21 @@ jobs:
           go-version: '1.23.2'
           cache: false
 
+      - name: Build supplied MH logo into Windows EXE icon
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --quiet pillow
+          python - <<'PY'
+          from PIL import Image
+          im=Image.open('web/mh-logo.png').convert('RGBA')
+          im.save('web/mh-analysis.ico',format='ICO',sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(24,24),(16,16)])
+          PY
+          rm -f rsrc_windows_amd64.syso
+          go install github.com/akavel/rsrc@latest
+          "$(go env GOPATH)/bin/rsrc" -ico web/mh-analysis.ico -o rsrc_windows_amd64.syso
+          test -s rsrc_windows_amd64.syso
+
       - name: Build Windows x64 V79.6 MH-S
         shell: bash
         run: |
@@ -139,7 +175,7 @@ jobs:
       - name: Upload V79.6 MH-S
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-MH-S
+          name: MH-Analysis-V79.6-MH-S-Startup-Fix
           path: |
             dist-mhs/MH Analysis V79.6 MH-S.exe
             dist-mhs/MH-Analysis-V79.6-MH-S.zip
