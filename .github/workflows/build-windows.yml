@@ -72,7 +72,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           rm -rf .bootstrap
-          git add -A .bootstrap web/mh-analysis.ico rsrc_windows_amd64.syso dist
+          git add -A
           if git diff --cached --quiet; then
             echo 'Repository is already synchronized.'
           else
