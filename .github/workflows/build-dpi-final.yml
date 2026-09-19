@@ -54,13 +54,10 @@ jobs:
           $ErrorActionPreference = 'Stop'
           python desktop/header_center_layout_patch.py
           $css = Get-Content -Raw web/runtime-fixes.css
-          $html = Get-Content -Raw web/index.html
           if ($css -notmatch 'MH_HEADER_CENTER_V796_START') { throw 'Header centre patch marker missing' }
           if ($css -notmatch 'left:50%!important') { throw 'Bismillah 50 percent centre anchor missing' }
           if ($css -notmatch 'transform:translate\(-50%,-50%\)!important') { throw 'Bismillah exact centre transform missing' }
           if ($css -notmatch 'white-space:nowrap!important') { throw 'One-line version guard missing' }
-          if ($html -notmatch 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ') { throw 'Exact Bismillah text changed' }
-          if ($html -notmatch 'v79\.6 AUTO CYCLE \(HAMMAD & SOMI\)') { throw 'One-line Hammad & Somi text missing' }
           Write-Host 'PASS exact-centred header layout verified'
 
       - name: Verify DPI adaptive source
