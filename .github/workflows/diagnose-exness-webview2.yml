@@ -1,0 +1,72 @@
+name: Diagnose Exness WebView2
+on:
+  push:
+    branches: [exness-render-fix]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Apply same Exness WebView2 patches
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/branding_text_patch.py
+          python desktop/header_center_layout_patch.py
+          python desktop/records_feature_patch.py
+          python desktop/exness_feature_patch.py
+          python desktop/exness_login_focus_flicker_patch.py
+          python desktop/exness_login_cleanup_on_open_patch.py
+          python desktop/exness_webview2_switch_patch.py
+      - name: Build diagnostic EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go exness_bridge.go native_exness_bridge_windows.go dpi_windows.go
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'MH Analysis.exe' .
+      - name: Print exact WebView2 render error
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:MH_SMOKE_TEST='1'
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class ExDiagWin {
+            [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+          }
+          '@
+          $p=Start-Process -FilePath (Resolve-Path 'MH Analysis.exe') -PassThru
+          try {
+            for($i=0;$i -lt 60;$i++){$p.Refresh();if($p.MainWindowHandle -ne 0){break};Start-Sleep -Milliseconds 250}
+            [IntPtr]$h=$p.MainWindowHandle
+            if($h -eq [IntPtr]::Zero){throw 'host missing'}
+            $server=''
+            for($i=0;$i -lt 60;$i++){
+              try{$ls=Get-NetTCPConnection -State Listen -OwningProcess $p.Id -ErrorAction Stop|Where-Object{$_.LocalAddress -eq '127.0.0.1'}|Select-Object -First 1;if($ls){$server="http://127.0.0.1:$($ls.LocalPort)";break}}catch{}
+              Start-Sleep -Milliseconds 250
+            }
+            if(!$server){throw 'local service missing'}
+            [ExDiagWin]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
+            for($j=1;$j -le 4;$j++){
+              Start-Sleep -Seconds 3
+              Write-Host "===== RENDER CHECK $j ====="
+              & curl.exe -sS -i "$server/api/exness/render-check"
+              Write-Host "===== WEBVIEW PROCESSES ====="
+              Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'msedgewebview2|msedge|chrome' } | Select-Object Name,ProcessId,CommandLine | Format-List | Out-String | Write-Host
+            }
+          } finally {
+            try{if($server){Invoke-WebRequest ($server+'/api/shutdown') -UseBasicParsing -TimeoutSec 2|Out-Null}}catch{}
+            Start-Sleep -Seconds 2
+            if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+            Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue
+          }
