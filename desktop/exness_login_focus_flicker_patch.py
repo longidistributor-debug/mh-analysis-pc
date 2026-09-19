@@ -40,7 +40,33 @@ p.write_text(s,encoding='utf-8')
 p=Path('exness_bridge.go'); s=p.read_text(encoding='utf-8')
 if 'exnessApplyLoginCleanup' not in s:
     anchor='''func exnessPrefillOrder(prep exnessOrderPrep) (string, error) {\n'''
-    helper=r'''func exnessApplyLoginCleanup() {\n\twsURL, err := exnessPageSocket(); if err != nil { return }\n\tconn, _, err := websocket.DefaultDialer.Dial(wsURL, nil); if err != nil { return }; defer conn.Close()\n\tjs := `(()=>{\nconst hide=()=>{\n const els=[...document.querySelectorAll('button,a,[role="button"]')];\n for(const e of els){const t=String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().toLowerCase();\n  if(t==='sign in with google'||t==='continue with google'||t==='login with google'||t.includes('forgot password')||t.includes('forgot my password')){e.style.setProperty('display','none','important');}\n }\n}; hide();\nif(!window.__mhExnessLoginCleanup){window.__mhExnessLoginCleanup=true;new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});}\nreturn 'ok';\n})()`\n\t_, _ = chCDPCommand(conn, 9101, "Runtime.evaluate", map[string]any{"expression":js,"returnByValue":true})\n}\n\n'''+anchor
+    helper='''func exnessApplyLoginCleanup() {
+\twsURL, err := exnessPageSocket()
+\tif err != nil { return }
+\tconn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+\tif err != nil { return }
+\tdefer conn.Close()
+\tjs := `(()=>{
+const hide=()=>{
+ const els=[...document.querySelectorAll('button,a,[role="button"]')];
+ for(const e of els){
+  const t=String(e.innerText||e.textContent||'').replace(/\\s+/g,' ').trim().toLowerCase();
+  if(t==='sign in with google'||t==='continue with google'||t==='login with google'||t.includes('forgot password')||t.includes('forgot my password')){
+   e.style.setProperty('display','none','important');
+  }
+ }
+};
+hide();
+if(!window.__mhExnessLoginCleanup){
+ window.__mhExnessLoginCleanup=true;
+ new MutationObserver(hide).observe(document.documentElement,{childList:true,subtree:true});
+}
+return 'ok';
+})()`
+\t_, _ = chCDPCommand(conn, 9101, "Runtime.evaluate", map[string]any{"expression": js, "returnByValue": true})
+}
+
+'''+anchor
     s=rep(s,anchor,helper,'login cleanup helper')
     s=rep(s,'''func exnessPrefillOrder(prep exnessOrderPrep) (string, error) {\n\twsURL, err := exnessPageSocket()\n''','''func exnessPrefillOrder(prep exnessOrderPrep) (string, error) {\n\tif err := chEnsureExnessBrowser(); err != nil { return "", err }\n\texnessApplyLoginCleanup()\n\twsURL, err := exnessPageSocket()\n''','ensure browser before prefill')
 p.write_text(s,encoding='utf-8')
