@@ -1,0 +1,58 @@
+name: Publish Verified DPI Adaptive Release
+
+on:
+  push:
+    branches: [final-current-v796]
+    paths: ['.github/workflows/publish-dpi-release.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Download exact verified Run 3 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: MH-Analysis-V79.6-DPI-Adaptive
+          path: fixed
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 35440177749
+      - name: Verify and publish release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED='fae95e02554506033f3c98aee5c3883f2afbe6b5cbbc94deb9799ed055869d16'
+          GOT=$(sha256sum 'fixed/MH Analysis.exe' | awk '{print $1}')
+          echo "Verified DPI EXE SHA256: $GOT"
+          test "$GOT" = "$EXPECTED"
+          mkdir -p release
+          cp 'fixed/MH Analysis.exe' 'release/MH Analysis.exe'
+          cp 'fixed/MH-Analysis-V79.6-DPI-Adaptive.zip' 'release/MH-Analysis-V79.6-FINAL.zip'
+          cp 'fixed/SHA256SUMS.txt' 'release/SHA256SUMS.txt'
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('README.md')
+          s=p.read_text(encoding='utf-8') if p.exists() else '# MH Analysis V79.6 — FINAL CURRENT\n'
+          import re
+          s=re.sub(r'`[0-9a-f]{64}`','`fae95e02554506033f3c98aee5c3883f2afbe6b5cbbc94deb9799ed055869d16`',s,count=1)
+          if 'Per-Monitor V2' not in s:
+              s += '\n\n## DPI-adaptive Windows build\nThe current release is Per-Monitor V2 DPI aware so the embedded MH Analysis and WhatsApp views fill the host correctly across Windows display scaling levels. Verified runtime build: GitHub Actions DPI Run #3.\n'
+          p.write_text(s,encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add release README.md
+          if git diff --cached --quiet; then
+            echo 'release already current'
+          else
+            git commit -m 'Publish verified DPI-adaptive final EXE'
+            git push origin HEAD:final-current-v796
+          fi
