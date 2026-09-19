@@ -34,7 +34,6 @@ jobs:
             'desktop/chart_reset_only_patch.py',
             'desktop/native_mt5_terminal_patch.py',
             'desktop/native_button_id_fix_patch.py',
-            'desktop/native_mt5_prefill_patch.py',
             'desktop/ea_signal_reader_bridge_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
@@ -49,17 +48,15 @@ jobs:
           $main=Get-Content -Raw main.go
           $app=Get-Content -Raw web/app.js
           $html=Get-Content -Raw web/index.html
-          $prefill=Get-Content -Raw mt5_prefill.go
           $eaBridge=Get-Content -Raw ea_signal_bridge.go
           foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){
             if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" }
           }
-          foreach($m in @('MH_NATIVE_MT5_PREFILL_V796','registerMT5PrefillRoutes','/api/mt5/prepare','prepareMT5SignalV796','mt5ApplyLatestQueued')){
-            if(-not ($hostSrc.Contains($m) -or $main.Contains($m) -or $app.Contains($m) -or $prefill.Contains($m))){ throw "missing MT5 prefill marker $m" }
+          foreach($m in @('MH_EA_SIGNAL_READER_BRIDGE_V796','registerEASignalBridgeRoutes','/api/mt5/ea/send','/api/mt5/ea/status','sendManualNewAnalyzeSignalToEAV796','signal.txt','status.txt')){
+            if(-not ($eaBridge.Contains($m) -or $main.Contains($m) -or $app.Contains($m))){ throw "missing EA bridge marker $m" }
           }
-          foreach($m in @('MH_EA_SIGNAL_READER_BRIDGE_V796','registerEASignalBridgeRoutes','/api/mt5/ea/send','/api/mt5/ea/status','sendCurrentSignalToEAV796','EA • SEND SIGNAL','signal.txt','status.txt')){
-            if(-not ($eaBridge.Contains($m) -or $main.Contains($m) -or $app.Contains($m) -or $html.Contains($m))){ throw "missing EA bridge marker $m" }
-          }
+          if($html.Contains('EA • SEND SIGNAL') -or $html.Contains('id="sendToEA"')){ throw 'extra EA button must not exist' }
+          if(-not $app.Contains("if(d.signal&&!fromAuto)void sendManualNewAnalyzeSignalToEAV796(d)")){ throw 'manual NEW ANALYZE handoff missing' }
           foreach($bad in @('exness.com','ExnessProfile','registerExnessRoutes','/api/exness/','my.exness.global')){
             if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains: $bad" }
           }
@@ -68,15 +65,13 @@ jobs:
             if(-not $app.Contains($m)){ throw "chart regression marker missing $m" }
           }
           if(-not $app.Contains('manual context selection must be API-silent')){ throw 'manual API-silent rule missing' }
-          if($prefill.Contains('InvokePattern') -or $prefill -match '\.Invoke\('){ throw 'final MT5 Place automation is not allowed in this build' }
-          if(-not $prefill.Contains('READY FOR USER CONFIRMATION')){ throw 'review-before-place status missing' }
           Write-Host 'PASS MT5 EA signal reader bridge source guards'
 
       - name: Build Windows x64 EXE
         shell: bash
         run: |
           set -euo pipefail
-          gofmt -w main.go chrome_host.go records.go mt5_prefill.go ea_signal_bridge.go dpi_windows.go
+          gofmt -w main.go chrome_host.go records.go ea_signal_bridge.go dpi_windows.go
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
