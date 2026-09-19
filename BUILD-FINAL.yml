@@ -1,0 +1,6 @@
+name: Build FINAL Current V79.6
+runner: windows-latest
+go-version: '1.23.2'
+build-command: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+runtime-test: powershell desktop/runtime_seamless_test.ps1
+native-settings-test: powershell desktop/runtime_native_settings_click_test.ps1
