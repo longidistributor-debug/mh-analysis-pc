@@ -15,6 +15,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
       - name: Run patch sequence and capture diagnostics
+        continue-on-error: true
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force diag | Out-Null
@@ -52,7 +53,7 @@ jobs:
           gofmt -w main.go chrome_host.go records.go exness_bridge.go dpi_windows.go *> diag/10-gofmt.txt
           "gofmt_exit=$LASTEXITCODE" | Add-Content diag/10-gofmt.txt
           $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
-          go build -trimpath -ldflags='-H=windowsgui -s -w' -o diag/test.exe . *> diag/11-build.txt
+          cmd /c "go build -trimpath -ldflags=\"-H=windowsgui -s -w\" -o diag\test.exe . > diag\11-build.txt 2>&1"
           "build_exit=$LASTEXITCODE" | Add-Content diag/11-build.txt
           Remove-Item Env:GOOS,Env:GOARCH,Env:CGO_ENABLED -ErrorAction SilentlyContinue
           Copy-Item chrome_host.go diag/chrome_host.after.go
@@ -60,6 +61,7 @@ jobs:
           Copy-Item web/app.js diag/app.after.js
           Get-Content diag/0*.txt,diag/10-gofmt.txt,diag/11-build.txt
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: exness-login-fix-diagnostics
           path: diag
