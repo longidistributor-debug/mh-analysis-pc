@@ -1,0 +1,145 @@
+name: Build FINAL V79.6 MT5 System
+on:
+  workflow_dispatch:
+  push:
+    branches: [mt5-system]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Apply verified patches
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){python $p;if($LASTEXITCODE -ne 0){throw "Patch failed: $p"}}
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/exness_feature_patch.py',
+            'desktop/exness_login_focus_flicker_patch.py',
+            'desktop/exness_login_cleanup_on_open_patch.py',
+            'desktop/exness_render_safe_chrome_patch.py',
+            'desktop/exness_login_ui_verified_patch.py',
+            'desktop/symbol_sync_chart_reset_patch.py',
+            'desktop/mt5_system_patch.py'
+          )){Patch $p}
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'app.js syntax check failed'}
+      - name: Source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $bridge=Get-Content -Raw exness_bridge.go
+          $app=Get-Content -Raw web/app.js
+          foreach($m in @('MH_MT5_SYSTEM_V796','MT5 System','MT5SystemProfile','https://www.exness.com/webterminal/')){if(-not $hostSrc.Contains($m)){throw "missing MT5 host marker $m"}}
+          if($hostSrc.Contains('https://my.exness.global/webtrading/')){throw 'old Exness custom terminal URL remains'}
+          if(-not $bridge.Contains('MH_MT5_SYSTEM_V796')){throw 'MT5 bridge marker missing'}
+          if(-not $bridge.Contains('QUEUED FOR MT5 PREFILL')){throw 'MT5 bridge status missing'}
+          foreach($m in @('MH_SYMBOL_SYNC_CHART_RESET_V796','BTCUSDT','contextGeneration','lwChart.remove()')){if(-not $app.Contains($m)){throw "symbol/chart regression $m"}}
+          if(-not $app.Contains('manual context selection must be API-silent')){throw 'manual API-silent rule missing'}
+          foreach($bad in @("clickText(['Place order'","clickText(['Confirm'","clickText(['Submit'")){if($bridge.Contains($bad)){throw "unsafe submit automation: $bad"}}
+          Write-Host 'PASS MT5 source guards'
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go exness_bridge.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-MT5-System.zip' -Force"
+      - name: Existing app startup restart regression
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+      - name: Verify embedded MT5 WebTerminal render
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:MH_SMOKE_TEST='1'
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class MHMT5Win {[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);}
+          '@
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          $server=''
+          try {
+            for($i=0;$i -lt 60;$i++){$p.Refresh();if($p.MainWindowHandle -ne 0){break};Start-Sleep -Milliseconds 250}
+            [IntPtr]$h=$p.MainWindowHandle;if($h -eq [IntPtr]::Zero){throw 'host missing'}
+            for($i=0;$i -lt 60;$i++){
+              try{$ls=Get-NetTCPConnection -State Listen -OwningProcess $p.Id -ErrorAction Stop|Where-Object{$_.LocalAddress -eq '127.0.0.1'}|Select-Object -First 1;if($ls){$server="http://127.0.0.1:$($ls.LocalPort)";(Invoke-WebRequest "$server/" -UseBasicParsing -TimeoutSec 2)|Out-Null;break}}catch{}
+              Start-Sleep -Milliseconds 250
+            }
+            if(!$server){throw 'local service missing'}
+            $pre=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match 'MT5SystemProfile'}|Select-Object -First 1
+            if($pre){throw 'MT5 WebTerminal launched before tab click'}
+            [MHMT5Win]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
+            $browser=$null
+            for($i=0;$i -lt 60;$i++){
+              $browser=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match 'MT5SystemProfile' -and $_.CommandLine -match 'exness.com/webterminal'}|Select-Object -First 1
+              if($browser){break};Start-Sleep -Milliseconds 300
+            }
+            if(-not $browser){throw 'MT5SystemProfile browser process missing'}
+            $render=$null
+            for($i=0;$i -lt 80;$i++){
+              try{$render=Invoke-RestMethod "$server/api/exness/render-check" -TimeoutSec 4}catch{$render=$null}
+              if($render -and $render.ok -and [int]$render.htmlLength -gt 500){break}
+              Start-Sleep -Milliseconds 400
+            }
+            if(-not $render -or -not $render.ok -or [int]$render.htmlLength -le 500){throw "MT5 WebTerminal did not render: $($render|ConvertTo-Json -Compress)"}
+            if([string]$render.url -notmatch 'exness'){throw "unexpected MT5 WebTerminal URL $($render.url)"}
+            Write-Host "PASS embedded MT5 WebTerminal render url=$($render.url) html=$($render.htmlLength)"
+            $payload=@{symbol='BTCUSDT';timeframe='15m';direction='BUY';entry=60000;sl=59000;tp1=62000;tp2=63000;market_price=61000;score=80;setup='CI'}|ConvertTo-Json
+            $prep=Invoke-RestMethod "$server/api/exness/prepare" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 5
+            if(-not $prep.ok -or [string]$prep.pending_type -ne 'BUY LIMIT'){throw 'MT5 BTC prepare acceptance failed'}
+            Write-Host 'PASS MT5 bridge BTCUSDT prepare acceptance'
+          } finally {
+            if($server){try{Invoke-WebRequest ($server+'/api/shutdown') -UseBasicParsing -TimeoutSec 2|Out-Null}catch{}}
+            Start-Sleep -Seconds 2
+            if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+            Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue
+          }
+      - name: Verify Records and DPI retained
+        shell: powershell
+        run: |
+          if((Get-Content -Raw web/records.html) -notmatch 'ACCURACY CHECK'){throw 'Records regression'}
+          if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){throw 'DPI regression'}
+          Write-Host 'PASS Records + DPI retained'
+      - name: Upload verified build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V79.6-MT5-System-FINAL
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V79.6-MT5-System.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+      - name: Publish EXE-only final branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mt5_system_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V79.6 MT5 System final EXE only'
+          git push --force origin HEAD:final-current-v796
+          git push origin --delete mt5-system || true
+          echo 'PASS final-current-v796 updated with MT5 System EXE only'
