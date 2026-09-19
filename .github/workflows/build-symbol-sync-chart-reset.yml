@@ -46,7 +46,7 @@ jobs:
           $hostSrc=Get-Content -Raw chrome_host.go
           foreach($m in @('MH_SYMBOL_SYNC_CHART_RESET_V796','BTCUSDT','contextGeneration','lwChart.remove()')){if(-not $app.Contains($m)){throw "missing app marker $m"}}
           if(-not $bridge.Contains('MH_SYMBOL_SYNC_CHART_RESET_V796')){throw 'symbol-sync bridge marker missing'}
-          if(-not $bridge.Contains("q.Symbol != \"BTCUSDT\"")){throw 'BTCUSDT backend support missing'}
+          if(-not $bridge.Contains('q.Symbol != "BTCUSDT"')){throw 'BTCUSDT backend support missing'}
           if(-not $bridge.Contains("['btcusdt','btcusd','bitcoin']")){throw 'BTC terminal candidate mapping missing'}
           if(-not $hostSrc.Contains('MH_EXNESS_LOGIN_UI_VERIFIED_V796')){throw 'verified Exness focus path missing'}
           if($bridge -match "clickText\(\[[^\]]*(Place|Confirm|Submit)"){throw 'unsafe final order submission automation detected'}
