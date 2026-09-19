@@ -170,7 +170,7 @@ function findInput(keys){
   }
   return null;
 }
-clickText(['New order','Place order','Trade']);
+clickText(['New order','Trade']);
 await sleep(350);
 clickText(['Pending order','Pending']);
 await sleep(250);
