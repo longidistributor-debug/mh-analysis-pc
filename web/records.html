@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>MH Analysis Records</title>
+<link rel="icon" href="/mh-analysis.ico" />
+<link rel="stylesheet" href="/records.css" />
+</head>
+<body>
+<div class="recordsShell">
+  <header class="recordsHeader">
+    <div class="recordsBrand">
+      <img src="/mh-logo.png" alt="MH" />
+      <div>
+        <div class="recordsBrandName">MH ANALYSIS • RECORDS</div>
+        <div class="recordsVersion">v79.6 AUTO CYCLE (HAMMAD &amp; SOMI)</div>
+      </div>
+    </div>
+    <div class="recordsBismillah">
+      <div class="arabic">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>
+      <div class="translit">Bismillah ir-Rahman ir-Raheem</div>
+    </div>
+    <div class="recordsActions">
+      <button id="accuracyBtn" class="accuracyBtn" type="button">◎ ACCURACY CHECK</button>
+      <div id="checkState" class="checkState">No extra market API calls until you press Accuracy Check.</div>
+    </div>
+  </header>
+
+  <section id="overallStats" class="statsGrid" aria-label="Overall record statistics"></section>
+
+  <main class="recordsGrid">
+    <section class="panel calendarPanel">
+      <div class="panelHead">
+        <div>
+          <div class="eyebrow">SIGNAL CALENDAR</div>
+          <h2 id="monthTitle">—</h2>
+        </div>
+        <div class="monthNav">
+          <button id="prevMonth" type="button">‹</button>
+          <button id="todayMonth" type="button">TODAY</button>
+          <button id="nextMonth" type="button">›</button>
+        </div>
+      </div>
+      <div class="weekHead"><span>SUN</span><span>MON</span><span>TUE</span><span>WED</span><span>THU</span><span>FRI</span><span>SAT</span></div>
+      <div id="calendarGrid" class="calendarGrid"></div>
+      <div class="calendarLegend"><span><i class="dot signal"></i> Signal day</span><span><i class="dot checked"></i> Checked outcome</span></div>
+    </section>
+
+    <section class="panel dayPanel">
+      <div class="panelHead dayHead">
+        <div>
+          <div class="eyebrow">SELECTED DAY</div>
+          <h2 id="selectedDayTitle">—</h2>
+        </div>
+        <div id="dayAccuracy" class="dayAccuracy">0.0%<small>DAY ACCURACY</small></div>
+      </div>
+      <div id="dayStats" class="dayStats"></div>
+      <div class="divider"></div>
+      <div class="eyebrow tfTitle">TIMEFRAME BREAKDOWN</div>
+      <div id="timeframeBreakdown" class="timeframeBreakdown"></div>
+    </section>
+  </main>
+
+  <section class="panel tradesPanel">
+    <div class="panelHead tradesHead">
+      <div>
+        <div class="eyebrow">DAY RECORD</div>
+        <h2 id="tradeListTitle">Signals</h2>
+      </div>
+      <div id="tradeCountPill" class="tradeCountPill">0 SIGNALS</div>
+    </div>
+    <div class="tradeTableWrap">
+      <table class="tradeTable">
+        <thead>
+          <tr>
+            <th>TIME</th><th>PAIR</th><th>TF</th><th>SIGNAL</th><th>ENTRY</th><th>SL</th><th>TP1</th><th>TP2</th><th>SCORE</th><th>RESULT</th><th>CHECKED</th>
+          </tr>
+        </thead>
+        <tbody id="tradeRows"></tbody>
+      </table>
+      <div id="emptyDay" class="emptyDay">No signals recorded for this day.</div>
+    </div>
+  </section>
+
+  <footer class="recordsFooter">
+    <span>Accuracy Check uses saved signals + 1-minute history only when requested.</span>
+    <span id="lastRefresh">Local records ready.</span>
+  </footer>
+</div>
+<script src="/records.js"></script>
+</body>
+</html>
