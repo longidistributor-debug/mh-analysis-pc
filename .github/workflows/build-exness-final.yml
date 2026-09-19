@@ -38,11 +38,11 @@ jobs:
           python desktop/exness_feature_patch.py
           node --check web/app.js
           $app=Get-Content -Raw web/app.js
-          $host=Get-Content -Raw chrome_host.go
+          $hostSrc=Get-Content -Raw chrome_host.go
           $main=Get-Content -Raw main.go
           $bridge=Get-Content -Raw exness_bridge.go
-          if($host -notmatch 'ExnessProfile'){throw 'persistent Exness profile missing'}
-          if($host -notmatch 'https://my\.exness\.global/webtrading/'){throw 'exact Exness terminal URL missing'}
+          if($hostSrc -notmatch 'ExnessProfile'){throw 'persistent Exness profile missing'}
+          if($hostSrc -notmatch 'https://my\.exness\.global/webtrading/'){throw 'exact Exness terminal URL missing'}
           if($main -notmatch 'registerExnessRoutes\(mux\)'){throw 'Exness routes missing'}
           if($app -notmatch 'prepareExnessSignalV796'){throw 'signal prefill hook missing'}
           if($bridge -notmatch 'READY FOR USER CONFIRMATION'){throw 'confirmation boundary missing'}
@@ -57,12 +57,12 @@ jobs:
           $ErrorActionPreference='Stop'
           python desktop/exness_login_focus_patch.py
           gofmt -w chrome_host.go exness_bridge.go
-          $host=Get-Content -Raw chrome_host.go
+          $hostSrc=Get-Content -Raw chrome_host.go
           $bridge=Get-Content -Raw exness_bridge.go
-          if($host -notmatch 'HideWindow:\s*true'){throw 'embedded browser hidden-start guard missing'}
-          if($host -notmatch 'chWMFocusExness'){throw 'Exness native focus message missing'}
-          if($host -notmatch 'chFocusExnessBrowser'){throw 'Exness focus handoff missing'}
-          if($host -notmatch 'exnessInstallLoginUIFixes'){throw 'Exness login UI installer missing'}
+          if($hostSrc -notmatch 'HideWindow:\s*true'){throw 'embedded browser hidden-start guard missing'}
+          if($hostSrc -notmatch 'chWMFocusExness'){throw 'Exness native focus message missing'}
+          if($hostSrc -notmatch 'chFocusExnessBrowser'){throw 'Exness focus handoff missing'}
+          if($hostSrc -notmatch 'exnessInstallLoginUIFixes'){throw 'Exness login UI installer missing'}
           if($bridge -notmatch 'sign in with google'){throw 'Google-login visual hide rule missing'}
           if($bridge -notmatch 'forgot password'){throw 'Forgot-password visual hide rule missing'}
           if($bridge -notmatch 'pointer-events.*auto'){throw 'login input pointer guard missing'}
@@ -140,7 +140,6 @@ jobs:
             $script:buttons=@()
             [ExFixWin]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][ExFixWin]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][ExFixWin]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
             foreach($need in @('MH Analysis','WhatsApp','Records','Exness')){if($script:buttons -notcontains $need){throw "native $need button missing"}}
-            # Exness command id from the existing final integration.
             [ExFixWin]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
             $bp=$null
             for($i=0;$i -lt 70;$i++){
