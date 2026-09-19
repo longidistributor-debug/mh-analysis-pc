@@ -39,9 +39,25 @@ jobs:
             "unsafe_confirm=" + ($bridge -match "clickText\(\[[^\]]*Confirm"),
             "submitted_false=" + ($bridge -match 'submitted:false')
           ) | Set-Content diag/06-guards.txt
+          & python desktop/exness_login_focus_patch.py *>&1 | Tee-Object -FilePath diag/08-login-fix.txt
+          "exit=$LASTEXITCODE" | Add-Content diag/08-login-fix.txt
+          $host2=Get-Content -Raw chrome_host.go
+          $bridge2=Get-Content -Raw exness_bridge.go
+          @(
+            "after_profile=" + ($host2 -match 'ExnessProfile'),
+            "after_url=" + ($host2 -match 'https://my\.exness\.global/webtrading/'),
+            "hide_window=" + ($host2 -match 'HideWindow:\s*true'),
+            "focus=" + ($host2 -match 'chFocusExnessBrowser'),
+            "ui_fix=" + ($host2 -match 'exnessInstallLoginUIFixes'),
+            "google_hide=" + ($bridge2 -match 'sign in with google'),
+            "forgot_hide=" + ($bridge2 -match 'forgot password')
+          ) | Set-Content diag/09-after-fix.txt
           node --check web/app.js *> diag/07-node.txt
           "node_exit=$LASTEXITCODE" | Add-Content diag/07-node.txt
-          Get-Content diag/*.txt
+          Copy-Item chrome_host.go diag/chrome_host.after.go
+          Copy-Item exness_bridge.go diag/exness_bridge.after.go
+          Copy-Item web/app.js diag/app.after.js
+          Get-Content diag/0*.txt
       - uses: actions/upload-artifact@v4
         with:
           name: exness-login-fix-diagnostics
