@@ -389,7 +389,7 @@ async function refreshMarketCap(){if(symbol==='XAUUSD'){renderGoldMetrics();retu
 function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   const sig=d?.signal||(action==='RE-EVALUATE'?d?.originalSignal:null),isSell=sig?.direction==='SELL',dot=sig?(isSell?'🔴':'🟢'):'⚪';
-  const lines=[`*MHRLC SIGNAL*`,`*Action:* ${action}`,`*Pair:* ${symbol}`,`*Timeframe:* ${timeframe}`,`*Time:* ${new Date().toLocaleString()}`,''];
+  const lines=[`*MH ANALYSIS SIGNAL*`,`*Action:* ${action}`,`*Pair:* ${symbol}`,`*Timeframe:* ${timeframe}`,`*Time:* ${new Date().toLocaleString()}`,''];
   if(sig){lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Setup:* ${d.bestFamily||sig.setupReason||'Best current setup'}`)}
   else{lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*BUY Score:* ${d?.buyScore??'—'}`,`*SELL Score:* ${d?.sellScore??'—'}`,`*Reason:* ${d?.explanation||'No statistically clear directional edge on the fresh analysis.'}`)}
   if(status)lines.push(`*Status:* ${status}`);return lines.join('\n');
