@@ -37,12 +37,11 @@ if MARK not in s:
 \tif err := cmd.Start(); err != nil {
 ''','hidden startup')
 
-    # Replace browser-window finder so hidden initial app windows are still found reliably.
     pattern=r'''func chFindBrowserWindow\(pid uint32\) uintptr \{.*?\n\}\n\nfunc chAttachBrowser'''
     m=re.search(pattern,s,re.S)
     if not m:
         raise SystemExit('browser finder anchor missing')
-    finder=r'''func chFindBrowserWindow(pid uint32) uintptr {
+    finder='''func chFindBrowserWindow(pid uint32) uintptr {
 \tvar found uintptr
 \tvar bestScore int64 = -1
 \tcb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
@@ -72,10 +71,9 @@ if MARK not in s:
 func chAttachBrowser'''
     s=s[:m.start()]+finder+s[m.end():]
 
-    # Add an explicit cross-thread focus handoff. This runs on the host UI thread via a posted message.
     anchor='''func chSwitchView(which int) {
 '''
-    focus=r'''func chFocusExnessBrowser() {
+    focus='''func chFocusExnessBrowser() {
 \tchMu.Lock()
 \texness := chExnessWnd
 \tchMu.Unlock()
@@ -95,7 +93,6 @@ func chAttachBrowser'''
 '''
     s=rep(s,anchor,focus+anchor,'focus helper')
 
-    # A private host message keeps SetFocus on the window/message-loop thread.
     s=rep(s,
 '''\tchIDCArrow      = 32512
 ''',
@@ -123,7 +120,6 @@ func chAttachBrowser'''
 \tcase chWMOpenAPISettings:
 ''','focus message handler')
 
-    # Once Exness finishes attaching, install login-page cleanup and refocus if the tab was already selected.
     s=rep(s,
 '''\t\tchResizeChildren()
 \t\tchApplyDesiredBrowserView()
@@ -146,7 +142,7 @@ p.write_text(s,encoding='utf-8')
 # exness_bridge.go: hide alternate-login/recovery controls visually and keep email/password inputs focusable.
 p=Path('exness_bridge.go'); s=p.read_text(encoding='utf-8')
 if 'exnessInstallLoginUIFixes' not in s:
-    add=r'''
+    add='''
 
 const exnessLoginUIFixJS = `(function(){
   if(window.__mhExnessLoginFixV796)return;
