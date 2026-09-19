@@ -10,6 +10,7 @@ on:
       - 'web/**'
       - 'desktop/manual_timeframe_no_api_patch.py'
       - 'desktop/branding_text_patch.py'
+      - 'desktop/header_center_layout_patch.py'
       - '.github/workflows/build-dpi-final.yml'
 
 permissions:
@@ -46,6 +47,21 @@ jobs:
           if ($app -match '\*MHRLC SIGNAL\*') { throw 'Old MHRLC SIGNAL title still present' }
           if ($html -notmatch 'v79\.6 AUTO CYCLE \(HAMMAD & SOMI\)') { throw 'HAMMAD & SOMI version text missing' }
           Write-Host 'PASS branding text verified'
+
+      - name: Apply exact centered header layout
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python desktop/header_center_layout_patch.py
+          $css = Get-Content -Raw web/runtime-fixes.css
+          $html = Get-Content -Raw web/index.html
+          if ($css -notmatch 'MH_HEADER_CENTER_V796_START') { throw 'Header centre patch marker missing' }
+          if ($css -notmatch 'left:50%!important') { throw 'Bismillah 50 percent centre anchor missing' }
+          if ($css -notmatch 'transform:translate\(-50%,-50%\)!important') { throw 'Bismillah exact centre transform missing' }
+          if ($css -notmatch 'white-space:nowrap!important') { throw 'One-line version guard missing' }
+          if ($html -notmatch 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ') { throw 'Exact Bismillah text changed' }
+          if ($html -notmatch 'v79\.6 AUTO CYCLE \(HAMMAD & SOMI\)') { throw 'One-line Hammad & Somi text missing' }
+          Write-Host 'PASS exact-centred header layout verified'
 
       - name: Verify DPI adaptive source
         shell: powershell
@@ -121,21 +137,21 @@ jobs:
             Write-Host 'PASS Per-Monitor V2 + embedded browser fills host client area'
           } finally {if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}}
 
-      - name: Persist verified final source text
+      - name: Persist verified final source text and header layout
         shell: bash
         run: |
           set -euo pipefail
-          if ! git diff --quiet -- web/app.js web/index.html; then
+          if ! git diff --quiet -- web/app.js web/index.html web/runtime-fixes.css; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add web/app.js web/index.html
-            git commit -m 'Persist final MH Analysis branding and no-manual-API source [skip ci]'
+            git add web/app.js web/index.html web/runtime-fixes.css
+            git commit -m 'Persist final branding, centred header and no-manual-API source [skip ci]'
             git push origin HEAD:final-current-v796
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-FINAL-Branded
+          name: MH-Analysis-V79.6-FINAL-HeaderCentered
           path: |
             dist/MH Analysis.exe
             dist/MH-Analysis-V79.6-DPI-Adaptive.zip
