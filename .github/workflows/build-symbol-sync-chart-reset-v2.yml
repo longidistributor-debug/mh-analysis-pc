@@ -78,8 +78,13 @@ jobs:
               Start-Sleep -Milliseconds 400
             }
             if(-not $render -or -not $render.ok){throw 'Exness render failed'}
-            $ui=Invoke-RestMethod "$server/api/exness/login-ui-check" -TimeoutSec 4
-            if(-not $ui.emailFound -or -not $ui.passwordFound){throw 'Exness login inputs missing'}
+            $ui=$null
+            for($i=0;$i -lt 40;$i++){
+              try{$ui=Invoke-RestMethod "$server/api/exness/login-ui-check" -TimeoutSec 4}catch{$ui=$null}
+              if($ui -and $ui.ok -and $ui.emailFound -and $ui.passwordFound -and [int]$ui.googleVisible -eq 0 -and [int]$ui.forgotVisible -eq 0){break}
+              Start-Sleep -Milliseconds 400
+            }
+            if(-not $ui -or -not $ui.emailFound -or -not $ui.passwordFound){throw "Exness login inputs missing: $($ui|ConvertTo-Json -Compress)"}
             if([int]$ui.googleVisible -ne 0 -or [int]$ui.forgotVisible -ne 0){throw 'Google/Forgot still visible'}
             $payload=@{symbol='BTCUSDT';timeframe='15m';direction='BUY';entry=60000;sl=59000;tp1=62000;tp2=63000;market_price=61000;score=80;setup='CI'}|ConvertTo-Json
             $btc=Invoke-RestMethod "$server/api/exness/prepare" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 5
