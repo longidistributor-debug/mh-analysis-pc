@@ -8,10 +8,11 @@ on:
       - 'dpi_windows.go'
       - 'chrome_host.go'
       - 'web/**'
+      - 'desktop/manual_timeframe_no_api_patch.py'
       - '.github/workflows/build-dpi-final.yml'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -23,6 +24,24 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
+
+      - name: Apply manual timeframe no-API rule
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python desktop/manual_timeframe_no_api_patch.py
+          node --check web/app.js
+          $s = Get-Content -Raw web/app.js
+          $start = $s.IndexOf('async function contextChanged(){')
+          $end = $s.IndexOf("`n}`n`nasync function saveBackendSetting", $start)
+          if ($start -lt 0 -or $end -lt 0) { throw 'contextChanged block missing' }
+          $block = $s.Substring($start, $end - $start)
+          foreach($bad in @('fetchCandles(', 'candlesForAnalysis(', 'loadContextChart(', 'refreshMarketCap(', "fetch('/api/history")) {
+            if ($block.Contains($bad)) { throw "Manual context still calls $bad" }
+          }
+          if ($s -notmatch 'Manual selection only • no market/API request has been made') { throw 'Blank manual-selection view missing' }
+          if (($s.Split('const f=await candlesForAnalysis()').Count - 1) -lt 2) { throw 'Explicit NEW/RE-EVALUATE history paths missing' }
+          Write-Host 'PASS manual timeframe/pair selection is blank and API-silent; explicit analysis paths preserved'
 
       - name: Verify DPI adaptive source
         shell: powershell
@@ -112,9 +131,21 @@ jobs:
             if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
           }
 
+      - name: Persist verified manual-timeframe source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- web/app.js; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add web/app.js
+            git commit -m 'Lock manual timeframe selection to blank no-API view [skip ci]'
+            git push origin HEAD:final-current-v796
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-DPI-Adaptive
+          name: MH-Analysis-V79.6-DPI-Adaptive-NoManualAPI
           path: |
             dist/MH Analysis.exe
             dist/MH-Analysis-V79.6-DPI-Adaptive.zip
