@@ -1,4 +1,4 @@
-name: Build FINAL V79.6 Exness Login Fix V5
+name: Build FINAL V79.6 Exness Login Fix V6
 on:
   workflow_dispatch:
   push:
@@ -83,7 +83,7 @@ jobs:
           using System;
           using System.Text;
           using System.Runtime.InteropServices;
-          public static class ExLoginWinV5 {
+          public static class ExLoginWinV6 {
             public delegate bool EnumProc(IntPtr h, IntPtr l);
             [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lp);
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
@@ -102,9 +102,9 @@ jobs:
             $pre=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match 'ExnessProfile'}|Select-Object -First 1
             if($pre){throw 'Exness launched before tab click'}
             $script:buttons=@()
-            [ExLoginWinV5]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][ExLoginWinV5]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][ExLoginWinV5]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
+            [ExLoginWinV6]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][ExLoginWinV6]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][ExLoginWinV6]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
             foreach($need in @('MH Analysis','WhatsApp','Records','Exness')){if($script:buttons -notcontains $need){throw "native $need button missing"}}
-            [ExLoginWinV5]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
+            [ExLoginWinV6]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
             $bp=$null
             for($i=0;$i -lt 80;$i++){
               $bp=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match '--app=https://my\.exness\.global/webtrading/' -and $_.CommandLine -match 'ExnessProfile'}|Select-Object -First 1
@@ -114,13 +114,13 @@ jobs:
             [IntPtr]$script:exChild=[IntPtr]::Zero
             [uint32]$targetPid=[uint32]$bp.ProcessId
             for($i=0;$i -lt 50 -and $script:exChild -eq [IntPtr]::Zero;$i++){
-              [ExLoginWinV5]::EnumChildWindows($h,{param($w,$l)[uint32]$pid=0;[void][ExLoginWinV5]::GetWindowThreadProcessId($w,[ref]$pid);if($pid -eq $targetPid){$sb=New-Object Text.StringBuilder 80;[void][ExLoginWinV5]::GetClassName($w,$sb,80);if($sb.ToString().StartsWith('Chrome_WidgetWin')){$script:exChild=$w;return $false}};return $true},[IntPtr]::Zero)|Out-Null
+              [ExLoginWinV6]::EnumChildWindows($h,{param($w,$l)[uint32]$wpid=0;[void][ExLoginWinV6]::GetWindowThreadProcessId($w,[ref]$wpid);if($wpid -eq $targetPid){$sb=New-Object Text.StringBuilder 80;[void][ExLoginWinV6]::GetClassName($w,$sb,80);if($sb.ToString().StartsWith('Chrome_WidgetWin')){$script:exChild=$w;return $false}};return $true},[IntPtr]::Zero)|Out-Null
               if($script:exChild -eq [IntPtr]::Zero){Start-Sleep -Milliseconds 200}
             }
             if($script:exChild -eq [IntPtr]::Zero){throw 'Exness browser is not embedded under MH host'}
-            if([ExLoginWinV5]::GetParent($script:exChild) -ne $h){throw 'Exness parent is not MH host'}
-            $style=[ExLoginWinV5]::GetWindowLongPtr($script:exChild,-16).ToInt64()
-            $ex=[ExLoginWinV5]::GetWindowLongPtr($script:exChild,-20).ToInt64()
+            if([ExLoginWinV6]::GetParent($script:exChild) -ne $h){throw 'Exness parent is not MH host'}
+            $style=[ExLoginWinV6]::GetWindowLongPtr($script:exChild,-16).ToInt64()
+            $ex=[ExLoginWinV6]::GetWindowLongPtr($script:exChild,-20).ToInt64()
             if(($style -band 0x40000000) -eq 0){throw 'Exness browser is not WS_CHILD'}
             if(($ex -band 0x00040000) -ne 0){throw 'Exness still has WS_EX_APPWINDOW/taskbar style'}
             Write-Host 'PASS Exness lazy launch + embedded child + no taskbar app style'
@@ -143,7 +143,7 @@ jobs:
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-Exness-Login-Fix-FINAL-V5
+          name: MH-Analysis-V79.6-Exness-Login-Fix-FINAL-V6
           path: |
             dist/MH Analysis.exe
             dist/MH-Analysis-V79.6-Exness-Login-Fix.zip
@@ -158,7 +158,7 @@ jobs:
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __exness_login_fix_final_v5
+          git checkout --orphan __exness_login_fix_final_v6
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
