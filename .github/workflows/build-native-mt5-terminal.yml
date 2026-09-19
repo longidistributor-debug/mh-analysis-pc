@@ -1,9 +1,9 @@
-name: Build V79.6 Native MT5 Terminal
+name: Build V79.6 Native MT5 Prefill
 
 on:
   workflow_dispatch:
   push:
-    branches: [native-mt5-terminal]
+    branches: [native-mt5-prefill]
 
 permissions:
   contents: write
@@ -22,7 +22,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply retained app patches and native MT5 integration
+      - name: Apply retained app patches and native MT5 prefill integration
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -33,7 +33,8 @@ jobs:
             'desktop/records_feature_patch.py',
             'desktop/chart_reset_only_patch.py',
             'desktop/native_mt5_terminal_patch.py',
-            'desktop/native_button_id_fix_patch.py'
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/native_mt5_prefill_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
           node --check web/app.js
@@ -46,8 +47,12 @@ jobs:
           $hostSrc=Get-Content -Raw chrome_host.go
           $main=Get-Content -Raw main.go
           $app=Get-Content -Raw web/app.js
+          $prefill=Get-Content -Raw mt5_prefill.go
           foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){
             if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" }
+          }
+          foreach($m in @('MH_NATIVE_MT5_PREFILL_V796','registerMT5PrefillRoutes','/api/mt5/prepare','prepareMT5SignalV796','mt5ApplyLatestQueued')){
+            if(-not ($hostSrc.Contains($m) -or $main.Contains($m) -or $app.Contains($m) -or $prefill.Contains($m))){ throw "missing MT5 prefill marker $m" }
           }
           foreach($bad in @('exness.com','ExnessProfile','registerExnessRoutes','/api/exness/','my.exness.global')){
             if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains: $bad" }
@@ -57,17 +62,19 @@ jobs:
             if(-not $app.Contains($m)){ throw "chart regression marker missing $m" }
           }
           if(-not $app.Contains('manual context selection must be API-silent')){ throw 'manual API-silent rule missing' }
-          Write-Host 'PASS native MT5 source guards'
+          if($prefill.Contains('InvokePattern') -or $prefill -match '\.Invoke\('){ throw 'final MT5 Place automation is not allowed in this build' }
+          if(-not $prefill.Contains('READY FOR USER CONFIRMATION')){ throw 'review-before-place status missing' }
+          Write-Host 'PASS native MT5 prefill source guards'
 
       - name: Build Windows x64 EXE
         shell: bash
         run: |
           set -euo pipefail
-          gofmt -w main.go chrome_host.go records.go dpi_windows.go
+          gofmt -w main.go chrome_host.go records.go mt5_prefill.go dpi_windows.go
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Native-MT5.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Native-MT5-Prefill.zip' -Force"
 
       - name: Existing app startup restart regression
         shell: powershell
@@ -83,26 +90,26 @@ jobs:
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-Native-MT5
+          name: MH-Analysis-V79.6-Native-MT5-Prefill
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V79.6-Native-MT5.zip
+            dist/MH-Analysis-V79.6-Native-MT5-Prefill.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish test EXE-only branch
+      - name: Publish prefill EXE-only branch
         shell: bash
         run: |
           set -euo pipefail
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __native_mt5_final
+          git checkout --orphan __native_mt5_prefill_final
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
           git add 'MH Analysis.exe'
-          git commit -m 'MH Analysis V79.6 native MT5 terminal test build'
-          git push --force origin HEAD:native-mt5-final
-          echo 'PASS native-mt5-final updated with native MT5 test EXE'
+          git commit -m 'MH Analysis V79.6 native MT5 pending-order prefill build'
+          git push --force origin HEAD:native-mt5-prefill-final
+          echo 'PASS native-mt5-prefill-final updated with native MT5 prefill EXE'
