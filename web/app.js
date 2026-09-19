@@ -703,21 +703,24 @@ function setupChartControls(){
   });
 }
 function resetViewForContext(){
-  restoreActiveSignal(keyFor());const d=lastDecision.get(keyFor());
-  if(d){renderDecision(d,d.explanation,'VIEW')}
-  else{
-    $('#signalCard').className='panel signalPanel neutralState';$('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='NO ANALYSIS';$('#signalQuality').textContent='—';
-    $('#plan').className='plan muted';$('#plan').textContent=`Chart is interactive. NEW ANALYZE makes one fresh ${symbol} ${timeframe} history request and analyzes those same candles.`;
-    ['#mapRegime','#mapAdx','#mapVwap','#mapBullOb','#mapBearOb','#mapFvg','#mapEq','#mapDiv','#buyScoreTop','#sellScoreTop'].forEach(id=>$(id).textContent='—');
-    $('#analysisStatusHeading').textContent='ANALYSIS STATUS';$('#explanation').textContent='Pair/timeframe changed. Loading the latest chart snapshot.';$('#reasons').textContent='—';$('#topSetups').textContent='No ranking yet.';
-    updateSignalHeadline(null);clearSignalLevels();
-  }
+  // Manual pair/timeframe browsing is VIEW-ONLY. Never restore an old decision
+  // into the newly selected context and never imply that fresh market data was
+  // requested. The screen remains blank until an explicit analysis action.
+  $('#signalCard').className='panel signalPanel neutralState';$('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='NO ANALYSIS';$('#signalQuality').textContent='—';
+  $('#plan').className='plan muted';$('#plan').textContent=`${symbol} ${timeframe} selected. Press NEW ANALYZE to request fresh data, or RE-EVALUATE an existing signal.`;
+  ['#mapRegime','#mapAdx','#mapVwap','#mapBullOb','#mapBearOb','#mapFvg','#mapEq','#mapDiv','#buyScoreTop','#sellScoreTop'].forEach(id=>$(id).textContent='—');
+  if($('#mapRisk')){$('#mapRisk').textContent='—';$('#mapRisk').className=''}
+  $('#analysisStatusHeading').textContent='ANALYSIS STATUS';
+  $('#explanation').className='detailText muted';$('#explanation').textContent='Manual selection only • no market/API request has been made.';
+  $('#reasons').className='detailText';$('#reasons').textContent='—';$('#topSetups').textContent='No ranking yet.';
+  chartDecision=null;updateSignalHeadline(null);clearSignalLevels();
 }
 async function contextChanged(){
+  // IMPORTANT: manual context selection must be API-silent. Do not call
+  // fetchCandles/loadContextChart/refreshMarketCap or any history endpoint here.
   loadChart();
   resetViewForContext();
-  refreshMarketCap();
-  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Ready • press NEW ANALYZE or RE-EVALUATE';
+  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
 }
 
 async function saveBackendSetting(payload){const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Could not save setting.');await refreshBackendSettings();return backendSettings}
