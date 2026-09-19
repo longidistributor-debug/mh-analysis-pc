@@ -1,0 +1,107 @@
+name: Build V79.6 Native MT5 Terminal
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [native-mt5-terminal]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained app patches and native MT5 integration
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){ throw 'app.js syntax check failed' }
+
+      - name: Source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $main=Get-Content -Raw main.go
+          $app=Get-Content -Raw web/app.js
+          foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){
+            if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" }
+          }
+          foreach($bad in @('exness.com','ExnessProfile','registerExnessRoutes','/api/exness/','my.exness.global')){
+            if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains: $bad" }
+          }
+          if(Test-Path 'exness_bridge.go'){ throw 'exness_bridge.go must not be compiled' }
+          foreach($m in @('MH_CHART_RESET_ONLY_V796','contextGeneration','lwChart.remove()')){
+            if(-not $app.Contains($m)){ throw "chart regression marker missing $m" }
+          }
+          if(-not $app.Contains('manual context selection must be API-silent')){ throw 'manual API-silent rule missing' }
+          Write-Host 'PASS native MT5 source guards'
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Native-MT5.zip' -Force"
+
+      - name: Existing app startup restart regression
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+
+      - name: Verify Records and DPI retained
+        shell: powershell
+        run: |
+          if((Get-Content -Raw web/records.html) -notmatch 'ACCURACY CHECK'){ throw 'Records regression' }
+          if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
+          Write-Host 'PASS Records + DPI retained'
+
+      - name: Upload verified build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V79.6-Native-MT5
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V79.6-Native-MT5.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish test EXE-only branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __native_mt5_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V79.6 native MT5 terminal test build'
+          git push --force origin HEAD:native-mt5-final
+          echo 'PASS native-mt5-final updated with native MT5 test EXE'
