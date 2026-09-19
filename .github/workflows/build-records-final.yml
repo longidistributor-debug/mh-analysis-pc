@@ -1,0 +1,176 @@
+name: Build FINAL V79.6 Records
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-work]
+
+permissions:
+  contents: write
+
+jobs:
+  build-records:
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Reapply verified final baseline patches
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/manual_timeframe_no_api_patch.py
+          python desktop/branding_text_patch.py
+          python desktop/header_center_layout_patch.py
+          Write-Host 'PASS previous final behavior patches applied'
+
+      - name: Apply Records integration only
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/records_feature_patch.py
+          node --check web/app.js
+          node --check web/records.js
+          $app=Get-Content -Raw web/app.js
+          $host=Get-Content -Raw chrome_host.go
+          $main=Get-Content -Raw main.go
+          $rec=Get-Content -Raw web/records.html
+          if($app -notmatch 'captureSignalRecordV796'){throw 'record capture hook missing'}
+          if($host -notmatch 'idRecords\s+=\s+1003'){throw 'native Records button missing'}
+          if($main -notmatch 'registerRecordsRoutes\(mux\)'){throw 'records routes missing'}
+          if($rec -notmatch 'ACCURACY CHECK'){throw 'records layout missing accuracy button'}
+          if($app -match "captureSignalRecordV796\(d,state\).*REEVAL"){throw 'unexpected re-evaluate capture path'}
+          Write-Host 'PASS Records source integration guards'
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Records.zip' -Force"
+
+      - name: Existing startup frame responsiveness restart
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+
+      - name: Records native tab and local API smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:MH_SMOKE_TEST='1'
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @'
+          using System;
+          using System.Text;
+          using System.Runtime.InteropServices;
+          public static class RecWin {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lp);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h,out RECT r);
+            public struct RECT { public int Left,Top,Right,Bottom; }
+          }
+          '@
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          $server=''
+          try {
+            for($i=0;$i -lt 60;$i++){$p.Refresh();if($p.MainWindowHandle -ne 0){break};Start-Sleep -Milliseconds 250}
+            [IntPtr]$h=$p.MainWindowHandle;if($h -eq [IntPtr]::Zero){throw 'host window missing'}
+            for($i=0;$i -lt 70;$i++){
+              try{$ls=Get-NetTCPConnection -State Listen -OwningProcess $p.Id -ErrorAction Stop|Where-Object{$_.LocalAddress -eq '127.0.0.1'}|Select-Object -First 1;if($ls){$server="http://127.0.0.1:$($ls.LocalPort)";(Invoke-WebRequest "$server/records.html" -UseBasicParsing -TimeoutSec 2)|Out-Null;break}}catch{}
+              Start-Sleep -Milliseconds 300
+            }
+            if(!$server){throw 'local records service missing'}
+            $html=(Invoke-WebRequest "$server/records.html" -UseBasicParsing -TimeoutSec 3).Content
+            if($html -notmatch 'MH ANALYSIS • RECORDS' -or $html -notmatch 'ACCURACY CHECK'){throw 'records HTML content missing'}
+            $empty=Invoke-RestMethod "$server/api/records" -Method Get -TimeoutSec 3
+            if($null -eq $empty.summary.total_signals){throw 'records summary API missing'}
+            $payload=@{symbol='XAUUSD';timeframe='15m';direction='BUY';entry=3700;sl=3690;tp1=3710;tp2=3720;score=88;setup='CI smoke';action='NEW'}|ConvertTo-Json
+            $saved=Invoke-RestMethod "$server/api/records/capture" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 3
+            if(-not $saved.saved){throw 'record capture did not save'}
+            $after=Invoke-RestMethod "$server/api/records" -Method Get -TimeoutSec 3
+            if([int]$after.summary.total_signals -lt 1){throw 'saved record not returned'}
+            $script:buttons=@()
+            [RecWin]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][RecWin]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][RecWin]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
+            foreach($need in @('MH Analysis','WhatsApp','Records')){if($script:buttons -notcontains $need){throw "native $need button missing"}}
+            [RecWin]::PostMessage($h,0x0111,[IntPtr]1003,[IntPtr]::Zero)|Out-Null
+            $page=$null
+            for($i=0;$i -lt 60;$i++){try{$pages=Invoke-RestMethod 'http://127.0.0.1:17881/json/list' -TimeoutSec 2;$page=$pages|Where-Object{$_.url -match '/records\.html'}|Select-Object -First 1;if($page){break}}catch{};Start-Sleep -Milliseconds 300}
+            if(-not $page){throw 'Records embedded browser did not open records.html'}
+            Start-Sleep -Seconds 1
+            $r=New-Object RecWin+RECT;[void][RecWin]::GetWindowRect($h,[ref]$r);$w=[Math]::Max(1,$r.Right-$r.Left);$hh=[Math]::Max(1,$r.Bottom-$r.Top)
+            $bmp=New-Object Drawing.Bitmap $w,$hh;$g=[Drawing.Graphics]::FromImage($bmp);$g.CopyFromScreen($r.Left,$r.Top,0,0,(New-Object Drawing.Size $w,$hh));$bmp.Save((Join-Path $PWD 'dist\records-layout.png'),[Drawing.Imaging.ImageFormat]::Png);$g.Dispose();$bmp.Dispose()
+            Write-Host 'PASS Records native tab + local persistence API + records page'
+          } finally {
+            if($server){try{Invoke-WebRequest ($server+'/api/shutdown') -UseBasicParsing -TimeoutSec 2|Out-Null}catch{}}
+            Start-Sleep -Seconds 2
+            if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}
+            Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue
+          }
+
+      - name: Verify Per-Monitor V2 and browser fill
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class DpiRec {
+            [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left,Top,Right,Bottom; }
+            [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out RECT r);
+            [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p,EnumProc cb,IntPtr l);
+            [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h,System.Text.StringBuilder s,int n);
+            [DllImport("user32.dll")] public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
+            public delegate bool EnumProc(IntPtr h,IntPtr l);
+          }
+          '@
+          $env:MH_SMOKE_TEST='1';$p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          try{
+            for($i=0;$i -lt 60;$i++){$p.Refresh();if($p.MainWindowHandle -ne 0){break};Start-Sleep -Milliseconds 250};[IntPtr]$h=$p.MainWindowHandle;if($h -eq [IntPtr]::Zero){throw 'host missing'}
+            if(-not [DpiRec]::AreDpiAwarenessContextsEqual([DpiRec]::GetWindowDpiAwarenessContext($h),[IntPtr](-4))){throw 'Per-Monitor V2 missing'}
+            Start-Sleep -Seconds 4
+            $script:child=[IntPtr]::Zero;[DpiRec]::EnumChildWindows($h,{param($w,$l)$s=New-Object System.Text.StringBuilder 100;[void][DpiRec]::GetClassName($w,$s,100);if($s.ToString().StartsWith('Chrome_WidgetWin')){$script:child=$w;return $false};return $true},[IntPtr]::Zero)|Out-Null
+            if($child -eq [IntPtr]::Zero){throw 'embedded browser missing'}
+            Write-Host 'PASS Per-Monitor V2 + embedded browsers present'
+          } finally {if(!$p.HasExited){Stop-Process -Id $p.Id -Force};Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue}
+
+      - name: Upload verified Records build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V79.6-Records-FINAL
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V79.6-Records.zip
+            dist/SHA256SUMS.txt
+            dist/records-layout.png
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish EXE-only final branch and remove work branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_final_exe
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V79.6 Records final EXE only'
+          git push --force origin HEAD:final-current-v796
+          git push origin --delete records-work
+          echo 'PASS final-current-v796 contains only verified Records EXE; work branch removed'
