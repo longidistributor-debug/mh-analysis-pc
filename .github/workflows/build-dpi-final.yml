@@ -42,7 +42,12 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          (cd dist && zip -9 'MH-Analysis-V79.6-DPI-Adaptive.zip' 'MH Analysis.exe' SHA256SUMS.txt >/dev/null)
+
+      - name: Create ZIP
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-DPI-Adaptive.zip' -Force
 
       - name: Runtime startup frame responsiveness restart
         shell: powershell
