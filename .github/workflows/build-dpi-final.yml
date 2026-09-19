@@ -9,6 +9,7 @@ on:
       - 'chrome_host.go'
       - 'web/**'
       - 'desktop/manual_timeframe_no_api_patch.py'
+      - 'desktop/branding_text_patch.py'
       - '.github/workflows/build-dpi-final.yml'
 
 permissions:
@@ -32,6 +33,19 @@ jobs:
           python desktop/manual_timeframe_no_api_patch.py
           node --check web/app.js
           Write-Host 'PASS source patch + JavaScript syntax'
+
+      - name: Apply final MH Analysis branding text
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python desktop/branding_text_patch.py
+          node --check web/app.js
+          $app = Get-Content -Raw web/app.js
+          $html = Get-Content -Raw web/index.html
+          if ($app -notmatch '\*MH ANALYSIS SIGNAL\*') { throw 'MH ANALYSIS SIGNAL title missing' }
+          if ($app -match '\*MHRLC SIGNAL\*') { throw 'Old MHRLC SIGNAL title still present' }
+          if ($html -notmatch 'v79\.6 AUTO CYCLE \(HAMMAD & SOMI\)') { throw 'HAMMAD & SOMI version text missing' }
+          Write-Host 'PASS branding text verified'
 
       - name: Verify DPI adaptive source
         shell: powershell
@@ -107,21 +121,21 @@ jobs:
             Write-Host 'PASS Per-Monitor V2 + embedded browser fills host client area'
           } finally {if(!$p.HasExited){Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue}}
 
-      - name: Persist verified manual-timeframe source
+      - name: Persist verified final source text
         shell: bash
         run: |
           set -euo pipefail
-          if ! git diff --quiet -- web/app.js; then
+          if ! git diff --quiet -- web/app.js web/index.html; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add web/app.js
-            git commit -m 'Lock manual timeframe selection to blank no-API view [skip ci]'
+            git add web/app.js web/index.html
+            git commit -m 'Persist final MH Analysis branding and no-manual-API source [skip ci]'
             git push origin HEAD:final-current-v796
           fi
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-DPI-Adaptive-NoManualAPI
+          name: MH-Analysis-V79.6-FINAL-Branded
           path: |
             dist/MH Analysis.exe
             dist/MH-Analysis-V79.6-DPI-Adaptive.zip
