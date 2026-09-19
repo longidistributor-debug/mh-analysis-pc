@@ -1,4 +1,4 @@
-name: Build FINAL V79.6 Exness Login Fix V3
+name: Build FINAL V79.6 Exness Login Fix V4
 on:
   workflow_dispatch:
   push:
@@ -17,9 +17,12 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Patch manual timeframe
+      - name: Verify manual timeframe baseline already present
         shell: powershell
-        run: python desktop/manual_timeframe_no_api_patch.py
+        run: |
+          $app=Get-Content -Raw web/app.js
+          if($app -notmatch 'manual context selection must be API-silent'){throw 'manual timeframe API-silent behavior missing'}
+          Write-Host 'PASS manual timeframe API-silent behavior already present'
       - name: Patch branding
         shell: powershell
         run: python desktop/branding_text_patch.py
@@ -42,7 +45,7 @@ jobs:
           node --check web/app.js
           $host=Get-Content -Raw chrome_host.go
           $bridge=Get-Content -Raw exness_bridge.go
-          $styles=Get-Content -Raw web/styles.css
+          $runtime=Get-Content -Raw web/runtime-fixes.css
           if($host -notmatch 'chLaunchBrowserQuiet'){throw 'quiet Exness launch missing'}
           if($host -notmatch 'HideWindow:true'){throw 'hidden GUI launch missing'}
           if($host -notmatch 'chSetFocus.Call\(exness\)'){throw 'keyboard focus fix missing'}
@@ -52,7 +55,7 @@ jobs:
           if($bridge -notmatch 'forgot password'){throw 'forgot-password hide rule missing'}
           if($bridge -match "clickText\(\[[^\]]*Place order"){throw 'unsafe Place order automation'}
           if($bridge -match "clickText\(\[[^\]]*Confirm"){throw 'unsafe Confirm automation'}
-          if($styles -notmatch 'MH_HEADER_CENTER_V796_START'){throw 'centered header regression'}
+          if($runtime -notmatch 'MH_HEADER_CENTER_V796_START'){throw 'centered header regression'}
           Write-Host 'PASS source guards + baseline patches'
       - name: Build Windows x64 EXE
         shell: bash
@@ -115,7 +118,7 @@ jobs:
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-Exness-Login-Fix-FINAL-V3
+          name: MH-Analysis-V79.6-Exness-Login-Fix-FINAL-V4
           path: |
             dist/MH Analysis.exe
             dist/MH-Analysis-V79.6-Exness-Login-Fix.zip
@@ -129,7 +132,7 @@ jobs:
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __exness_login_fix_final_v3
+          git checkout --orphan __exness_login_fix_final_v4
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
