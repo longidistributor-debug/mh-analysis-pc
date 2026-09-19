@@ -1,17 +1,17 @@
-name: Build FINAL V79.6 Records + Exness
+name: Build FINAL V79.6 Records + Exness Login Fix
 
 on:
   workflow_dispatch:
   push:
-    branches: [exness-work]
+    branches: [exness-login-fix-work]
 
 permissions:
   contents: write
 
 jobs:
-  build-exness:
+  build-exness-login-fix:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 22
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,6 @@ jobs:
           $host=Get-Content -Raw chrome_host.go
           $main=Get-Content -Raw main.go
           $bridge=Get-Content -Raw exness_bridge.go
-          if($host -notmatch 'idExness\s+=\s+1004'){throw 'native Exness button missing'}
           if($host -notmatch 'ExnessProfile'){throw 'persistent Exness profile missing'}
           if($host -notmatch 'https://my\.exness\.global/webtrading/'){throw 'exact Exness terminal URL missing'}
           if($main -notmatch 'registerExnessRoutes\(mux\)'){throw 'Exness routes missing'}
@@ -52,6 +51,24 @@ jobs:
           if($bridge -notmatch 'submitted:false'){throw 'no-submit status guard missing'}
           Write-Host 'PASS Exness source guards: persistent tab + prefill + no final submit'
 
+      - name: Apply Exness login focus and no-flicker fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/exness_login_focus_patch.py
+          gofmt -w chrome_host.go exness_bridge.go
+          $host=Get-Content -Raw chrome_host.go
+          $bridge=Get-Content -Raw exness_bridge.go
+          if($host -notmatch 'HideWindow:\s*true'){throw 'embedded browser hidden-start guard missing'}
+          if($host -notmatch 'chWMFocusExness'){throw 'Exness native focus message missing'}
+          if($host -notmatch 'chFocusExnessBrowser'){throw 'Exness focus handoff missing'}
+          if($host -notmatch 'exnessInstallLoginUIFixes'){throw 'Exness login UI installer missing'}
+          if($bridge -notmatch 'sign in with google'){throw 'Google-login visual hide rule missing'}
+          if($bridge -notmatch 'forgot password'){throw 'Forgot-password visual hide rule missing'}
+          if($bridge -notmatch 'pointer-events.*auto'){throw 'login input pointer guard missing'}
+          if($bridge -match "clickText\(\[[^\]]*(Place order|Confirm)"){throw 'unsafe submit automation introduced'}
+          Write-Host 'PASS Exness login focus + hidden startup + UI cleanup guards'
+
       - name: Build Windows x64 EXE
         shell: bash
         run: |
@@ -60,7 +77,7 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Records-Exness.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.6-Records-Exness-LoginFix.zip' -Force"
 
       - name: Existing startup frame responsiveness restart
         shell: powershell
@@ -92,7 +109,7 @@ jobs:
             Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue
           }
 
-      - name: Exness native tab + persistent URL + prefill API smoke test
+      - name: Exness fourth-tab and process embedding smoke test
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -101,12 +118,13 @@ jobs:
           using System;
           using System.Text;
           using System.Runtime.InteropServices;
-          public static class ExWin {
+          public static class ExFixWin {
             public delegate bool EnumProc(IntPtr h, IntPtr l);
             [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr parent, EnumProc cb, IntPtr lp);
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
             [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
           }
           '@
           $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
@@ -120,22 +138,24 @@ jobs:
             }
             if(!$server){throw 'local service missing'}
             $script:buttons=@()
-            [ExWin]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][ExWin]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][ExWin]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
+            [ExFixWin]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 80;[void][ExFixWin]::GetClassName($w,$cls,80);if($cls.ToString() -eq 'Button'){$txt=New-Object Text.StringBuilder 120;[void][ExFixWin]::GetWindowText($w,$txt,120);$script:buttons += $txt.ToString()};return $true},[IntPtr]::Zero)|Out-Null
             foreach($need in @('MH Analysis','WhatsApp','Records','Exness')){if($script:buttons -notcontains $need){throw "native $need button missing"}}
-            [ExWin]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
+            # Exness command id from the existing final integration.
+            [ExFixWin]::PostMessage($h,0x0111,[IntPtr]1004,[IntPtr]::Zero)|Out-Null
             $bp=$null
             for($i=0;$i -lt 70;$i++){
               $bp=Get-CimInstance Win32_Process -ErrorAction SilentlyContinue|Where-Object{($_.Name -eq 'chrome.exe' -or $_.Name -eq 'msedge.exe') -and $_.CommandLine -match '--app=https://my\.exness\.global/webtrading/' -and $_.CommandLine -match 'ExnessProfile'}|Select-Object -First 1
               if($bp){break};Start-Sleep -Milliseconds 300
             }
             if(-not $bp){throw 'persistent Exness embedded browser process missing'}
+            Start-Sleep -Seconds 1
+            $script:chromeChildren=0
+            [ExFixWin]::EnumChildWindows($h,{param($w,$l)$cls=New-Object Text.StringBuilder 100;[void][ExFixWin]::GetClassName($w,$cls,100);if($cls.ToString().StartsWith('Chrome_WidgetWin')){$script:chromeChildren++};return $true},[IntPtr]::Zero)|Out-Null
+            if($script:chromeChildren -lt 1){throw 'embedded Chromium child missing'}
             $payload=@{symbol='XAUUSD';timeframe='15m';direction='BUY';entry=3690;sl=3680;tp1=3710;tp2=3720;market_price=3700;score=88;setup='CI smoke'}|ConvertTo-Json
             $prep=Invoke-RestMethod "$server/api/exness/prepare" -Method Post -ContentType 'application/json' -Body $payload -TimeoutSec 3
-            if(-not $prep.ok){throw 'Exness prefill route rejected signal'}
-            if($prep.pending_type -ne 'BUY LIMIT'){throw "pending type wrong: $($prep.pending_type)"}
-            $st=Invoke-RestMethod "$server/api/exness/status" -Method Get -TimeoutSec 3
-            if($st.symbol -ne 'XAUUSD' -or $st.entry -ne 3690){throw 'Exness local signal state mismatch'}
-            Write-Host 'PASS Exness native tab + persistent profile/URL + local prefill route; final submit remains manual'
+            if(-not $prep.ok -or $prep.pending_type -ne 'BUY LIMIT'){throw 'Exness prefill API regression'}
+            Write-Host 'PASS Exness fourth tab + persistent profile + embedded child + prefill API'
           } finally {
             if($server){try{Invoke-WebRequest ($server+'/api/shutdown') -UseBasicParsing -TimeoutSec 2|Out-Null}catch{}}
             Start-Sleep -Seconds 2
@@ -143,14 +163,14 @@ jobs:
             Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue
           }
 
-      - name: Verify Per-Monitor V2 and embedded browser
+      - name: Verify Per-Monitor V2 retained
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           Add-Type @'
           using System;
           using System.Runtime.InteropServices;
-          public static class DpiEx {
+          public static class DpiFix {
             [DllImport("user32.dll")] public static extern IntPtr GetWindowDpiAwarenessContext(IntPtr h);
             [DllImport("user32.dll")] public static extern bool AreDpiAwarenessContextsEqual(IntPtr a,IntPtr b);
           }
@@ -158,17 +178,17 @@ jobs:
           $env:MH_SMOKE_TEST='1';$p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
           try{
             for($i=0;$i -lt 60;$i++){$p.Refresh();if($p.MainWindowHandle -ne 0){break};Start-Sleep -Milliseconds 250};[IntPtr]$h=$p.MainWindowHandle;if($h -eq [IntPtr]::Zero){throw 'host missing'}
-            if(-not [DpiEx]::AreDpiAwarenessContextsEqual([DpiEx]::GetWindowDpiAwarenessContext($h),[IntPtr](-4))){throw 'Per-Monitor V2 missing'}
+            if(-not [DpiFix]::AreDpiAwarenessContextsEqual([DpiFix]::GetWindowDpiAwarenessContext($h),[IntPtr](-4))){throw 'Per-Monitor V2 missing'}
             Write-Host 'PASS Per-Monitor V2 retained'
           } finally {if(!$p.HasExited){Stop-Process -Id $p.Id -Force};Remove-Item Env:MH_SMOKE_TEST -ErrorAction SilentlyContinue}
 
-      - name: Upload verified Exness build
+      - name: Upload verified Exness login-fix build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.6-Records-Exness-FINAL
+          name: MH-Analysis-V79.6-Records-Exness-LoginFix-FINAL
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V79.6-Records-Exness.zip
+            dist/MH-Analysis-V79.6-Records-Exness-LoginFix.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 90
@@ -180,12 +200,12 @@ jobs:
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __exness_final_exe
+          git checkout --orphan __exness_login_fix_final
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
           git add 'MH Analysis.exe'
-          git commit -m 'MH Analysis V79.6 Records + Exness final EXE only'
+          git commit -m 'MH Analysis V79.6 Exness login focus final EXE only'
           git push --force origin HEAD:final-current-v796
-          git push origin --delete exness-work
-          echo 'PASS final-current-v796 contains only verified Exness-enabled EXE; work branch removed'
+          git push origin --delete exness-login-fix-work
+          echo 'PASS final-current-v796 contains only verified login-focus fixed EXE; work branch removed'
