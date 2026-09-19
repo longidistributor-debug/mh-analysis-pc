@@ -32,7 +32,8 @@ jobs:
             'desktop/header_center_layout_patch.py',
             'desktop/records_feature_patch.py',
             'desktop/chart_reset_only_patch.py',
-            'desktop/native_mt5_terminal_patch.py'
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
           node --check web/app.js
