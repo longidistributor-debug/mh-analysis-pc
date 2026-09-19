@@ -185,7 +185,7 @@ s=rep(s,
 \t\tchSetWindowTheme.Call(chSignalLinkBtn, uintptr(unsafe.Pointer(darkTheme)), 0)
 ''','mt5 dark theme')
 
-helper=r'''
+helper='''
 
 // MH_NATIVE_MT5_TERMINAL_V796
 func chMT5Executable() (string, error) {
