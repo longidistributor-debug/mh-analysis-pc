@@ -108,8 +108,9 @@ func eaSignalSendHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "entry/sl/tp must be positive"})
 		return
 	}
-	if q.Lot <= 0 {
-		q.Lot = 0.01
+	// lot=0 intentionally tells the supplied EA to use its own DefaultLot input.
+	if q.Lot < 0 {
+		q.Lot = 0
 	}
 	if q.Expiry < 0 {
 		q.Expiry = 0
