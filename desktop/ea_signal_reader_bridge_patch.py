@@ -10,13 +10,14 @@ def rep(s, old, new, label):
         raise SystemExit(f'{label}: expected 1 anchor, found {n}')
     return s.replace(old,new,1)
 
-# Register the local MT5 EA bridge after the existing native MT5 prefill route.
+# Register the local MT5 EA bridge directly after Records. No native order-ticket
+# prefill route is required for this EA-file protocol.
 p=Path('main.go')
 s=p.read_text(encoding='utf-8')
 if 'registerEASignalBridgeRoutes(mux)' not in s:
     s=rep(s,
-        '\tregisterMT5PrefillRoutes(mux) // MH_NATIVE_MT5_PREFILL_V796\n',
-        '\tregisterMT5PrefillRoutes(mux) // MH_NATIVE_MT5_PREFILL_V796\n\tregisterEASignalBridgeRoutes(mux) // '+MARK+'\n',
+        '\tregisterRecordsRoutes(mux) // MH_RECORDS_V796_PATCH\n',
+        '\tregisterRecordsRoutes(mux) // MH_RECORDS_V796_PATCH\n\tregisterEASignalBridgeRoutes(mux) // '+MARK+'\n',
         'register EA bridge')
 p.write_text(s,encoding='utf-8')
 
