@@ -4,9 +4,8 @@ MARK = "MH_ANALYSIS_REPAINT_V808"
 p = Path("chrome_host.go")
 s = p.read_text(encoding="utf-8")
 
-# A per-run Analysis profile is already unique, so deleting every sibling profile
-# at the next startup is unnecessary and can race a previous Chromium process that
-# is still finishing its graceful shutdown. Keep only this process's cleanup.
+# Every Analysis run already has a unique Chromium profile. Do not delete sibling
+# runtime profiles at startup because another EXE/browser may still be shutting down.
 old_cleanup = '''\troot := filepath.Join(base, "MHAnalysis", "AnalysisRuntime")
 \t_ = os.MkdirAll(root, 0755)
 \t// Best-effort cleanup of abandoned runtime profiles from older EXE processes.
@@ -20,8 +19,7 @@ old_cleanup = '''\troot := filepath.Join(base, "MHAnalysis", "AnalysisRuntime")
 \tchAnalysisRuntimeDir = filepath.Join(root, fmt.Sprintf("run-%d-%d", os.Getpid(), time.Now().UnixNano()))'''
 new_cleanup = '''\troot := filepath.Join(base, "MHAnalysis", "AnalysisRuntime")
 \t_ = os.MkdirAll(root, 0755)
-\t// '''+MARK+''': each run already has a unique directory. Never delete another
-\t// process's Chromium profile while it may still be shutting down.
+\t// '''+MARK+''': each process owns only its own unique runtime profile.
 \tchAnalysisRuntimeDir = filepath.Join(root, fmt.Sprintf("run-%d-%d", os.Getpid(), time.Now().UnixNano()))'''
 if new_cleanup not in s:
     if old_cleanup not in s:
@@ -35,39 +33,40 @@ if proc_new not in s:
         raise SystemExit("UpdateWindow proc anchor missing")
     s = s.replace(proc_anchor, proc_new, 1)
 
-# Patch only the Analysis branch inside chApplyDesiredBrowserView, accepting either
-# the synchronous or asynchronous ShowWindow variant produced by retained patches.
-fn_start = s.find('func chApplyDesiredBrowserView() {')
-fn_end = s.find('\nfunc chSwitchView(', fn_start)
-if fn_start < 0 or fn_end < 0:
-    raise SystemExit("chApplyDesiredBrowserView boundaries missing")
-block = s[fn_start:fn_end]
-if MARK not in block:
-    show_call = None
-    for candidate in (
-        'chShowWindowAsync.Call(analysis, chSWShow)',
-        'chShowWindow.Call(analysis, chSWShow)',
-    ):
-        if candidate in block:
-            show_call = candidate
-            break
-    if not show_call:
-        raise SystemExit("Analysis show call missing")
-    replacement = show_call + r'''
-		chResizeChildren()
-		chUpdateWindow.Call(analysis)
-		chRedrawWindow.Call(analysis, 0, 0, 0x0085) // MH_ANALYSIS_REPAINT_V808
-		go func(hwnd uintptr) {
-			for _, delay := range []time.Duration{80 * time.Millisecond, 260 * time.Millisecond, 650 * time.Millisecond} {
-				time.Sleep(delay)
-				if hwnd == 0 || chStopping { return }
-				chResizeChildren()
-				chUpdateWindow.Call(hwnd)
-				chRedrawWindow.Call(hwnd, 0, 0, 0x0085)
-			}
-		}(analysis)'''
-    block = block.replace(show_call, replacement, 1)
-    s = s[:fn_start] + block + s[fn_end:]
+# Force Analysis to show/resize/repaint from the native switch path itself. This is
+# independent of how retained patches implement chApplyDesiredBrowserView.
+switch_anchor = '''func chSwitchView(which int) {
+\tchViewMu.Lock()
+\tchDesiredView = which
+\tchViewMu.Unlock()
+'''
+switch_new = '''func chSwitchView(which int) {
+\tchViewMu.Lock()
+\tchDesiredView = which
+\tchViewMu.Unlock()
+
+\t// '''+MARK+''': eliminate stale white Chromium backing frames after login/restart.
+\tif which == 1 {
+\t\tgo func() {
+\t\t\tfor _, delay := range []time.Duration{20 * time.Millisecond, 100 * time.Millisecond, 260 * time.Millisecond, 650 * time.Millisecond} {
+\t\t\t\ttime.Sleep(delay)
+\t\t\t\tchMu.Lock()
+\t\t\t\thwnd := chAnalysisWnd
+\t\t\t\tstopping := chStopping
+\t\t\t\tchMu.Unlock()
+\t\t\t\tif stopping || hwnd == 0 { continue }
+\t\t\t\tchShowWindowAsync.Call(hwnd, chSWShow)
+\t\t\t\tchResizeChildren()
+\t\t\t\tchUpdateWindow.Call(hwnd)
+\t\t\t\tchRedrawWindow.Call(hwnd, 0, 0, 0x0085)
+\t\t\t}
+\t\t}()
+\t}
+'''
+if switch_new not in s:
+    if switch_anchor not in s:
+        raise SystemExit("chSwitchView anchor missing")
+    s = s.replace(switch_anchor, switch_new, 1)
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": unique profile no cross-process deletion + forced Analysis compositor repaint applied")
+print(MARK + ": unique runtime profile + Analysis switch repaint hardening applied")
