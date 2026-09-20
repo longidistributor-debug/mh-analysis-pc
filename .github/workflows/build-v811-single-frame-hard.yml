@@ -1,0 +1,137 @@
+name: Build V81.1 Hard Single Native Frame
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v811']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v811-single-frame-hard
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained systems plus V81.1 frame hard fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py',
+            'desktop/license_v809_preserve_original_ui_patch.py',
+            'desktop/license_v810_single_frame_patch.py',
+            'desktop/license_v811_chrome_frame_hard_fix_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          node --check web/records.js
+          node --check web/auth.js
+
+      - name: V81.1 source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $license=Get-Content -Raw license_auth.go
+          $main=Get-Content -Raw main.go
+          $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
+          foreach($m in @('MH_PRESERVE_ORIGINAL_UI_V809','MH_SINGLE_NATIVE_FRAME_V810','MH_SINGLE_NATIVE_FRAME_HARD_V811','--kiosk','chNormalizeEmbeddedFrame')){if(-not $hostSrc.Contains($m)){throw "frame regression $m"}}
+          foreach($m in @('licAppVersion = "80.8"','MH_SECURE_LICENSE_V808','licDeterministicDevice')){if(-not $license.Contains($m)){throw "license regression $m"}}
+          foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal')){if(-not $hostSrc.Contains($m)){throw "MT5 regression $m"}}
+          if(-not $html.Contains('MH_AUTH_GATED_APP_LOADER_V807')){throw 'license loader regression'}
+          if(-not $app.Contains('MH_SAME_SIGNAL_GUARD_V799')){throw 'duplicate guard regression'}
+          if(Test-Path 'exness_bridge.go'){throw 'legacy exness bridge must not compile'}
+          Write-Host 'PASS V81.1 source guards'
+
+      - name: Same-device unlimited-login regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import("os";"testing")
+          func TestSameDeviceIdentityV811(t *testing.T){
+            root:=t.TempDir();t.Setenv("LOCALAPPDATA",root+"\\local")
+            licDeviceMem=nil
+            d1,e:=licEnsureDevice();if e!=nil{t.Fatal(e)}
+            for i:=0;i<100;i++{d,e:=licEnsureDevice();if e!=nil||d.ID!=d1.ID{t.Fatalf("same-device login %d changed: %v",i,e)}}
+            for i:=0;i<10;i++{licDeviceMem=nil;_=os.Remove(licDevicePath());d,e:=licEnsureDevice();if e!=nil||d.ID!=d1.ID{t.Fatalf("restart %d changed: %v",i,e)}}
+          }
+          '@ | Set-Content -Encoding UTF8 license_v811_same_device_windows_test.go
+          go test -run TestSameDeviceIdentityV811 -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'same-device V81.1 regression failed'}
+          Remove-Item license_v811_same_device_windows_test.go -Force
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V81.1-Hard-Single-Native-Frame.zip' -Force"
+
+      - name: Visual single-frame restart and EXIT regression
+        shell: powershell
+        run: desktop/runtime_v811_single_frame_visual_test.ps1
+
+      - name: Upload verified V81.1
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V81.1-Hard-Single-Native-Frame
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V81.1-Hard-Single-Native-Frame.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish verified V81.1 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_v811_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V81.1 hard single native frame verified build'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
