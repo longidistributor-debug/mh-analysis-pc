@@ -72,7 +72,7 @@ jobs:
           foreach($m in @('FROM','TO','RESET RECORDS','SYNC MT5','records-layout-fix.css')){
             if(-not $recordsHtml.Contains($m)){ throw "Records UI missing $m" }
           }
-          foreach($m in @('MH_WINDOW_FLICKER_FIX_V798','chEXToolWindow','chRevealHostOnce','chPrepareBrowserWindowsForShutdown','HideWindow:true')){
+          foreach($m in @('MH_WINDOW_FLICKER_FIX_V798','chEXToolWindow','chRevealHostOnce','chPrepareBrowserWindowsForShutdown','chSetEmbeddedVisible','fast off-screen attach')){
             if(-not $hostSrc.Contains($m)){ throw "seamless host fix missing $m" }
           }
           foreach($m in @('MH_RECORDS_LAYOUT_FIX_V798','overflow-x:auto','flex:1 1 auto')){
