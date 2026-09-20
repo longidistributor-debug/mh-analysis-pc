@@ -11,7 +11,7 @@ if MARK in s:
 # Records is a separate Chromium child. If that browser starts late or a stale
 # RecordsProfile prevents Chrome from producing a window, selecting Records leaves
 # only the host background visible. Give Records a fresh per-run profile, retry its
-# launch, and make native tab switching non-blocking so the EXE UI never freezes.
+# launch, and keep all Records browser/focus work off the native Win32 UI thread.
 
 anchor = "\tchStopping    bool\n"
 replacement = anchor + "\tchRecordsStarting bool // " + MARK + "\n"
@@ -67,10 +67,11 @@ func chEnsureRecordsBrowser() {
 			return
 		}
 		chRecordsCmd, chRecordsWnd = cmd, wnd
-		chAttachBrowser(chRecordsWnd)
-		chSetEmbeddedVisible(chRecordsWnd, false)
 		chMu.Unlock()
 
+		// Cross-process window work must never happen while chMu is held.
+		chAttachBrowser(wnd)
+		chSetEmbeddedVisible(wnd, false)
 		chResizeChildren()
 		chApplyDesiredBrowserView()
 		return
@@ -82,9 +83,8 @@ if helper not in s:
         raise SystemExit("chSwitchView anchor missing")
     s = s.replace(insert_anchor, helper + insert_anchor, 1)
 
-# V80.9 made chApplyDesiredBrowserView synchronous. That can block WM_COMMAND while
-# Chromium is being reframed/focused, which makes the Records button appear dead and
-# can show Windows Not Responding. Restore the original non-blocking native-tab rule.
+# V80.9 made chApplyDesiredBrowserView synchronous. Records launch/reframe/focus can
+# involve another process, so keep it away from the native message thread.
 switch_old = '''\tif chSignalLinkBtn != 0 {
 \t\tif which == 2 {
 \t\t\tchShowWindow.Call(chSignalLinkBtn, chSWShow)
@@ -103,30 +103,30 @@ switch_new = '''\tif chSignalLinkBtn != 0 {
 \t}
 
 \tif which == 3 {
-\t\t// Never block the host message thread while Records Chromium starts or
-\t\t// reframes. Keep the current view visible until Records is actually ready.
-\t\tgo func() {
-\t\t\tchEnsureRecordsBrowser()
-\t\t\tfor i := 0; i < 220; i++ {
-\t\t\t\tchMu.Lock()
-\t\t\t\tready := chRecordsWnd != 0
-\t\t\t\tstarting := chRecordsStarting
-\t\t\t\tstopping := chStopping
-\t\t\t\tchMu.Unlock()
-\t\t\t\tif stopping { return }
-\t\t\t\tif ready { chApplyDesiredBrowserView(); return }
-\t\t\t\tif !starting { return }
-\t\t\t\ttime.Sleep(100 * time.Millisecond)
-\t\t\t}
-\t\t}()
+\t\tchEnsureRecordsBrowser()
+\t\tchApplyDesiredBrowserView()
 \t\treturn
 \t}
 
-\tgo chApplyDesiredBrowserView()'''
+\tchApplyDesiredBrowserView()'''
 if switch_new not in s:
     if switch_old not in s:
         raise SystemExit("chSwitchView body anchor missing")
     s = s.replace(switch_old, switch_new, 1)
+
+# Most important: the actual Records WM_COMMAND returns immediately. The worker
+# performs chSwitchView(3), so even a slow/crashed Chromium child can never freeze
+# the outer MH Analysis EXE or make the Records button look dead.
+cmd_old = '''\t\tcase idRecords:
+\t\t\tchSwitchView(3)
+'''
+cmd_new = '''\t\tcase idRecords:
+\t\t\tgo chSwitchView(3) // ''' + MARK + ''': never block native UI thread
+'''
+if cmd_new not in s:
+    if cmd_old not in s:
+        raise SystemExit("Records WM_COMMAND anchor missing")
+    s = s.replace(cmd_old, cmd_new, 1)
 
 # Use the same recovery helper during startup. A transient startup failure is no
 # longer permanent because clicking Records invokes the helper again.
@@ -142,4 +142,4 @@ elif 'chEnsureRecordsBrowser()\n\t}()\n\n\tvar m chMsg' not in s:
     raise SystemExit("Records startup block not found")
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": fresh Records runtime + retries + non-blocking native Records tab recovery")
+print(MARK + ": fresh Records runtime + retries + immediate native command + no cross-process work under mutex")
