@@ -4,6 +4,8 @@ on:
   workflow_dispatch:
   push:
     branches: [records-mt5-local-build]
+    paths-ignore:
+      - 'vercel-auth/README.md'
 
 permissions:
   contents: write
