@@ -1,4 +1,4 @@
-// MH_SECURE_LICENSE_V802
+// MH_SECURE_LICENSE_V803
 (() => {
   const rawFetch = window.fetch.bind(window);
   let overlay, message, form, userInput, passInput, button, meta;
@@ -81,10 +81,14 @@
         </form>
         <div id="mhLicenseMessage" class="mhLicenseMessage"></div>
         <div id="mhLicenseMeta" class="mhLicenseMeta"></div>
+        <a class="mhLicenseWhatsapp" href="https://wa.me/923434824609" target="_blank" rel="noopener noreferrer" aria-label="Whatsapp Support - Free 1 Day Trail">
+          <span class="mhWaIcon" aria-hidden="true">☎</span>
+          <span>Whatsapp Support - Free 1 Day Trail</span>
+        </a>
       </div>
       <footer class="mhLicenseCredits" aria-label="MH Analysis credits">
         <div><strong>MH ANALYSIS</strong> By: Muhammad Hammad Shaukat</div>
-        <div>Coding-UI Design-AI Algo - Auto Analysis By: Muhammad Hammad Shaukat</div>
+        <div>Coding-UI-AI Algo- Auto Analysis &amp; Trades By: Muhammad Hammad Shaukat</div>
         <div>Admin Layout Credit: Ruhi Mughal</div>
         <div>Get Signals Credit: Somi</div>
       </footer>`;
