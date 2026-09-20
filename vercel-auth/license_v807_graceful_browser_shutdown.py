@@ -40,36 +40,27 @@ if helper not in s:
         raise SystemExit("chStopBrowsers anchor missing")
     s = s.replace(anchor, helper + anchor, 1)
 
-old = '''func chStopBrowsers() {
+# Replace the whole function rather than depending on a pre-MT5 exact text block.
+# Native MT5 is NOT a Chromium window, so it keeps the existing bounded forced-kill
+# behavior while the three Chromium profile windows get a graceful close first.
+start = s.find('func chStopBrowsers() {')
+end = s.find('\ntype chCDPPage struct {', start)
+if start < 0 or end < 0:
+    raise SystemExit("chStopBrowsers function boundaries missing")
+new_func = r'''func chStopBrowsers() {
 	// Mark shutdown first so browser goroutines that finish late cannot escape cleanup.
 	chMu.Lock()
 	chStopping = true
-	cmds := []*exec.Cmd{chAnalysisCmd, chWhatsappCmd, chRecordsCmd}
-	chAnalysisCmd, chWhatsappCmd, chRecordsCmd = nil, nil, nil
-	chAnalysisWnd, chWhatsappWnd, chRecordsWnd = 0, 0, 0
+	browserCmds := []*exec.Cmd{chAnalysisCmd, chWhatsappCmd, chRecordsCmd}
+	browserWindows := []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd}
+	mt5Cmd := chMT5Cmd
+	chAnalysisCmd, chWhatsappCmd, chRecordsCmd, chMT5Cmd = nil, nil, nil, nil
+	chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd = 0, 0, 0, 0
 	chMu.Unlock()
 
-	// Never hold the UI mutex while waiting for taskkill.
-	for _, cmd := range cmds {
-		if cmd != nil && cmd.Process != nil {
-			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
-		}
-	}
-}'''
-new = '''func chStopBrowsers() {
-	// Mark shutdown first so browser goroutines that finish late cannot escape cleanup.
-	chMu.Lock()
-	chStopping = true
-	cmds := []*exec.Cmd{chAnalysisCmd, chWhatsappCmd, chRecordsCmd}
-	windows := []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd}
-	chAnalysisCmd, chWhatsappCmd, chRecordsCmd = nil, nil, nil
-	chAnalysisWnd, chWhatsappWnd, chRecordsWnd = 0, 0, 0
-	chMu.Unlock()
-
-	// Ask every embedded Chromium window to close normally first. This prevents the
-	// persistent Analysis profile from being marked as crashed, which previously
-	// produced an all-white second launch.
-	for _, hwnd := range windows {
+	// Close Chromium normally first so its persistent profiles are not marked as
+	// crashed. This is especially important for AnalysisProfile on the next EXE run.
+	for _, hwnd := range browserWindows {
 		if hwnd != 0 {
 			chPostMessageW.Call(hwnd, chWMClose, 0, 0)
 		}
@@ -77,7 +68,7 @@ new = '''func chStopBrowsers() {
 
 	// Never hold the UI mutex while waiting. Give each browser a short grace period;
 	// stubborn processes are still terminated so EXIT cannot hang indefinitely.
-	for _, cmd := range cmds {
+	for _, cmd := range browserCmds {
 		if cmd == nil || cmd.Process == nil {
 			continue
 		}
@@ -86,11 +77,15 @@ new = '''func chStopBrowsers() {
 		}
 		_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
 	}
-}'''
-if old in s:
-    s = s.replace(old, new, 1)
-elif MARK not in s or 'windows := []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd}' not in s:
-    raise SystemExit("expected browser shutdown block not found")
+
+	// MT5 is not Chromium and has no browser profile to flush. Preserve the existing
+	// deterministic process-tree cleanup for the embedded terminal.
+	if mt5Cmd != nil && mt5Cmd.Process != nil {
+		_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(mt5Cmd.Process.Pid), "/T", "/F").Run()
+	}
+}
+'''
+s = s[:start] + new_func + s[end:]
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": graceful Chromium close with bounded forced-kill fallback applied")
+print(MARK + ": graceful Chromium close + MT5-safe bounded cleanup applied")
