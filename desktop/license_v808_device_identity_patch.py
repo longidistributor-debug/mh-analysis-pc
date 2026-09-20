@@ -11,6 +11,10 @@ if 'const licAppVersion = "80.8"' not in s:
         raise SystemExit("V80.7 license version anchor missing")
     s = s.replace(old, 'const licAppVersion = "80.8"', 1)
 
+# V80.8 no longer needs random device-key generation. The identity is derived
+# deterministically from the Windows installation instead.
+s = s.replace('\t"crypto/rand"\n', '', 1)
+
 # The V80.6 random-key design depended on local DPAPI files. If Windows secure
 # storage could not be written/read, the same PC could accidentally get another
 # key or fail before login. V80.8 makes the device signing key deterministic from
