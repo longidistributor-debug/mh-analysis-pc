@@ -65,7 +65,6 @@ new = '''\tprofileDir := chProfileDir(profile)
 if old in s:
     s = s.replace(old, new, 1)
 elif new not in s:
-    # A previous V80.7 patch form may already have a profileDir block. Normalize it.
     old2 = '''\tprofileDir := chProfileDir(profile)
 \tif profile == "AnalysisProfile" {
 \t\tchPrepareAnalysisProfileRuntime(profileDir)
@@ -84,6 +83,25 @@ if flag_new not in s:
     if flag_anchor not in s:
         raise SystemExit("session crash flag anchor missing")
     s = s.replace(flag_anchor, flag_new, 1)
+
+# Smoke/restart testing used one fixed DevTools port (17880) for consecutive EXE
+# processes. A browser descendant from the first run can retain that port briefly,
+# making the second Chromium app window render blank even though production uses no
+# Analysis DevTools port at all. The runtime test does not use CDP, so make smoke
+# behavior match production exactly: debugPort remains zero on Analysis.
+old_debug = '''\t\tanalysisDebugPort := 0
+\t\tif os.Getenv("MH_SMOKE_TEST") == "1" {
+\t\t\tanalysisDebugPort = 17880
+\t\t}
+\t\tcmd, wnd, err := chLaunchBrowser("AnalysisProfile", serverURL, analysisDebugPort)
+'''
+new_debug = '''\t\tanalysisDebugPort := 0 // '''+MARK+''' production-equivalent smoke launch
+\t\tcmd, wnd, err := chLaunchBrowser("AnalysisProfile", serverURL, analysisDebugPort)
+'''
+if old_debug in s:
+    s = s.replace(old_debug, new_debug, 1)
+elif new_debug not in s:
+    raise SystemExit("Analysis smoke debug-port anchor missing")
 
 p.write_text(s, encoding="utf-8")
 
@@ -115,4 +133,4 @@ if cleanup_new not in s:
     s = s.replace(cleanup_anchor, cleanup_new, 1)
 p.write_text(s, encoding="utf-8")
 
-print(MARK + ": isolated per-process Analysis Chromium profile + graceful cleanup applied")
+print(MARK + ": isolated Analysis profile + no smoke debug collision + graceful cleanup applied")
