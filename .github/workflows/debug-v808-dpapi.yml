@@ -1,0 +1,42 @@
+name: Debug V80.8 DPAPI
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v808-debug']
+jobs:
+  debug:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Apply license patches
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py')){ python $p; if($LASTEXITCODE -ne 0){ throw "patch $p" } }
+      - name: DPAPI diagnostics
+        shell: powershell
+        run: |
+          @'
+          //go:build windows
+          package main
+          import("os";"testing")
+          func TestDPAPIDebug(t *testing.T){
+            root:=t.TempDir(); t.Setenv("LOCALAPPDATA",root+"\\local"); t.Setenv("PROGRAMDATA",root+"\\programdata")
+            licDeviceMem=nil; licSessionMem=nil
+            d,err:=licEnsureDevice(); t.Logf("ensure1 id=%v err=%v",func()string{if d==nil{return ""};return d.ID}(),err)
+            for _,p:=range []string{licDevicePath(),licDeviceMachinePath(),licDeviceRecoveryPath()}{b,e:=os.ReadFile(p);t.Logf("device file %s bytes=%d readerr=%v",p,len(b),e)}
+            s1:=&licSession{Username:"same-device",AccessToken:"token-one"}; err=licSaveSession(s1); t.Logf("save1 err=%v path=%s",err,licSessionPath())
+            b,e:=os.ReadFile(licSessionPath()); t.Logf("session1 bytes=%d readerr=%v",len(b),e)
+            var q1 licSession; e=licReadProtected(licSessionPath(),&q1); t.Logf("directread1=%#v err=%v",q1,e)
+            s2:=&licSession{Username:"same-device",AccessToken:"token-two"}; err=licSaveSession(s2); t.Logf("save2 err=%v",err)
+            b,e=os.ReadFile(licSessionPath()); t.Logf("session2 bytes=%d readerr=%v",len(b),e)
+            var q2 licSession; e=licReadProtected(licSessionPath(),&q2); t.Logf("directread2=%#v err=%v",q2,e)
+            licSessionMem=nil; got:=licLoadSession(); t.Logf("load=%#v",got)
+            if e!=nil || got==nil { t.Fatalf("dpapi/session failure direct=%v load=%#v",e,got) }
+          }
+          '@ | Set-Content -Encoding UTF8 license_v808_debug_windows_test.go
+          go test -v -run TestDPAPIDebug -count=1 .
