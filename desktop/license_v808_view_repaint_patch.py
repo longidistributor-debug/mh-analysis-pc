@@ -35,33 +35,39 @@ if proc_new not in s:
         raise SystemExit("UpdateWindow proc anchor missing")
     s = s.replace(proc_anchor, proc_new, 1)
 
-# When returning from WhatsApp/login to Analysis, force Chromium's compositor to
-# resize/repaint more than once. This prevents a stale white backing surface from
-# being the first visible frame after a fast restart/view switch.
-old_show = '''\tif analysis != 0 {
-\t\tchShowWindowAsync.Call(analysis, chSWShow)
-\t}
-}'''
-new_show = '''\tif analysis != 0 {
-\t\tchShowWindowAsync.Call(analysis, chSWShow)
-\t\tchResizeChildren()
-\t\tchUpdateWindow.Call(analysis)
-\t\tchRedrawWindow.Call(analysis, 0, 0, 0x0085) // RDW_INVALIDATE|RDW_UPDATENOW|RDW_ALLCHILDREN
-\t\tgo func(hwnd uintptr) {
-\t\t\tfor _, delay := range []time.Duration{80 * time.Millisecond, 260 * time.Millisecond, 650 * time.Millisecond} {
-\t\t\t\ttime.Sleep(delay)
-\t\t\t\tif hwnd == 0 || chStopping { return }
-\t\t\t\tchResizeChildren()
-\t\t\t\tchUpdateWindow.Call(hwnd)
-\t\t\t\tchRedrawWindow.Call(hwnd, 0, 0, 0x0085)
-\t\t\t}
-\t\t}(analysis)
-\t}
-}'''
-if new_show not in s:
-    if old_show not in s:
-        raise SystemExit("Analysis show anchor missing")
-    s = s.replace(old_show, new_show, 1)
+# Patch only the Analysis branch inside chApplyDesiredBrowserView, accepting either
+# the synchronous or asynchronous ShowWindow variant produced by retained patches.
+fn_start = s.find('func chApplyDesiredBrowserView() {')
+fn_end = s.find('\nfunc chSwitchView(', fn_start)
+if fn_start < 0 or fn_end < 0:
+    raise SystemExit("chApplyDesiredBrowserView boundaries missing")
+block = s[fn_start:fn_end]
+if MARK not in block:
+    show_call = None
+    for candidate in (
+        'chShowWindowAsync.Call(analysis, chSWShow)',
+        'chShowWindow.Call(analysis, chSWShow)',
+    ):
+        if candidate in block:
+            show_call = candidate
+            break
+    if not show_call:
+        raise SystemExit("Analysis show call missing")
+    replacement = show_call + r'''
+		chResizeChildren()
+		chUpdateWindow.Call(analysis)
+		chRedrawWindow.Call(analysis, 0, 0, 0x0085) // MH_ANALYSIS_REPAINT_V808
+		go func(hwnd uintptr) {
+			for _, delay := range []time.Duration{80 * time.Millisecond, 260 * time.Millisecond, 650 * time.Millisecond} {
+				time.Sleep(delay)
+				if hwnd == 0 || chStopping { return }
+				chResizeChildren()
+				chUpdateWindow.Call(hwnd)
+				chRedrawWindow.Call(hwnd, 0, 0, 0x0085)
+			}
+		}(analysis)'''
+    block = block.replace(show_call, replacement, 1)
+    s = s[:fn_start] + block + s[fn_end:]
 
 p.write_text(s, encoding="utf-8")
 print(MARK + ": unique profile no cross-process deletion + forced Analysis compositor repaint applied")
