@@ -14,7 +14,7 @@
       <img src="/mh-logo.png" alt="MH" />
       <div>
         <div class="recordsBrandName">MH ANALYSIS • RECORDS</div>
-        <div class="recordsVersion">v79.6 AUTO CYCLE (HAMMAD &amp; SOMI)</div>
+        <div class="recordsVersion">v79.7 • LOCAL MT5 TRADE LIFECYCLE</div>
       </div>
     </div>
     <div class="recordsBismillah">
@@ -22,12 +22,33 @@
       <div class="translit">Bismillah ir-Rahman ir-Raheem</div>
     </div>
     <div class="recordsActions">
-      <button id="accuracyBtn" class="accuracyBtn" type="button">◎ ACCURACY CHECK</button>
-      <div id="checkState" class="checkState">No extra market API calls until you press Accuracy Check.</div>
+      <button id="syncBtn" class="accuracyBtn" type="button">↻ SYNC MT5</button>
+      <div id="checkState" class="checkState">Local MT5 events only • 0 external market API calls.</div>
     </div>
   </header>
 
-  <section id="overallStats" class="statsGrid" aria-label="Overall record statistics"></section>
+  <section class="panel filterPanel" aria-label="Record range filters">
+    <div class="filterGroup">
+      <label><span>FROM</span><input id="fromDate" type="date" /></label>
+      <label><span>TO</span><input id="toDate" type="date" /></label>
+      <label><span>TIMEFRAME</span>
+        <select id="tfFilter">
+          <option value="all">ALL</option>
+          <option value="1m">1M</option>
+          <option value="5m">5M</option>
+          <option value="15m">15M</option>
+          <option value="30m">30M</option>
+          <option value="1h">1H</option>
+        </select>
+      </label>
+      <button id="applyFilter" class="filterBtn" type="button">APPLY</button>
+      <button id="resetFilter" class="filterBtn secondary" type="button">RESET FILTER</button>
+      <button id="resetRecords" class="filterBtn danger" type="button">RESET RECORDS</button>
+    </div>
+    <div id="rangeInfo" class="rangeInfo">ALL SAVED DATES • ALL TIMEFRAMES</div>
+  </section>
+
+  <section id="overallStats" class="statsGrid" aria-label="Filtered record statistics"></section>
 
   <main class="recordsGrid">
     <section class="panel calendarPanel">
@@ -44,7 +65,7 @@
       </div>
       <div class="weekHead"><span>SUN</span><span>MON</span><span>TUE</span><span>WED</span><span>THU</span><span>FRI</span><span>SAT</span></div>
       <div id="calendarGrid" class="calendarGrid"></div>
-      <div class="calendarLegend"><span><i class="dot signal"></i> Signal day</span><span><i class="dot checked"></i> Checked outcome</span></div>
+      <div class="calendarLegend"><span><i class="dot signal"></i> Signal day</span><span><i class="dot checked"></i> MT5 updated</span><span><i class="dot future"></i> Future disabled</span></div>
     </section>
 
     <section class="panel dayPanel">
@@ -74,7 +95,7 @@
       <table class="tradeTable">
         <thead>
           <tr>
-            <th>TIME</th><th>PAIR</th><th>TF</th><th>SIGNAL</th><th>ENTRY</th><th>SL</th><th>TP1</th><th>TP2</th><th>SCORE</th><th>RESULT</th><th>CHECKED</th>
+            <th>TIME</th><th>PAIR</th><th>TF</th><th>SIGNAL</th><th>ENTRY</th><th>SL</th><th>TP1</th><th>TP2</th><th>SCORE</th><th>MT5 STATUS</th><th>P/L</th><th>MANUAL</th><th>UPDATED</th>
           </tr>
         </thead>
         <tbody id="tradeRows"></tbody>
@@ -84,7 +105,7 @@
   </section>
 
   <footer class="recordsFooter">
-    <span>Accuracy Check uses saved signals + 1-minute history only when requested.</span>
+    <span>Outcomes come from your attached MT5 EA trade_events.jsonl • no FCS history is used for Records verification.</span>
     <span id="lastRefresh">Local records ready.</span>
   </footer>
 </div>
