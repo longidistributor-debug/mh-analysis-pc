@@ -11,9 +11,8 @@ if MARK in s:
 # Records is a separate Chromium child. If that browser starts late or a stale
 # RecordsProfile prevents Chrome from producing a window, selecting Records leaves
 # only the host background visible. Give Records a fresh per-run profile, retry its
-# launch, and ensure the native Records tab can recover the child on demand.
+# launch, and make native tab switching non-blocking so the EXE UI never freezes.
 
-# Track one Records launch attempt at a time.
 anchor = "\tchStopping    bool\n"
 replacement = anchor + "\tchRecordsStarting bool // " + MARK + "\n"
 if replacement not in s:
@@ -21,9 +20,6 @@ if replacement not in s:
         raise SystemExit("chStopping var anchor missing")
     s = s.replace(anchor, replacement, 1)
 
-# Insert a robust Records launcher before chSwitchView. It deliberately uses a
-# per-process Records browser profile because Records data itself is stored by the
-# local Go backend, not browser localStorage. This avoids stale/crashed Chrome state.
 insert_anchor = "\nfunc chSwitchView(which int) {"
 helper = r'''
 
@@ -65,7 +61,6 @@ func chEnsureRecordsBrowser() {
 			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Start()
 			return
 		}
-		// Another path may have completed while this process was starting.
 		if chRecordsWnd != 0 {
 			chMu.Unlock()
 			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Start()
@@ -87,9 +82,9 @@ if helper not in s:
         raise SystemExit("chSwitchView anchor missing")
     s = s.replace(insert_anchor, helper + insert_anchor, 1)
 
-# When Records is clicked before its browser is ready, start/retry it. Keep the
-# current working view visible until Records has attached instead of showing a blank
-# host. chEnsureRecordsBrowser applies the requested Records view as soon as ready.
+# V80.9 made chApplyDesiredBrowserView synchronous. That can block WM_COMMAND while
+# Chromium is being reframed/focused, which makes the Records button appear dead and
+# can show Windows Not Responding. Restore the original non-blocking native-tab rule.
 switch_old = '''\tif chSignalLinkBtn != 0 {
 \t\tif which == 2 {
 \t\t\tchShowWindow.Call(chSignalLinkBtn, chSWShow)
@@ -108,24 +103,33 @@ switch_new = '''\tif chSignalLinkBtn != 0 {
 \t}
 
 \tif which == 3 {
-\t\tchMu.Lock()
-\t\tready := chRecordsWnd != 0
-\t\tchMu.Unlock()
-\t\tif !ready {
-\t\t\tgo chEnsureRecordsBrowser()
-\t\t\treturn
-\t\t}
+\t\t// Never block the host message thread while Records Chromium starts or
+\t\t// reframes. Keep the current view visible until Records is actually ready.
+\t\tgo func() {
+\t\t\tchEnsureRecordsBrowser()
+\t\t\tfor i := 0; i < 220; i++ {
+\t\t\t\tchMu.Lock()
+\t\t\t\tready := chRecordsWnd != 0
+\t\t\t\tstarting := chRecordsStarting
+\t\t\t\tstopping := chStopping
+\t\t\t\tchMu.Unlock()
+\t\t\t\tif stopping { return }
+\t\t\t\tif ready { chApplyDesiredBrowserView(); return }
+\t\t\t\tif !starting { return }
+\t\t\t\ttime.Sleep(100 * time.Millisecond)
+\t\t\t}
+\t\t}()
+\t\treturn
 \t}
 
-\tchApplyDesiredBrowserView()'''
+\tgo chApplyDesiredBrowserView()'''
 if switch_new not in s:
     if switch_old not in s:
         raise SystemExit("chSwitchView body anchor missing")
     s = s.replace(switch_old, switch_new, 1)
 
-# Replace the eager Records launch block with the same recovery helper. The helper
-# is also called on click, so a transient startup failure no longer permanently
-# breaks Records for the entire EXE session.
+# Use the same recovery helper during startup. A transient startup failure is no
+# longer permanent because clicking Records invokes the helper again.
 start = s.find('''\tgo func() {\n\t\ttime.Sleep(250 * time.Millisecond)\n\t\trecordsDebugPort := 0''')
 end_marker = '''\n\t}()\n\n\tvar m chMsg'''
 if start >= 0:
@@ -138,4 +142,4 @@ elif 'chEnsureRecordsBrowser()\n\t}()\n\n\tvar m chMsg' not in s:
     raise SystemExit("Records startup block not found")
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": Records browser uses fresh per-run profile, 3 launch retries, and on-demand recovery")
+print(MARK + ": fresh Records runtime + retries + non-blocking native Records tab recovery")
