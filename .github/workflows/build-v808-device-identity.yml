@@ -1,0 +1,256 @@
+name: Build V80.8 Same Device Identity
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'vercel-auth/trigger-v808'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v808-device-identity
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained app patches plus V80.8 device repair
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){ throw 'app.js syntax check failed' }
+          node --check web/records.js
+          if($LASTEXITCODE -ne 0){ throw 'records.js syntax check failed' }
+          node --check web/auth.js
+          if($LASTEXITCODE -ne 0){ throw 'auth.js syntax check failed' }
+
+      - name: V80.8 source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $main=Get-Content -Raw main.go
+          $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
+          $recordsHtml=Get-Content -Raw web/records.html
+          $recordsJs=Get-Content -Raw web/records.js
+          $eaBridge=Get-Content -Raw ea_signal_bridge.go
+          $localRecords=Get-Content -Raw records_mt5_local.go
+          $license=Get-Content -Raw license_auth.go
+          $support=Get-Content -Raw license_support_external.go
+          $authJs=Get-Content -Raw web/auth.js
+          $authCss=Get-Content -Raw web/auth.css
+
+          foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){ if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" } }
+          foreach($m in @('MH_EA_SIGNAL_READER_BRIDGE_V796','registerEASignalBridgeRoutes','/api/mt5/ea/send','signal.txt')){ if(-not ($eaBridge.Contains($m) -or $main.Contains($m) -or $app.Contains($m))){ throw "missing EA bridge marker $m" } }
+          foreach($m in @('MH_RECORDS_MT5_LOCAL_V797','registerRecordsV2Routes','/api/records-v2','trade_events.jsonl')){ if(-not ($localRecords.Contains($m) -or $main.Contains($m) -or $recordsJs.Contains($m))){ throw "missing Records marker $m" } }
+          foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','/api/records-v2/duplicate','checkSameSignalV799')){ if(-not ($localRecords.Contains($m) -or $app.Contains($m))){ throw "duplicate guard missing $m" } }
+
+          foreach($m in @('licAppVersion = "80.8"','MH_SECURE_LICENSE_V808','license-device-v1-machine.bin','license-device-v1-recovery.bin','licDeviceMem','licPersistDeviceCopies','licDevicePath()+".tmp"','existing secure device identity could not be recovered','device_identity_recovery_required')){ if(-not $license.Contains($m)){ throw "V80.8 device identity missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V807','showChecking','mh-license-authorized','resetDashboardViewport','Designing Assistance By: Sinha Creates','Whatsapp Support - Free 1 Day Trail')){ if(-not $authJs.Contains($m)){ throw "V80.8 auth UX regression $m" } }
+          foreach($m in @('MH_AUTH_GATED_APP_LOADER_V807','mh-license-authorized','/app.js','/runtime-fixes.js')){ if(-not $html.Contains($m)){ throw "V80.8 gated app loader regression $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V807','deterministic startup verification','overflow:hidden','mhCreditMH','mhCreditAnalysis','mhLicenseCredits')){ if(-not $authCss.Contains($m)){ throw "V80.8 auth CSS regression $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V806','chWMShutdownDone','chCloseOnce','case chWMShutdownDone:')){ if(-not $hostSrc.Contains($m)){ throw "async EXIT regression $m" } }
+
+          if($html -match '<script src="/app.js"></script>'){ throw 'app.js must not auto-run before authorization' }
+          if($authCss.Contains('overflow-y:auto')){ throw 'login overlay scrolling must remain disabled' }
+          if(-not $main.Contains('/api/license/support/open')){ throw 'external support route missing' }
+          if(-not $support.Contains('FileProtocolHandler')){ throw 'external browser support missing' }
+          if($recordsJs.Contains('/api/records/accuracy') -or $recordsHtml.Contains('ACCURACY CHECK')){ throw 'old market-history accuracy remains' }
+          if(Test-Path 'exness_bridge.go'){ throw 'exness bridge must not compile' }
+          Write-Host 'PASS V80.8 source guards: same-device key reuse + self-heal + no silent rotation'
+
+      - name: Same-device DPAPI recovery regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+
+          package main
+
+          import (
+            "os"
+            "strings"
+            "testing"
+          )
+
+          func TestLicDeviceIdentityV808(t *testing.T) {
+            root := t.TempDir()
+            t.Setenv("LOCALAPPDATA", root+"\\local")
+            t.Setenv("PROGRAMDATA", root+"\\programdata")
+            licDeviceMem = nil
+            licSessionMem = nil
+
+            d1, err := licEnsureDevice()
+            if err != nil { t.Fatalf("first identity: %v", err) }
+            if d1 == nil || d1.ID == "" { t.Fatal("missing first device id") }
+            d2, err := licEnsureDevice()
+            if err != nil || d2.ID != d1.ID { t.Fatalf("same-run identity changed: %v %v", d2, err) }
+
+            // Session overwrite must work on Windows; repeated successful logins
+            // replace the old access token instead of failing os.Rename.
+            if err := licSaveSession(&licSession{Username:"same-device", AccessToken:"token-one"}); err != nil { t.Fatalf("session first save: %v", err) }
+            if err := licSaveSession(&licSession{Username:"same-device", AccessToken:"token-two"}); err != nil { t.Fatalf("session overwrite: %v", err) }
+            licSessionMem = nil
+            if s := licLoadSession(); s == nil || s.AccessToken != "token-two" { t.Fatalf("session overwrite not persisted: %#v", s) }
+
+            machineBlob, err := os.ReadFile(licDeviceMachinePath())
+            if err != nil || len(machineBlob) == 0 { t.Fatalf("machine backup missing: %v", err) }
+
+            // Corrupt only the user copy: same machine backup must self-heal it.
+            licDeviceMem = nil
+            if err := os.WriteFile(licDevicePath(), []byte("corrupt-primary"), 0600); err != nil { t.Fatal(err) }
+            d3, err := licEnsureDevice()
+            if err != nil || d3.ID != d1.ID { t.Fatalf("machine recovery changed device: %v %v", d3, err) }
+
+            // Simulate the historical Windows rename failure: only a valid .tmp
+            // survives while canonical copies are bad. V80.8 must recover same ID.
+            licDeviceMem = nil
+            _ = os.WriteFile(licDevicePath(), []byte("bad"), 0600)
+            _ = os.WriteFile(licDeviceMachinePath(), []byte("bad"), 0600)
+            _ = os.WriteFile(licDeviceRecoveryPath(), []byte("bad"), 0600)
+            _ = os.WriteFile(licDeviceMachinePath()+".tmp", machineBlob, 0600)
+            d4, err := licEnsureDevice()
+            if err != nil || d4.ID != d1.ID { t.Fatalf("tmp recovery changed device: %v %v", d4, err) }
+
+            // If every encrypted copy is genuinely destroyed, fail closed. Never
+            // invent a new key that would turn the same PC into an unauthorized device.
+            licDeviceMem = nil
+            for _, p := range []string{licDevicePath(), licDevicePath()+".tmp", licDeviceMachinePath(), licDeviceMachinePath()+".tmp", licDeviceRecoveryPath(), licDeviceRecoveryPath()+".tmp"} {
+              _ = os.WriteFile(p, []byte("destroyed"), 0600)
+            }
+            _, err = licEnsureDevice()
+            if err == nil || !strings.Contains(err.Error(), "existing secure device identity could not be recovered") {
+              t.Fatalf("expected fail-closed identity recovery error, got %v", err)
+            }
+          }
+          '@ | Set-Content -Encoding UTF8 license_v808_device_identity_windows_test.go
+          go test -run TestLicDeviceIdentityV808 -count=1 .
+          if($LASTEXITCODE -ne 0){ throw 'V80.8 DPAPI recovery regression failed' }
+          Remove-Item license_v808_device_identity_windows_test.go -Force
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.8-Same-Device-Identity.zip' -Force"
+
+      - name: Startup restart and exit regression
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+
+      - name: Blank-white regression guard
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Add-Type -AssemblyName System.Drawing
+          foreach($name in @('outer-first.png','outer-restart.png')){
+            $path=Join-Path $PWD ('dist\\'+$name)
+            if(-not (Test-Path $path)){ throw "missing runtime screenshot $name" }
+            $bmp=[System.Drawing.Bitmap]::FromFile($path)
+            try {
+              $white=0; $samples=0
+              for($y=80;$y -lt $bmp.Height;$y+=24){
+                for($x=8;$x -lt $bmp.Width;$x+=24){
+                  $c=$bmp.GetPixel($x,$y); $samples++
+                  if($c.R -gt 244 -and $c.G -gt 244 -and $c.B -gt 244){ $white++ }
+                }
+              }
+              $ratio= if($samples){$white/[double]$samples}else{1}
+              Write-Host "$name white-ratio=$ratio"
+              if($ratio -gt 0.55){ throw "$name is predominantly blank white" }
+            } finally { $bmp.Dispose() }
+          }
+          Write-Host 'PASS no blank-white embedded auth view'
+
+      - name: Verify V80.8 retained systems
+        shell: powershell
+        run: |
+          $license=Get-Content -Raw license_auth.go
+          $authJs=Get-Content -Raw web/auth.js
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
+          $records=Get-Content -Raw web/records.html
+          $localRecords=Get-Content -Raw records_mt5_local.go
+          if($license -notmatch 'licAppVersion = "80.8"'){ throw 'V80.8 version regression' }
+          if($license -notmatch 'license-device-v1-recovery.bin'){ throw 'third machine recovery copy regression' }
+          if($license -notmatch 'licDevicePath\(\) \+ "\.tmp"'){ throw 'tmp identity recovery regression' }
+          if($license -notmatch 'device_identity_recovery_required'){ throw 'safe identity recovery message regression' }
+          if($authJs -notmatch 'showChecking'){ throw 'verify-first auth regression' }
+          if($html -notmatch 'MH_AUTH_GATED_APP_LOADER_V807'){ throw 'auth-gated app loader regression' }
+          if($hostSrc -notmatch 'chWMShutdownDone'){ throw 'async exit regression' }
+          if($app -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal guard regression' }
+          if($localRecords -notmatch 'MH_RECORDS_MT5_LOCAL_V797'){ throw 'local records regression' }
+          if($records -notmatch 'LOCAL MT5 TRADE LIFECYCLE'){ throw 'records UI regression' }
+          if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
+          Write-Host 'PASS V80.8 retained-system verification'
+
+      - name: Upload V80.8 verified build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V80.8-Same-Device-Identity
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V80.8-Same-Device-Identity.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V80.8 EXE-only branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_v808_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V80.8 same-device identity build'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
+          echo 'PASS EXE-only branches updated with V80.8 verified EXE'
