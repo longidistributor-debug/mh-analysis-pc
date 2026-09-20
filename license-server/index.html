@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MH Analysis License Server</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body class="status-page">
+  <main class="status-card">
+    <div class="brand">MH ANALYSIS</div>
+    <h1>License Server</h1>
+    <p id="state">Checking configuration…</p>
+    <a class="button" href="/admin">Admin Panel</a>
+  </main>
+<script>
+fetch('/api/health',{cache:'no-store'}).then(r=>r.json()).then(x=>{
+  const c=x.config||{};
+  document.getElementById('state').textContent=x.ok?'ONLINE • READY':`SETUP REQUIRED • MongoDB ${c.mongodb?'OK':'missing'} • JWT ${c.jwt_secret?'OK':'missing'} • Admin ${c.admin_secret?'OK':'missing'}`;
+}).catch(()=>document.getElementById('state').textContent='Server check failed');
+</script>
+</body>
+</html>
