@@ -1,4 +1,4 @@
-name: Build V80.6 Runtime License Fixes
+name: Build V80.7 Auth Loader Repair
 
 on:
   workflow_dispatch:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: mh-analysis-v806-runtime-fixes
+  group: mh-analysis-v807-auth-repair
   cancel-in-progress: true
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply retained app patches plus V80.6 fixes
+      - name: Apply retained app patches plus V80.7 repair
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -48,7 +48,8 @@ jobs:
             'desktop/license_login_focus_patch.py',
             'desktop/license_v803_patch.py',
             'desktop/license_v804_patch.py',
-            'desktop/license_v806_runtime_fix_patch.py'
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
           node --check web/app.js
@@ -58,7 +59,7 @@ jobs:
           node --check web/auth.js
           if($LASTEXITCODE -ne 0){ throw 'auth.js syntax check failed' }
 
-      - name: V80.6 source guards
+      - name: V80.7 source guards
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -81,10 +82,15 @@ jobs:
           foreach($m in @('MH_RECORDS_MT5_LOCAL_V797','registerRecordsV2Routes','/api/records-v2','trade_events.jsonl')){ if(-not ($localRecords.Contains($m) -or $main.Contains($m) -or $recordsJs.Contains($m))){ throw "missing Records marker $m" } }
           foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','/api/records-v2/duplicate','checkSameSignalV799')){ if(-not ($localRecords.Contains($m) -or $app.Contains($m))){ throw "duplicate guard missing $m" } }
 
-          foreach($m in @('MH_SECURE_LICENSE_V801','MH_SECURE_LICENSE_V806','licAppVersion = "80.6"','license-device-v1-machine.bin','licDPAPIProtectMachine','existing secure device identity could not be recovered','auth/challenge','auth/verify')){ if(-not ($license.Contains($m) -or $main.Contains($m))){ throw "V80.6 license client missing $m" } }
-          foreach($m in @('MH_SECURE_LICENSE_V806','mhLicenseSessionHintV806','mhLicensePostLoginV806','resetDashboardViewport','scrollRestoration','Designing Assistance By: Sinha Creates','Whatsapp Support - Free 1 Day Trail')){ if(-not $authJs.Contains($m)){ throw "V80.6 auth UX missing $m" } }
-          foreach($m in @('MH_SECURE_LICENSE_V806','overflow:hidden','mhCreditMH','mhCreditAnalysis','mhLicenseCredits')){ if(-not $authCss.Contains($m)){ throw "V80.6 auth CSS missing $m" } }
-          foreach($m in @('MH_SECURE_LICENSE_V806','chWMShutdownDone','chCloseOnce','case chWMShutdownDone:')){ if(-not $hostSrc.Contains($m)){ throw "V80.6 async exit missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V801','licAppVersion = "80.7"','license-device-v1-machine.bin','licDPAPIProtectMachine','existing secure device identity could not be recovered','auth/challenge','auth/verify')){ if(-not ($license.Contains($m) -or $main.Contains($m))){ throw "V80.7 license client missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V807','showChecking','mh-license-authorized','resetDashboardViewport','Designing Assistance By: Sinha Creates','Whatsapp Support - Free 1 Day Trail')){ if(-not $authJs.Contains($m)){ throw "V80.7 auth UX missing $m" } }
+          foreach($m in @('MH_AUTH_GATED_APP_LOADER_V807','mh-license-authorized','/app.js','/runtime-fixes.js')){ if(-not $html.Contains($m)){ throw "V80.7 gated app loader missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V807','deterministic startup verification','overflow:hidden','mhCreditMH','mhCreditAnalysis','mhLicenseCredits')){ if(-not $authCss.Contains($m)){ throw "V80.7 auth CSS missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V806','chWMShutdownDone','chCloseOnce','case chWMShutdownDone:')){ if(-not $hostSrc.Contains($m)){ throw "async EXIT missing $m" } }
+
+          if($authJs.Contains('mhLicenseSessionHintV806') -or $authJs.Contains('mhLicensePostLoginV806')){ throw 'V80.6 guessed-session hint regression remains' }
+          if($authJs.Contains('location.reload();') -and $authJs.IndexOf('passInput.value = ""') -lt $authJs.IndexOf('location.reload();')){ throw 'post-login page reload regression remains' }
+          if($html -match '<script src="/app.js"></script>'){ throw 'app.js must not auto-run before authorization' }
           if($hostSrc.Contains("chPrepareBrowserWindowsForShutdown()\n\t\tchStopBrowsers()\n\t\tchDestroyWindow.Call(hwnd)")){ throw 'blocking EXIT path still present' }
           if($authCss.Contains('overflow-y:auto')){ throw 'login overlay scrolling must remain disabled' }
           if(-not $main.Contains('/api/license/support/open')){ throw 'external support route missing' }
@@ -92,7 +98,7 @@ jobs:
           if($recordsJs.Contains('/api/records/accuracy') -or $recordsHtml.Contains('ACCURACY CHECK')){ throw 'old market-history accuracy remains' }
           if(Test-Path 'exness_bridge.go'){ throw 'exness bridge must not compile' }
           foreach($bad in @('exness.com','registerExnessRoutes','/api/exness/')){ if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains $bad" } }
-          Write-Host 'PASS V80.6 source guards: direct login transition + same-PC identity persistence + async EXIT + retained systems'
+          Write-Host 'PASS V80.7 source guards: authoritative auth + no reload + gated app + same-PC identity + async EXIT'
 
       - name: Build Windows x64 EXE
         shell: bash
@@ -102,13 +108,37 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.6-Runtime-License-Fixes.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.7-Auth-Loader-Repair.zip' -Force"
 
       - name: Startup restart and exit regression
         shell: powershell
         run: desktop/runtime_seamless_test.ps1
 
-      - name: Verify V80.6 retained systems
+      - name: Blank-white regression guard
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Add-Type -AssemblyName System.Drawing
+          foreach($name in @('outer-first.png','outer-restart.png')){
+            $path=Join-Path $PWD ('dist\'+$name)
+            if(-not (Test-Path $path)){ throw "missing runtime screenshot $name" }
+            $bmp=[System.Drawing.Bitmap]::FromFile($path)
+            try {
+              $white=0; $samples=0
+              for($y=80;$y -lt $bmp.Height;$y+=24){
+                for($x=8;$x -lt $bmp.Width;$x+=24){
+                  $c=$bmp.GetPixel($x,$y); $samples++
+                  if($c.R -gt 244 -and $c.G -gt 244 -and $c.B -gt 244){ $white++ }
+                }
+              }
+              $ratio= if($samples){$white/[double]$samples}else{1}
+              Write-Host "$name white-ratio=$ratio"
+              if($ratio -gt 0.55){ throw "$name is predominantly blank white" }
+            } finally { $bmp.Dispose() }
+          }
+          Write-Host 'PASS no blank-white embedded auth view'
+
+      - name: Verify V80.7 retained systems
         shell: powershell
         run: |
           $license=Get-Content -Raw license_auth.go
@@ -116,43 +146,45 @@ jobs:
           $authCss=Get-Content -Raw web/auth.css
           $hostSrc=Get-Content -Raw chrome_host.go
           $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
           $records=Get-Content -Raw web/records.html
           $localRecords=Get-Content -Raw records_mt5_local.go
-          if($license -notmatch 'licAppVersion = "80.6"'){ throw 'V80.6 version regression' }
+          if($license -notmatch 'licAppVersion = "80.7"'){ throw 'V80.7 version regression' }
           if($license -notmatch 'license-device-v1-machine.bin'){ throw 'machine DPAPI backup regression' }
-          if($authJs -notmatch 'mhLicensePostLoginV806'){ throw 'post-login flash regression' }
-          if($authJs -notmatch 'resetDashboardViewport'){ throw 'organized top-view reset regression' }
+          if($authJs -notmatch 'showChecking'){ throw 'verify-first auth regression' }
+          if($authJs -match 'mhLicenseSessionHintV806|mhLicensePostLoginV806'){ throw 'stale guessed-session regression' }
+          if($html -notmatch 'MH_AUTH_GATED_APP_LOADER_V807'){ throw 'auth-gated app loader regression' }
           if($hostSrc -notmatch 'chWMShutdownDone'){ throw 'async exit regression' }
           if($app -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal guard regression' }
           if($localRecords -notmatch 'MH_RECORDS_MT5_LOCAL_V797'){ throw 'local records regression' }
           if($records -notmatch 'LOCAL MT5 TRADE LIFECYCLE'){ throw 'records UI regression' }
           if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
-          Write-Host 'PASS V80.6 retained-system verification'
+          Write-Host 'PASS V80.7 retained-system verification'
 
-      - name: Upload V80.6 verified build
+      - name: Upload V80.7 verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V80.6-Runtime-License-Fixes
+          name: MH-Analysis-V80.7-Auth-Loader-Repair
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V80.6-Runtime-License-Fixes.zip
+            dist/MH-Analysis-V80.7-Auth-Loader-Repair.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish V80.6 EXE-only branches
+      - name: Publish V80.7 EXE-only branches
         shell: bash
         run: |
           set -euo pipefail
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __records_v806_final
+          git checkout --orphan __records_v807_final
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
           git add 'MH Analysis.exe'
-          git commit -m 'MH Analysis V80.6 runtime license fixes build'
+          git commit -m 'MH Analysis V80.7 auth loader repair build'
           git push --force origin HEAD:records-mt5-local-final-exe
           git push --force origin HEAD:final-current-v796
-          echo 'PASS EXE-only branches updated with V80.6 verified EXE'
+          echo 'PASS EXE-only branches updated with V80.7 verified EXE'
