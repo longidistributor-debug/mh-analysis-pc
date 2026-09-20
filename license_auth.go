@@ -30,7 +30,7 @@ import (
 )
 
 const licDefaultBaseURL = "https://mh-analysis.vercel.app"
-const licAppVersion = "80.1"
+const licAppVersion = "80.2"
 
 type licDataBlob struct {
 	cbData uint32
@@ -79,19 +79,15 @@ type licSession struct {
 }
 
 type licRemoteEnvelope struct {
-	OK          bool   `json:"ok"`
-	Error       string `json:"error"`
-	Code        string `json:"code"`
-	Message     string `json:"message"`
-	ChallengeID string `json:"challenge_id"`
-	Challenge   string `json:"challenge"`
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	Username    string `json:"username"`
-	ValidFrom   string `json:"valid_from"`
-	ValidUntil  string `json:"valid_until"`
-	DeviceBound bool   `json:"device_bound"`
-	MaxDevices  int    `json:"max_devices"`
+	OK          bool        `json:"ok"`
+	Code        string      `json:"code"`
+	Error       string      `json:"error"`
+	Message     string      `json:"message"`
+	AccessToken string      `json:"access_token"`
+	User        licUserInfo `json:"user"`
+	ChallengeID string      `json:"challenge_id"`
+	Challenge   string      `json:"challenge"`
+	ExpiresIn   int         `json:"expires_in"`
 }
 
 func licBaseURL() string {
@@ -228,23 +224,6 @@ func licEnsureDevice() (*licDevice, error) {
 	return &licDevice{Private: priv, Public: pub, DER: der, ID: hex.EncodeToString(sum[:])}, nil
 }
 
-func licPublicKeyPEM(der []byte) string {
-	enc := base64.StdEncoding.EncodeToString(der)
-	var b strings.Builder
-	b.WriteString("-----BEGIN PUBLIC KEY-----\n")
-	for len(enc) > 64 {
-		b.WriteString(enc[:64])
-		b.WriteByte('\n')
-		enc = enc[64:]
-	}
-	if enc != "" {
-		b.WriteString(enc)
-		b.WriteByte('\n')
-	}
-	b.WriteString("-----END PUBLIC KEY-----\n")
-	return b.String()
-}
-
 func licLoadSession() *licSession {
 	if licSessionMem != nil {
 		return licSessionMem
@@ -284,7 +263,6 @@ func licPost(path string, body any, bearerToken string) (int, licRemoteEnvelope,
 		return 0, env, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "MH-Analysis/"+licAppVersion)
 	if bearerToken != "" {
 		req.Header.Set("Authorization", "Bearer "+bearerToken)
@@ -296,38 +274,15 @@ func licPost(path string, body any, bearerToken string) (int, licRemoteEnvelope,
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	_ = json.Unmarshal(b, &env)
+	if env.Code == "" {
+		env.Code = env.Error
+	}
 	return resp.StatusCode, env, nil
 }
 
 func licMachineInfo() map[string]string {
 	host, _ := os.Hostname()
-	return map[string]string{
-		"device_name": host,
-		"os_version": runtime.GOOS,
-		"arch":        runtime.GOARCH,
-		"app_version": licAppVersion,
-	}
-}
-
-func licRemoteCode(env licRemoteEnvelope, status int) string {
-	code := strings.TrimSpace(env.Error)
-	if code == "" {
-		code = strings.TrimSpace(env.Code)
-	}
-	code = strings.ToLower(code)
-	if code != "" {
-		return code
-	}
-	switch status {
-	case http.StatusUnauthorized:
-		return "authorization_required"
-	case http.StatusForbidden:
-		return "authorization_denied"
-	case http.StatusTooManyRequests:
-		return "too_many_attempts"
-	default:
-		return "license_server_error"
-	}
+	return map[string]string{"machine_name": host, "os": runtime.GOOS, "arch": runtime.GOARCH, "app_version": licAppVersion}
 }
 
 func licSetRemoteError(status int, env licRemoteEnvelope, err error) {
@@ -338,36 +293,36 @@ func licSetRemoteError(status int, env licRemoteEnvelope, err error) {
 		licLastMessage = "Internet connection is required to verify your MH Analysis license."
 		return
 	}
-	licLastCode = licRemoteCode(env, status)
-	licLastMessage = strings.TrimSpace(env.Message)
+	licLastCode = strings.ToLower(strings.TrimSpace(env.Code))
+	licLastMessage = env.Message
+	if licLastCode == "" {
+		switch status {
+		case 401:
+			licLastCode = "authorization_required"
+		case 403:
+			licLastCode = "authorization_denied"
+		default:
+			licLastCode = "license_server_error"
+		}
+	}
 	if licLastMessage == "" {
 		switch licLastCode {
 		case "license_expired":
 			licLastMessage = "Your access has expired. Contact administrator for renewal."
-		case "license_not_started":
-			licLastMessage = "Your license is not active yet. Contact administrator."
-		case "device_not_authorized":
+		case "unauthorized_device", "device_not_authorized":
 			licLastMessage = "This account is already activated on another device. Contact administrator."
 		case "account_disabled":
 			licLastMessage = "This account is disabled. Contact administrator."
-		case "invalid_credentials":
-			licLastMessage = "Invalid username or password."
-		case "session_invalid", "session_revoked":
-			licLastMessage = "Your secure session has ended. Please log in again."
-		case "too_many_attempts":
-			licLastMessage = "Too many attempts. Please try again later."
+		case "license_not_started":
+			licLastMessage = "Your license is not active yet. Contact administrator."
+		case "database_unavailable":
+			licLastMessage = "License database is temporarily unavailable."
+		case "server_not_configured":
+			licLastMessage = "License server is not configured."
 		default:
-			licLastMessage = "License authorization failed. Contact administrator."
+			licLastMessage = "License authorization failed."
 		}
 	}
-}
-
-func licUserFromEnvelope(env licRemoteEnvelope, fallbackUser, deviceID string) licUserInfo {
-	u := strings.TrimSpace(env.Username)
-	if u == "" {
-		u = fallbackUser
-	}
-	return licUserInfo{Username: u, ValidFrom: env.ValidFrom, ValidUntil: env.ValidUntil, DeviceID: deviceID}
 }
 
 func licEnsureAuthorized(force bool) bool {
@@ -397,26 +352,22 @@ func licEnsureAuthorized(force bool) bool {
 		return false
 	}
 	status, vr, callErr := licPost("auth/verify", map[string]any{}, s.AccessToken)
-	if callErr != nil || status < 200 || status >= 300 || !vr.OK {
-		licSetRemoteError(status, vr, callErr)
-		return false
+	if callErr == nil && status >= 200 && status < 300 && vr.OK {
+		s.User = vr.User
+		_ = licSaveSession(s)
+		licAuthorized = true
+		licLastCheck = time.Now()
+		licLastCode = ""
+		licLastMessage = ""
+		return true
 	}
-	if vr.AccessToken != "" {
-		s.AccessToken = vr.AccessToken
+	licSetRemoteError(status, vr, callErr)
+	if status == http.StatusUnauthorized {
+		licClearSession()
+		licLastCode = "session_invalid"
+		licLastMessage = "Your secure session has ended. Please log in again."
 	}
-	s.User = licUserFromEnvelope(vr, s.Username, d.ID)
-	s.Username = s.User.Username
-	if err := licSaveSession(s); err != nil {
-		licAuthorized = false
-		licLastCode = "local_secure_storage_failed"
-		licLastMessage = "Could not securely save the license session."
-		return false
-	}
-	licAuthorized = true
-	licLastCheck = time.Now()
-	licLastCode = ""
-	licLastMessage = ""
-	return true
+	return false
 }
 
 func licHandleLogin(w http.ResponseWriter, r *http.Request) {
@@ -446,37 +397,27 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "device_key_failed", "message": "Could not create secure device identity."})
 		return
 	}
-
-	status, ch, callErr := licPost("auth/challenge", map[string]any{
-		"username":  q.Username,
-		"device_id": d.ID,
-	}, "")
+	status, ch, callErr := licPost("auth/challenge", map[string]any{"username": q.Username, "device_id": d.ID}, "")
 	if callErr != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "internet_required", "message": "Internet connection is required to log in."})
 		return
 	}
 	if status < 200 || status >= 300 || !ch.OK || ch.ChallengeID == "" || ch.Challenge == "" {
-		code := licRemoteCode(ch, status)
-		msg := ch.Message
-		if msg == "" {
-			msg = "Could not start secure device verification."
-		}
 		if status < 400 {
 			status = http.StatusUnauthorized
 		}
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": code, "message": msg})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": ch.Code, "message": ch.Message})
 		return
 	}
-
 	sig := ed25519.Sign(d.Private, []byte(ch.Challenge))
 	status, rr, callErr := licPost("auth/login", map[string]any{
 		"username":     q.Username,
 		"password":     q.Password,
 		"challenge_id": ch.ChallengeID,
 		"signature":    base64.StdEncoding.EncodeToString(sig),
-		"public_key":   licPublicKeyPEM(d.DER),
+		"public_key":   base64.StdEncoding.EncodeToString(d.DER),
 		"device_id":    d.ID,
 		"device_info":  licMachineInfo(),
 	}, "")
@@ -485,31 +426,20 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "internet_required", "message": "Internet connection is required to log in."})
 		return
 	}
-	if status < 200 || status >= 300 || !rr.OK || rr.AccessToken == "" {
-		code := licRemoteCode(rr, status)
-		msg := rr.Message
-		if msg == "" {
-			switch code {
-			case "invalid_credentials":
-				msg = "Invalid username or password."
-			case "license_expired":
-				msg = "Your access has expired. Contact administrator for renewal."
-			case "device_not_authorized":
-				msg = "This account is already activated on another device. Contact administrator."
-			default:
-				msg = "License authorization failed."
-			}
-		}
+	if status < 200 || status >= 300 || !rr.OK {
 		if status < 400 {
 			status = http.StatusUnauthorized
 		}
 		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": code, "message": msg})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": strings.ToLower(rr.Code), "message": rr.Message})
 		return
 	}
-
-	user := licUserFromEnvelope(rr, q.Username, d.ID)
-	s := &licSession{Username: user.Username, AccessToken: rr.AccessToken, User: user}
+	if rr.User.DeviceID != "" && rr.User.DeviceID != d.ID {
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "device_not_authorized", "message": "This account is already activated on another device. Contact administrator."})
+		return
+	}
+	s := &licSession{Username: rr.User.Username, AccessToken: rr.AccessToken, User: rr.User}
 	licMu.Lock()
 	err = licSaveSession(s)
 	if err == nil {
@@ -521,17 +451,10 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 	licMu.Unlock()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "secure_storage_failed", "message": "Login succeeded but the secure Windows session could not be saved."})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "local_secure_storage_failed", "message": "Login succeeded but the secure Windows session could not be saved."})
 		return
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":          true,
-		"authorized":  true,
-		"username":    user.Username,
-		"valid_from":  user.ValidFrom,
-		"valid_until": user.ValidUntil,
-		"device_id":   d.ID,
-	})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "authorized": true, "username": rr.User.Username, "valid_from": rr.User.ValidFrom, "valid_until": rr.User.ValidUntil, "device_id": d.ID})
 }
 
 func licHandleStatus(w http.ResponseWriter, r *http.Request) {
@@ -545,14 +468,7 @@ func licHandleStatus(w http.ResponseWriter, r *http.Request) {
 	licMu.Lock()
 	defer licMu.Unlock()
 	if ok && licSessionMem != nil {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":          true,
-			"authorized":  true,
-			"username":    licSessionMem.User.Username,
-			"valid_from":  licSessionMem.User.ValidFrom,
-			"valid_until": licSessionMem.User.ValidUntil,
-			"device_id":   licSessionMem.User.DeviceID,
-		})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "authorized": true, "username": licSessionMem.User.Username, "valid_from": licSessionMem.User.ValidFrom, "valid_until": licSessionMem.User.ValidUntil, "device_id": licSessionMem.User.DeviceID})
 		return
 	}
 	w.WriteHeader(http.StatusUnauthorized)
@@ -575,10 +491,10 @@ func licHandleLogout(w http.ResponseWriter, r *http.Request) {
 func licAccessMessage() string {
 	licMu.Lock()
 	defer licMu.Unlock()
-	if strings.TrimSpace(licLastMessage) != "" {
+	if licLastMessage != "" {
 		return licLastMessage
 	}
-	return "Login is required to use MH Analysis."
+	return "Login to MH Analysis first."
 }
 
 func registerLicenseRoutes(mux *http.ServeMux) {
