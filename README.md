@@ -1,13 +1,44 @@
-# MH Analysis V79.6 — FINAL CURRENT
+# MH Analysis License Backend
 
-This is the self-contained source snapshot corresponding to the final Windows build verified in GitHub Actions Run #186.
+Vercel-ready licensing backend for MH Analysis.
 
-Exact included EXE SHA256:
-`fae95e02554506033f3c98aee5c3883f2afbe6b5cbbc94deb9799ed055869d16`
+## Manual Vercel environment variable
 
-This branch directly contains the final generated Go source, final web UI/runtime, MH icon resource, runtime tests, and the exact verified Run #186 EXE under `release/`.
-No historical patch chain is required to inspect or build the source snapshot.
+Only one required secret needs to be added manually in Vercel:
 
+- `MONGODB_URI` — MongoDB Atlas connection string.
 
-## DPI-adaptive Windows build
-The current release is Per-Monitor V2 DPI aware so the embedded MH Analysis and WhatsApp views fill the host correctly across Windows display scaling levels. Verified runtime build: GitHub Actions DPI Run #3.
+Optional:
+- `LICENSE_TIMEZONE` — defaults to `Asia/Karachi`.
+
+The JWT signing secret is generated on first database connection and stored server-side in MongoDB `system_config`.
+The bootstrap admin secret itself is not committed; only its SHA-256 hash is in source. The admin can later rotate it.
+
+## Security model
+
+- No public registration
+- No forgot-password/self-reset
+- Admin-created users only
+- bcrypt password hashing
+- Server-authoritative validity dates
+- One device maximum
+- First successful login binds an Ed25519 device public key
+- Windows client keeps the private device key under DPAPI
+- Refresh requires a signed server challenge
+- Remote disable, expiry and device reset invalidate continued access
+- Login throttling and activity logging
+
+## Routes
+
+- `/admin`
+- `/api/health`
+- `/api/auth/login`
+- `/api/auth/verify`
+- `/api/auth/challenge`
+- `/api/auth/refresh`
+- `/api/auth/logout`
+- `/api/admin/login`
+- `/api/admin/users`
+- `/api/admin/activity`
+
+Deploy this folder as the Vercel project root using project name `mh-analysis-license-longidistributor-8873` so the Windows client default URL matches the deployment.
