@@ -1,8 +1,9 @@
-// MH_SECURE_LICENSE_V801
+// MH_SECURE_LICENSE_V802
 (() => {
   const rawFetch = window.fetch.bind(window);
   let overlay, message, form, userInput, passInput, button, meta;
   let checking = false;
+  let lastField = "username";
 
   const normCode = (v) => String(v || "").trim().toLowerCase();
 
@@ -31,24 +32,62 @@
     return map[code] || fallback || "Authorization failed. Contact administrator.";
   }
 
+  function focusField(which = lastField) {
+    const target = which === "password" ? passInput : userInput;
+    if (!target || !overlay?.classList.contains("show")) return;
+    try { window.focus(); } catch {}
+    try {
+      target.disabled = false;
+      target.readOnly = false;
+      target.focus({ preventScroll: true });
+      const n = target.value.length;
+      target.setSelectionRange(n, n);
+    } catch {}
+  }
+
+  function wireInput(input, which) {
+    input.disabled = false;
+    input.readOnly = false;
+    input.tabIndex = 0;
+    input.setAttribute("aria-label", which === "password" ? "Password" : "Username");
+    const takeFocus = () => {
+      lastField = which;
+      setTimeout(() => focusField(which), 0);
+      setTimeout(() => focusField(which), 60);
+    };
+    input.addEventListener("pointerdown", takeFocus, true);
+    input.addEventListener("mousedown", takeFocus, true);
+    input.addEventListener("click", takeFocus, true);
+    input.addEventListener("focus", () => { lastField = which; });
+  }
+
   function build() {
     if (overlay) return;
     overlay = document.createElement("div");
     overlay.id = "mhLicenseOverlay";
     overlay.innerHTML = `
-      <div class="mhLicenseCard">
-        <div class="mhLicenseLogo"><span>MH</span> ANALYSIS</div>
+      <div class="mhLicenseCard" role="dialog" aria-modal="true" aria-labelledby="mhLicenseTitle">
+        <div class="mhLicenseLogo">
+          <img class="mhLicenseBrandMark" src="/mh-logo.png" alt="MH logo" />
+          <span class="mhLicenseBrandText"><b>MH</b><span>ANALYSIS</span></span>
+        </div>
         <div class="mhLicenseTag">SECURE ACCESS</div>
-        <h1>Account Login</h1>
+        <h1 id="mhLicenseTitle">Account Login</h1>
         <p class="mhLicenseSub">This installation requires an active administrator-issued license and one authorized Windows device.</p>
         <form id="mhLicenseForm" autocomplete="on">
-          <label>USERNAME<input id="mhLicenseUser" autocomplete="username" spellcheck="false"></label>
-          <label>PASSWORD<input id="mhLicensePass" type="password" autocomplete="current-password"></label>
+          <label>USERNAME<input id="mhLicenseUser" type="text" name="username" autocomplete="username" inputmode="text" spellcheck="false"></label>
+          <label>PASSWORD<input id="mhLicensePass" type="password" name="password" autocomplete="current-password"></label>
           <button id="mhLicenseBtn" type="submit">LOGIN</button>
         </form>
         <div id="mhLicenseMessage" class="mhLicenseMessage"></div>
         <div id="mhLicenseMeta" class="mhLicenseMeta"></div>
-      </div>`;
+      </div>
+      <footer class="mhLicenseCredits" aria-label="MH Analysis credits">
+        <div><strong>MH ANALYSIS</strong> By: Muhammad Hammad Shaukat</div>
+        <div>Coding-UI Design-AI Algo - Auto Analysis By: Muhammad Hammad Shaukat</div>
+        <div>Admin Layout Credit: Ruhi Mughal</div>
+        <div>Get Signals Credit: Somi</div>
+      </footer>`;
     document.body.appendChild(overlay);
     form = overlay.querySelector("#mhLicenseForm");
     userInput = overlay.querySelector("#mhLicenseUser");
@@ -56,7 +95,20 @@
     button = overlay.querySelector("#mhLicenseBtn");
     message = overlay.querySelector("#mhLicenseMessage");
     meta = overlay.querySelector("#mhLicenseMeta");
+    wireInput(userInput, "username");
+    wireInput(passInput, "password");
     form.addEventListener("submit", login);
+
+    overlay.addEventListener("pointerdown", (e) => {
+      if (e.target === userInput) lastField = "username";
+      else if (e.target === passInput) lastField = "password";
+    }, true);
+
+    window.addEventListener("focus", () => {
+      if (overlay?.classList.contains("show") && document.activeElement !== userInput && document.activeElement !== passInput) {
+        setTimeout(() => focusField(lastField), 25);
+      }
+    });
   }
 
   function show(code, msg) {
@@ -67,7 +119,9 @@
     message.textContent = textFor(code, msg);
     message.dataset.code = code;
     meta.textContent = code === "license_expired" ? "LICENSE EXPIRED • Contact administrator for renewal" : "";
-    setTimeout(() => userInput?.focus(), 50);
+    setTimeout(() => focusField(lastField), 30);
+    setTimeout(() => focusField(lastField), 180);
+    setTimeout(() => focusField(lastField), 650);
   }
 
   function hide(data) {
@@ -105,6 +159,7 @@
     const password = passInput.value;
     if (!username || !password) {
       message.textContent = "Enter username and password.";
+      focusField(!username ? "username" : "password");
       return;
     }
     button.disabled = true;
