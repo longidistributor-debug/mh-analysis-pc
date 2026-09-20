@@ -112,9 +112,9 @@ jobs:
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
           powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.9-Preserve-Original-UI.zip' -Force"
 
-      - name: Startup restart and exit regression
+      - name: Native toolbar layout restart and EXIT regression
         shell: powershell
-        run: desktop/runtime_seamless_test.ps1
+        run: desktop/runtime_v809_preserve_ui_test.ps1
 
       - name: Upload verified V80.9
         uses: actions/upload-artifact@v4
