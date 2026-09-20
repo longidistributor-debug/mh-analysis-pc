@@ -8,10 +8,9 @@ if MARK in s:
     print(MARK + ": already applied")
     raise SystemExit(0)
 
-# Records is a separate Chromium child. If that browser starts late or a stale
-# RecordsProfile prevents Chrome from producing a window, selecting Records leaves
-# only the host background visible. Give Records a fresh per-run profile, retry its
-# launch, and keep all Records browser/focus work off the native Win32 UI thread.
+# Records is a separate Chromium child. Start it only when the user requests the
+# Records tab. Until that child is fully attached, keep the current working view
+# visible so Records can never produce the blank host screen reported by the user.
 
 anchor = "\tchStopping    bool\n"
 replacement = anchor + "\tchRecordsStarting bool // " + MARK + "\n"
@@ -23,11 +22,31 @@ if replacement not in s:
 insert_anchor = "\nfunc chSwitchView(which int) {"
 helper = r'''
 
-func chEnsureRecordsBrowser() {
+func chEnsureRecordsBrowser() bool {
 	chMu.Lock()
-	if chStopping || chRecordsWnd != 0 || chRecordsStarting {
+	if chStopping {
 		chMu.Unlock()
-		return
+		return false
+	}
+	if chRecordsWnd != 0 {
+		chMu.Unlock()
+		return true
+	}
+	if chRecordsStarting {
+		chMu.Unlock()
+		// Another Records request is already starting it. Wait boundedly without
+		// touching the native UI thread.
+		for i := 0; i < 260; i++ {
+			time.Sleep(100 * time.Millisecond)
+			chMu.Lock()
+			ready := chRecordsWnd != 0
+			starting := chRecordsStarting
+			stopping := chStopping
+			chMu.Unlock()
+			if ready { return true }
+			if stopping || !starting { return false }
+		}
+		return false
 	}
 	chRecordsStarting = true
 	chMu.Unlock()
@@ -43,7 +62,7 @@ func chEnsureRecordsBrowser() {
 		chMu.Lock()
 		stopping := chStopping
 		chMu.Unlock()
-		if stopping { return }
+		if stopping { return false }
 
 		profile := fmt.Sprintf("RecordsRuntime-%d-%d", os.Getpid(), attempt)
 		cmd, wnd, err := chLaunchBrowser(profile, target, 0)
@@ -59,12 +78,12 @@ func chEnsureRecordsBrowser() {
 		if chStopping {
 			chMu.Unlock()
 			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Start()
-			return
+			return false
 		}
 		if chRecordsWnd != 0 {
 			chMu.Unlock()
 			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Start()
-			return
+			return true
 		}
 		chRecordsCmd, chRecordsWnd = cmd, wnd
 		chMu.Unlock()
@@ -73,9 +92,9 @@ func chEnsureRecordsBrowser() {
 		chAttachBrowser(wnd)
 		chSetEmbeddedVisible(wnd, false)
 		chResizeChildren()
-		chApplyDesiredBrowserView()
-		return
+		return true
 	}
+	return false
 }
 '''
 if helper not in s:
@@ -83,8 +102,9 @@ if helper not in s:
         raise SystemExit("chSwitchView anchor missing")
     s = s.replace(insert_anchor, helper + insert_anchor, 1)
 
-# V80.9 made chApplyDesiredBrowserView synchronous. Records launch/reframe/focus can
-# involve another process, so keep it away from the native message thread.
+# Records request stays on a worker. Do not call chApplyDesiredBrowserView until a
+# real Records child exists. If Chrome cannot start, restore desired view=Analysis
+# while leaving the already-visible Analysis surface untouched.
 switch_old = '''\tif chSignalLinkBtn != 0 {
 \t\tif which == 2 {
 \t\t\tchShowWindow.Call(chSignalLinkBtn, chSWShow)
@@ -103,8 +123,13 @@ switch_new = '''\tif chSignalLinkBtn != 0 {
 \t}
 
 \tif which == 3 {
-\t\tchEnsureRecordsBrowser()
-\t\tchApplyDesiredBrowserView()
+\t\tif chEnsureRecordsBrowser() {
+\t\t\tchApplyDesiredBrowserView()
+\t\t} else {
+\t\t\tchViewMu.Lock()
+\t\t\tif chDesiredView == 3 { chDesiredView = 1 }
+\t\t\tchViewMu.Unlock()
+\t\t}
 \t\treturn
 \t}
 
@@ -114,9 +139,8 @@ if switch_new not in s:
         raise SystemExit("chSwitchView body anchor missing")
     s = s.replace(switch_old, switch_new, 1)
 
-# Most important: the actual Records WM_COMMAND returns immediately. The worker
-# performs chSwitchView(3), so even a slow/crashed Chromium child can never freeze
-# the outer MH Analysis EXE or make the Records button look dead.
+# Native Records button returns instantly; all Chromium startup/focus/resize work
+# runs on a worker goroutine.
 cmd_old = '''\t\tcase idRecords:
 \t\t\tchSwitchView(3)
 '''
@@ -128,18 +152,19 @@ if cmd_new not in s:
         raise SystemExit("Records WM_COMMAND anchor missing")
     s = s.replace(cmd_old, cmd_new, 1)
 
-# Use the same recovery helper during startup. A transient startup failure is no
-# longer permanent because clicking Records invokes the helper again.
+# Remove the old eager Records startup completely. Records is launched lazily on the
+# first Records click; this eliminates the startup race where desired view=3 could
+# hide Analysis before the Records child existed.
 start = s.find('''\tgo func() {\n\t\ttime.Sleep(250 * time.Millisecond)\n\t\trecordsDebugPort := 0''')
 end_marker = '''\n\t}()\n\n\tvar m chMsg'''
 if start >= 0:
     end = s.find(end_marker, start)
     if end < 0:
         raise SystemExit("Records startup block end missing")
-    new_block = '''\tgo func() {\n\t\ttime.Sleep(250 * time.Millisecond)\n\t\tchEnsureRecordsBrowser()\n\t}()'''
-    s = s[:start] + new_block + s[end + len('\n\t}()'):]
-elif 'chEnsureRecordsBrowser()\n\t}()\n\n\tvar m chMsg' not in s:
-    raise SystemExit("Records startup block not found")
+    replacement_block = '''\t// ''' + MARK + ''': Records browser is lazy-started by the Records button.\n'''
+    s = s[:start] + replacement_block + s[end + len('\n\t}()'):]
+else:
+    raise SystemExit("original eager Records startup block not found")
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": fresh Records runtime + retries + immediate native command + no cross-process work under mutex")
+print(MARK + ": lazy Records launch + preserve current view + retries + immediate native command")
