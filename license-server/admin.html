@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MH Analysis Admin</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header><div><div class="brand">MH ANALYSIS</div><div class="muted">License Administration</div></div><button id="logout" class="ghost hidden">Logout</button></header>
+
+    <section id="loginCard" class="card narrow">
+      <h1>Administrator Login</h1>
+      <p class="muted">Enter the Vercel ADMIN_SECRET. It is never stored in the browser.</p>
+      <form id="loginForm"><input id="adminSecret" type="password" autocomplete="current-password" placeholder="Admin secret" required /><button>Login</button></form>
+      <div id="loginMsg" class="msg"></div>
+    </section>
+
+    <main id="dashboard" class="hidden">
+      <section class="card">
+        <h2>Create User</h2>
+        <form id="createForm" class="grid4">
+          <label>Username<input id="newUsername" required minlength="3" /></label>
+          <label>Password<input id="newPassword" type="password" required minlength="10" /></label>
+          <label>Valid From<input id="validFrom" type="date" required /></label>
+          <label>Valid Until<input id="validUntil" type="date" required /></label>
+          <button class="span4">Create User • Max 1 Device</button>
+        </form>
+        <div id="createMsg" class="msg"></div>
+      </section>
+
+      <section class="card">
+        <div class="row"><h2>Users</h2><button id="refresh" class="ghost">Refresh</button></div>
+        <div class="tableWrap"><table><thead><tr><th>User</th><th>Status</th><th>Validity</th><th>Device</th><th>Last Login</th><th>Actions</th></tr></thead><tbody id="usersBody"></tbody></table></div>
+      </section>
+
+      <section class="card">
+        <div class="row"><h2>Recent Security Activity</h2><button id="activityRefresh" class="ghost">Refresh</button></div>
+        <div id="activity" class="activity muted">No activity loaded.</div>
+      </section>
+    </main>
+  </div>
+<script src="/admin.js"></script>
+</body>
+</html>
