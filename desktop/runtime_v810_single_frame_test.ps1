@@ -56,10 +56,10 @@ function Wait-Server($p){
   throw 'local service unavailable'
 }
 
-function Direct-Chrome([IntPtr]$host){
+function Direct-Chrome([IntPtr]$parentHwnd){
   $script:found=[IntPtr]::Zero
   $cb=[MH810Win32+EnumWindowsProc]{param($w,$l)
-    if([MH810Win32]::GetParent($w) -ne $host){return $true}
+    if([MH810Win32]::GetParent($w) -ne $parentHwnd){return $true}
     $cls=New-Object Text.StringBuilder 128
     [void][MH810Win32]::GetClassName($w,$cls,128)
     if($cls.ToString().StartsWith('Chrome_WidgetWin') -and [MH810Win32]::IsWindowVisible($w)){
@@ -68,7 +68,7 @@ function Direct-Chrome([IntPtr]$host){
     }
     return $true
   }
-  [void][MH810Win32]::EnumChildWindows($host,$cb,[IntPtr]::Zero)
+  [void][MH810Win32]::EnumChildWindows($parentHwnd,$cb,[IntPtr]::Zero)
   return $script:found
 }
 
