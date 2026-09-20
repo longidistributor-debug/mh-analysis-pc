@@ -54,7 +54,9 @@ attach_body = r'''func chAttachBrowser(hwnd uintptr) {
 	// MH_PRESERVE_ORIGINAL_UI_V809: synchronous child geometry; never cover toolbar.
 	chMoveWindow.Call(hwnd, 0, uintptr(barH), 1, 1, 1)
 }'''
-s = replace_func(s, "chAttachBrowser", "chResizeChildren", attach_body)
+# The V80.2 focus patch inserts chFocusEmbedded/chFocusDesiredEmbedded between
+# chAttachBrowser and chResizeChildren. Preserve those helpers exactly.
+s = replace_func(s, "chAttachBrowser", "chFocusEmbedded", attach_body)
 
 resize_body = r'''func chResizeChildren() {
 	if hostHWND == 0 {
@@ -120,6 +122,7 @@ apply_body = r'''func chApplyDesiredBrowserView() {
 	chSetEmbeddedVisible(records, which == 3)
 	chSetEmbeddedVisible(mt5, which == 4)
 	chResizeChildren()
+	chFocusDesiredEmbedded()
 }'''
 s = replace_func(s, "chApplyDesiredBrowserView", "chSwitchView", apply_body)
 
