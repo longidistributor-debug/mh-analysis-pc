@@ -1,0 +1,11 @@
+{
+  "name": "mh-analysis-license-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "mongodb": "^6.10.0"
+  }
+}
