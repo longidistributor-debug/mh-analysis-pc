@@ -1,4 +1,4 @@
-name: Build V79.8 Seamless MT5 Local Records
+name: Build V79.9 Same Signal Guard
 
 on:
   workflow_dispatch:
@@ -22,7 +22,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply retained app patches, local MT5 Records, and seamless window fix
+      - name: Apply retained app patches, local MT5 Records, duplicate guard, and seamless window fix
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -36,6 +36,7 @@ jobs:
             'desktop/native_button_id_fix_patch.py',
             'desktop/ea_signal_reader_bridge_patch.py',
             'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
             'desktop/window_flicker_fix_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
@@ -66,6 +67,9 @@ jobs:
           foreach($m in @('MH_RECORDS_MT5_LOCAL_V797','registerRecordsV2Routes','/api/records-v2','trade_events.jsonl','MANUAL_CLOSE_POSITIVE','MANUAL_CLOSE_NEGATIVE','external_market_api_calls')){
             if(-not ($localRecords.Contains($m) -or $main.Contains($m) -or $recordsJs.Contains($m))){ throw "missing local Records marker $m" }
           }
+          foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','/api/records-v2/duplicate','sameSignalTextV799','checkSameSignalV799','compactActiveSameSignalDuplicates','unique NEW ANALYZE handoff')){
+            if(-not ($localRecords.Contains($m) -or $app.Contains($m))){ throw "same-signal guard missing $m" }
+          }
           foreach($m in @('ensureMHSignalIdV796','signal_id:ensureMHSignalIdV796(d)','/api/records-v2/capture')){
             if(-not $app.Contains($m)){ throw "signal-to-record link missing $m" }
           }
@@ -80,7 +84,8 @@ jobs:
           }
           if($recordsJs.Contains('/api/records/accuracy') -or $recordsHtml.Contains('ACCURACY CHECK')){ throw 'old market-history Accuracy Check still active in Records UI' }
           if($html.Contains('EA • SEND SIGNAL') -or $html.Contains('id="sendToEA"')){ throw 'extra EA button must not exist' }
-          if(-not $app.Contains("if(d.signal&&!fromAuto)void sendManualNewAnalyzeSignalToEAV796(d)")){ throw 'manual NEW ANALYZE handoff missing' }
+          if($app.Contains("if(d.signal&&!fromAuto)void sendManualNewAnalyzeSignalToEAV796(d)")){ throw 'old manual-only EA handoff still active' }
+          if(-not $app.Contains("if(d.signal&&!d._duplicateSignal)void sendManualNewAnalyzeSignalToEAV796(d)")){ throw 'unique NEW ANALYZE EA handoff missing' }
           foreach($bad in @('exness.com','ExnessProfile','registerExnessRoutes','/api/exness/','my.exness.global')){
             if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains: $bad" }
           }
@@ -89,7 +94,7 @@ jobs:
             if(-not $app.Contains($m)){ throw "chart regression marker missing $m" }
           }
           if(-not $app.Contains('manual context selection must be API-silent')){ throw 'manual API-silent rule missing' }
-          Write-Host 'PASS V79.8 seamless host + local MT5 Records source guards'
+          Write-Host 'PASS V79.9 same-signal guard + seamless local MT5 Records source guards'
 
       - name: Build Windows x64 EXE
         shell: bash
@@ -99,48 +104,52 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.8-Seamless-Records.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V79.9-Same-Signal-Guard.zip' -Force"
 
       - name: Existing app startup restart regression
         shell: powershell
         run: desktop/runtime_seamless_test.ps1
 
-      - name: Verify Records, seamless host, and DPI retained
+      - name: Verify Records, duplicate guard, seamless host, and DPI retained
         shell: powershell
         run: |
           $records=Get-Content -Raw web/records.html
           $layout=Get-Content -Raw web/records-layout-fix.css
           $hostSrc=Get-Content -Raw chrome_host.go
+          $app=Get-Content -Raw web/app.js
+          $localRecords=Get-Content -Raw records_mt5_local.go
           if($records -notmatch 'LOCAL MT5 TRADE LIFECYCLE'){ throw 'local MT5 Records regression' }
           if($records -notmatch 'RESET RECORDS'){ throw 'Records reset regression' }
           if($layout -notmatch 'MH_RECORDS_LAYOUT_FIX_V798'){ throw 'Day Record layout regression' }
           if($hostSrc -notmatch 'MH_WINDOW_FLICKER_FIX_V798'){ throw 'window flicker regression' }
+          if($app -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal frontend regression' }
+          if($localRecords -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal backend regression' }
           if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
-          Write-Host 'PASS V79.8 Records + seamless host + DPI retained'
+          Write-Host 'PASS V79.9 duplicate guard + Records + seamless host + DPI retained'
 
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V79.8-Seamless-Records
+          name: MH-Analysis-V79.9-Same-Signal-Guard
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V79.8-Seamless-Records.zip
+            dist/MH-Analysis-V79.9-Same-Signal-Guard.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish V79.8 EXE-only branch
+      - name: Publish V79.9 EXE-only branch
         shell: bash
         run: |
           set -euo pipefail
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __records_v798_final
+          git checkout --orphan __records_v799_final
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
           git add 'MH Analysis.exe'
-          git commit -m 'MH Analysis V79.8 seamless local MT5 Records build'
+          git commit -m 'MH Analysis V79.9 same-signal duplicate guard build'
           git push --force origin HEAD:records-mt5-local-final-exe
-          echo 'PASS records-mt5-local-final-exe updated with V79.8 verified EXE'
+          echo 'PASS records-mt5-local-final-exe updated with V79.9 verified EXE'
