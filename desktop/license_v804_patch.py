@@ -33,31 +33,25 @@ s = s.replace('return map[string]string{"machine_name": host, "os": runtime.GOOS
               'return map[string]string{"device_name": host, "os_version": runtime.GOOS, "arch": runtime.GOARCH, "app_version": licAppVersion}', 1)
 p.write_text(s, encoding="utf-8")
 
-# Native shell: force all embedded children to the exact current client width synchronously.
-# This fixes the right-side uncovered white strip that can remain after maximize/DPI changes.
+# Native shell: keep SetWindowPos but make child sizing synchronous (remove SWP_ASYNCWINDOWPOS).
+# This safely forces the Chromium child to the exact host client width and removes the right-side strip.
 p = Path("chrome_host.go")
 s = p.read_text(encoding="utf-8")
 resize_pairs = [
     ('chSetWindowPos.Call(chAnalysisWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
-     'chMoveWindow.Call(chAnalysisWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+     'chSetWindowPos.Call(chAnalysisWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate) // MH_FULL_CLIENT_RESIZE_V804'),
     ('chSetWindowPos.Call(chWhatsappWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
-     'chMoveWindow.Call(chWhatsappWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+     'chSetWindowPos.Call(chWhatsappWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate) // MH_FULL_CLIENT_RESIZE_V804'),
     ('chSetWindowPos.Call(chRecordsWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
-     'chMoveWindow.Call(chRecordsWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+     'chSetWindowPos.Call(chRecordsWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate) // MH_FULL_CLIENT_RESIZE_V804'),
     ('chSetWindowPos.Call(chMT5Wnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
-     'chMoveWindow.Call(chMT5Wnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+     'chSetWindowPos.Call(chMT5Wnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate) // MH_FULL_CLIENT_RESIZE_V804'),
 ]
 for old, new in resize_pairs:
     if old in s:
         s = s.replace(old, new, 1)
     elif new not in s:
         raise SystemExit("chrome_host.go embedded resize anchor missing")
-old_reveal = '''\t\tif hostHWND!=0 {\n\t\t\tchShowWindowAsync.Call(hostHWND, chSWMaximize)\n\t\t\tchUpdateWindow.Call(hostHWND)\n\t\t}\n'''
-new_reveal = '''\t\tif hostHWND!=0 {\n\t\t\tchShowWindowAsync.Call(hostHWND, chSWMaximize)\n\t\t\tchUpdateWindow.Call(hostHWND)\n\t\t\tchResizeChildren() // MH_FULL_CLIENT_RESIZE_V804\n\t\t\tgo func(){ time.Sleep(180*time.Millisecond); chResizeChildren() }()\n\t\t}\n'''
-if old_reveal in s:
-    s = s.replace(old_reveal, new_reveal, 1)
-elif new_reveal not in s:
-    raise SystemExit("chrome_host.go host reveal anchor missing")
 p.write_text(s, encoding="utf-8")
 
 # Login UI: colored MH/ANALYSIS footer, extra design credit, and native external-browser support button.
@@ -138,8 +132,8 @@ if old_card in s:
 elif new_card not in s:
     raise SystemExit("auth.css card anchor missing")
 
-# At the actual EXE login height, shrink the whole form enough that every credit remains visible
-# with balanced space above and below, while still keeping scrolling disabled.
+# At the actual EXE login height, shrink the group enough that every credit remains visible,
+# leaving visible and balanced free space above and below with no scrollbar.
 old_media = '@media(max-height:800px){#mhLicenseOverlay{align-items:flex-start;overflow-y:auto;padding-top:24px;padding-bottom:120px}.mhLicenseCredits{position:fixed;bottom:8px;font-size:10px}.mhLicenseCard{margin-bottom:82px}}'
 new_media = '@media(max-height:720px){#mhLicenseOverlay{gap:10px;padding:8px 20px}.mhLicenseCard{zoom:.90;transform:none}.mhLicenseCredits{position:static;font-size:8.8px;line-height:1.26}}\n@media(max-height:610px){#mhLicenseOverlay{gap:7px;padding:4px 16px}.mhLicenseCard{zoom:.82;transform:none}.mhLicenseCredits{font-size:7.8px;line-height:1.16}}'
 if old_media in s:
@@ -164,4 +158,4 @@ if guard_marker not in s:
 
 p.write_text(s, encoding="utf-8")
 
-print(MARK + " applied: PEM device identity, full-client embedded sizing, balanced no-scroll login credits")
+print(MARK + " applied: PEM device identity, safe full-client sizing, balanced no-scroll login credits")
