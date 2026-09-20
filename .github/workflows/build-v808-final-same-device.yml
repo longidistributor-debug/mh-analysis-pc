@@ -1,0 +1,149 @@
+name: Build V80.8 Final Same Device
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v808-final']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v808-final-same-device
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained app plus V80.8 stable device identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          node --check web/records.js
+          node --check web/auth.js
+
+      - name: Verify retained systems and V80.8 identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $license=Get-Content -Raw license_auth.go
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $main=Get-Content -Raw main.go
+          $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
+          $recordsJs=Get-Content -Raw web/records.js
+          $localRecords=Get-Content -Raw records_mt5_local.go
+          $eaBridge=Get-Content -Raw ea_signal_bridge.go
+          $authJs=Get-Content -Raw web/auth.js
+          $authCss=Get-Content -Raw web/auth.css
+          foreach($m in @('licAppVersion = "80.8"','MH_SECURE_LICENSE_V808','licReadMachineGuid','MachineGuid','licSystemVolumeSerial','licDeterministicDevice','ed25519.NewKeyFromSeed','licDeviceMem','persistence is best-effort')){if(-not $license.Contains($m)){throw "V80.8 identity missing $m"}}
+          foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal')){if(-not $hostSrc.Contains($m)){throw "MT5 regression $m"}}
+          foreach($m in @('MH_EA_SIGNAL_READER_BRIDGE_V796','/api/mt5/ea/send')){if(-not ($eaBridge.Contains($m)-or$app.Contains($m)-or$main.Contains($m))){throw "EA regression $m"}}
+          foreach($m in @('MH_RECORDS_MT5_LOCAL_V797','/api/records-v2')){if(-not ($localRecords.Contains($m)-or$main.Contains($m)-or$recordsJs.Contains($m))){throw "Records regression $m"}}
+          foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','checkSameSignalV799')){if(-not ($localRecords.Contains($m)-or$app.Contains($m))){throw "duplicate guard regression $m"}}
+          if(-not $authJs.Contains('showChecking')){throw 'verify-first auth regression'}
+          if(-not $html.Contains('MH_AUTH_GATED_APP_LOADER_V807')){throw 'gated app loader regression'}
+          if(-not $hostSrc.Contains('chWMShutdownDone')){throw 'async EXIT regression'}
+          if($authCss.Contains('overflow-y:auto')){throw 'login scrolling regression'}
+          if(Test-Path 'exness_bridge.go'){throw 'exness bridge must not compile'}
+          Write-Host 'PASS retained systems + V80.8 stable identity'
+
+      - name: Same-device unlimited-login regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import("os";"testing")
+          func TestSameDeviceUnlimitedLoginV808(t *testing.T){
+            root:=t.TempDir();t.Setenv("LOCALAPPDATA",root+"\\local")
+            licDeviceMem=nil
+            first,e:=licEnsureDevice();if e!=nil{t.Fatal(e)}
+            if first==nil||first.ID==""{t.Fatal("empty device identity")}
+            for i:=0;i<100;i++{d,e:=licEnsureDevice();if e!=nil||d.ID!=first.ID{t.Fatalf("same-run login %d changed identity: %v",i,e)}}
+            for i:=0;i<10;i++{
+              licDeviceMem=nil
+              if i%2==0{_=os.Remove(licDevicePath())}else{_=os.WriteFile(licDevicePath(),[]byte("old-or-corrupt-local-copy"),0600)}
+              d,e:=licEnsureDevice();if e!=nil||d.ID!=first.ID{t.Fatalf("restart login %d changed identity: %v",i,e)}
+            }
+            for i:=0;i<20;i++{if e:=licSaveSession(&licSession{Username:"same-device",AccessToken:"token"});e!=nil{t.Fatalf("session login %d failed: %v",i,e)}}
+          }
+          '@ | Set-Content -Encoding UTF8 license_v808_unlimited_windows_test.go
+          go test -run TestSameDeviceUnlimitedLoginV808 -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'V80.8 same-device unlimited-login regression failed'}
+          Remove-Item license_v808_unlimited_windows_test.go -Force
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.8-Stable-Same-Device.zip' -Force"
+
+      - name: Startup restart and exit regression
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+
+      - name: Upload V80.8 verified build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V80.8-Stable-Same-Device
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V80.8-Stable-Same-Device.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V80.8 EXE-only branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_v808_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V80.8 stable same-device build'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
