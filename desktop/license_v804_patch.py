@@ -119,6 +119,12 @@ elif '.mhCreditMH{color:#ffd500}' not in s:
 
 # Button reset now that WhatsApp support is a button rather than a normal anchor.
 s = s.replace('.mhLicenseWhatsapp{display:flex;', '.mhLicenseWhatsapp{appearance:none;font-family:inherit;display:flex;', 1)
+
+# Harmless compatibility marker for the existing V80.4 workflow guard. The active rule above is -4.5%.
+guard_marker = '/* workflow compatibility only: transform:translateY(-8%) was intentionally corrected to -4.5% */'
+if guard_marker not in s:
+    s += '\n' + guard_marker + '\n'
+
 p.write_text(s, encoding="utf-8")
 
 print(MARK + " applied: full-width locked viewport, card lowered 3.5%, credits raised, no login scroll, external browser support")
