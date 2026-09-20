@@ -88,7 +88,7 @@ function Assert-Single-Frame([IntPtr]$h,[string]$where){
   [IntPtr]$child=Direct-Chrome $h
   if($child -eq [IntPtr]::Zero){throw "$where direct embedded Chromium child not found"}
   $s=[MH810Win32]::GetWindowLongPtr($child,-16).ToInt64()
-  $bad=[int64]0x00CF0000 # caption/border/thick/min/max/sysmenu frame family
+  $bad=[int64]0x00CF0000
   if(($s -band $bad) -ne 0){throw ('{0} inner browser still owns Windows frame styles: 0x{1:X}' -f $where,$s)}
   if(($s -band [int64]0x40000000) -eq 0){throw "$where inner browser is not WS_CHILD"}
 
@@ -103,8 +103,6 @@ function Assert-Single-Frame([IntPtr]$h,[string]$where){
 
   $txt=New-Object Text.StringBuilder 256
   [void][MH810Win32]::GetWindowText($child,$txt,256)
-  # A child may still have a window title string internally; the critical rule is
-  # that no non-client caption/min/max/close frame is present.
 }
 
 function Run-One([string]$label){
@@ -126,7 +124,7 @@ function Run-One([string]$label){
     $deadline=[DateTime]::UtcNow.AddSeconds(3)
     while(-not $p.HasExited -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 100}
     if(-not $p.HasExited){throw "$label EXIT timeout"}
-    Write-Host "PASS $label: only outer MH Analysis EXE owns minimize/maximize/close"
+    Write-Host "PASS ${label}: only outer MH Analysis EXE owns minimize/maximize/close"
   } finally {
     if(-not $p.HasExited){Stop-Process $p.Id -Force -ErrorAction SilentlyContinue}
     Start-Sleep -Seconds 2
