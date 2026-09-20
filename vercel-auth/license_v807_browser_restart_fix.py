@@ -43,8 +43,6 @@ if old in s:
 elif new not in s:
     raise SystemExit("analysis profile launch anchor missing")
 
-# Keep the app-mode launch deterministic and prevent Chrome from trying to recover
-# a previous crashed tab instead of the current dynamic localhost URL.
 flag_anchor = '\t\t"--disable-session-crashed-bubble",\n'
 flag_new = '\t\t"--disable-session-crashed-bubble",\n\t\t"--noerrdialogs",\n'
 if flag_new not in s:
@@ -53,4 +51,10 @@ if flag_new not in s:
     s = s.replace(flag_anchor, flag_new, 1)
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": transient Analysis browser session state cleaned before every launch")
+
+# Graceful Chromium shutdown is paired with launch cleanup. Without it Chrome can
+# mark the persistent Analysis profile as crashed again on every EXIT.
+gracious = Path("vercel-auth/license_v807_graceful_browser_shutdown.py").read_text(encoding="utf-8")
+exec(compile(gracious, "vercel-auth/license_v807_graceful_browser_shutdown.py", "exec"), {"__name__": "__main__"})
+
+print(MARK + ": transient Analysis browser state cleanup + graceful shutdown chained")
