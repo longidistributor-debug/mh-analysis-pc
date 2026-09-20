@@ -1,0 +1,158 @@
+name: Build V80.6 Runtime License Fixes
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'vercel-auth/trigger-v806'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v806-runtime-fixes
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained app patches plus V80.6 fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){ throw 'app.js syntax check failed' }
+          node --check web/records.js
+          if($LASTEXITCODE -ne 0){ throw 'records.js syntax check failed' }
+          node --check web/auth.js
+          if($LASTEXITCODE -ne 0){ throw 'auth.js syntax check failed' }
+
+      - name: V80.6 source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $main=Get-Content -Raw main.go
+          $app=Get-Content -Raw web/app.js
+          $html=Get-Content -Raw web/index.html
+          $recordsHtml=Get-Content -Raw web/records.html
+          $recordsJs=Get-Content -Raw web/records.js
+          $recordsLayout=Get-Content -Raw web/records-layout-fix.css
+          $eaBridge=Get-Content -Raw ea_signal_bridge.go
+          $localRecords=Get-Content -Raw records_mt5_local.go
+          $license=Get-Content -Raw license_auth.go
+          $support=Get-Content -Raw license_support_external.go
+          $authJs=Get-Content -Raw web/auth.js
+          $authCss=Get-Content -Raw web/auth.css
+
+          foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){ if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" } }
+          foreach($m in @('MH_EA_SIGNAL_READER_BRIDGE_V796','registerEASignalBridgeRoutes','/api/mt5/ea/send','signal.txt')){ if(-not ($eaBridge.Contains($m) -or $main.Contains($m) -or $app.Contains($m))){ throw "missing EA bridge marker $m" } }
+          foreach($m in @('MH_RECORDS_MT5_LOCAL_V797','registerRecordsV2Routes','/api/records-v2','trade_events.jsonl')){ if(-not ($localRecords.Contains($m) -or $main.Contains($m) -or $recordsJs.Contains($m))){ throw "missing Records marker $m" } }
+          foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','/api/records-v2/duplicate','checkSameSignalV799')){ if(-not ($localRecords.Contains($m) -or $app.Contains($m))){ throw "duplicate guard missing $m" } }
+
+          foreach($m in @('MH_SECURE_LICENSE_V801','MH_SECURE_LICENSE_V806','licAppVersion = "80.6"','license-device-v1-machine.bin','licDPAPIProtectMachine','existing secure device identity could not be recovered','auth/challenge','auth/verify')){ if(-not ($license.Contains($m) -or $main.Contains($m))){ throw "V80.6 license client missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V806','mhLicenseSessionHintV806','mhLicensePostLoginV806','resetDashboardViewport','scrollRestoration','Designing Assistance By: Sinha Creates','Whatsapp Support - Free 1 Day Trail')){ if(-not $authJs.Contains($m)){ throw "V80.6 auth UX missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V806','overflow:hidden','mhCreditMH','mhCreditAnalysis','mhLicenseCredits')){ if(-not $authCss.Contains($m)){ throw "V80.6 auth CSS missing $m" } }
+          foreach($m in @('MH_SECURE_LICENSE_V806','chWMShutdownDone','chCloseOnce','case chWMShutdownDone:')){ if(-not $hostSrc.Contains($m)){ throw "V80.6 async exit missing $m" } }
+          if($hostSrc.Contains("chPrepareBrowserWindowsForShutdown()\n\t\tchStopBrowsers()\n\t\tchDestroyWindow.Call(hwnd)")){ throw 'blocking EXIT path still present' }
+          if($authCss.Contains('overflow-y:auto')){ throw 'login overlay scrolling must remain disabled' }
+          if(-not $main.Contains('/api/license/support/open')){ throw 'external support route missing' }
+          if(-not $support.Contains('FileProtocolHandler')){ throw 'external browser support missing' }
+          if($recordsJs.Contains('/api/records/accuracy') -or $recordsHtml.Contains('ACCURACY CHECK')){ throw 'old market-history accuracy remains' }
+          if(Test-Path 'exness_bridge.go'){ throw 'exness bridge must not compile' }
+          foreach($bad in @('exness.com','registerExnessRoutes','/api/exness/')){ if($hostSrc.Contains($bad) -or $main.Contains($bad) -or $app.Contains($bad)){ throw "broker web dependency remains $bad" } }
+          Write-Host 'PASS V80.6 source guards: direct login transition + same-PC identity persistence + async EXIT + retained systems'
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.6-Runtime-License-Fixes.zip' -Force"
+
+      - name: Startup restart and exit regression
+        shell: powershell
+        run: desktop/runtime_seamless_test.ps1
+
+      - name: Verify V80.6 retained systems
+        shell: powershell
+        run: |
+          $license=Get-Content -Raw license_auth.go
+          $authJs=Get-Content -Raw web/auth.js
+          $authCss=Get-Content -Raw web/auth.css
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $app=Get-Content -Raw web/app.js
+          $records=Get-Content -Raw web/records.html
+          $localRecords=Get-Content -Raw records_mt5_local.go
+          if($license -notmatch 'licAppVersion = "80.6"'){ throw 'V80.6 version regression' }
+          if($license -notmatch 'license-device-v1-machine.bin'){ throw 'machine DPAPI backup regression' }
+          if($authJs -notmatch 'mhLicensePostLoginV806'){ throw 'post-login flash regression' }
+          if($authJs -notmatch 'resetDashboardViewport'){ throw 'organized top-view reset regression' }
+          if($hostSrc -notmatch 'chWMShutdownDone'){ throw 'async exit regression' }
+          if($app -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal guard regression' }
+          if($localRecords -notmatch 'MH_RECORDS_MT5_LOCAL_V797'){ throw 'local records regression' }
+          if($records -notmatch 'LOCAL MT5 TRADE LIFECYCLE'){ throw 'records UI regression' }
+          if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
+          Write-Host 'PASS V80.6 retained-system verification'
+
+      - name: Upload V80.6 verified build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V80.6-Runtime-License-Fixes
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V80.6-Runtime-License-Fixes.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V80.6 EXE-only branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_v806_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V80.6 runtime license fixes build'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
+          echo 'PASS EXE-only branches updated with V80.6 verified EXE'
