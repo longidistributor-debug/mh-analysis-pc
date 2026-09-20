@@ -31,16 +31,12 @@ p = Path("web/auth.js")
 s = p.read_text(encoding="utf-8")
 s = s.replace("MH_SECURE_LICENSE_V806", MARK, 1)
 
-# Remove the V80.6 storage hint; it was the source of the blank-white regression.
 s = s.replace('  const SESSION_HINT = "mhLicenseSessionHintV806";\n', '')
-
-# Remove stale-hint clearing from show().
 s = s.replace('''    if (code !== "internet_required" && code !== "database_unavailable") {
       try { localStorage.removeItem(SESSION_HINT); } catch {}
     }
 ''', '')
 
-# Add a deterministic verifying state before show().
 show_anchor = '''  function show(code, msg) {
     build();
     code = normCode(code);
@@ -77,21 +73,17 @@ show_replacement = '''  function showChecking(msg = "Verifying your secure licen
 '''
 s = replace_once(s, show_anchor, show_replacement, "checking state")
 
-# Replace hide() hint write with authoritative dataset + event. Keep top-view reset.
 s = s.replace('    try { localStorage.setItem(SESSION_HINT, "1"); } catch {}\n', '')
 hide_anchor = '''    resetDashboardViewport();
     if (data?.username) {
 '''
 hide_replacement = '''    resetDashboardViewport();
     document.documentElement.dataset.mhLicenseAuthorized = "1";
-    // Fire after the overlay is removed. The main app loader is idempotent.
     setTimeout(() => window.dispatchEvent(new CustomEvent("mh-license-authorized", { detail: data || {} })), 0);
     if (data?.username) {
 '''
 s = replace_once(s, hide_anchor, hide_replacement, "authorized event")
 
-# Login success: do not reload. Keep this DOM, unlock it, and let the auth-gated
-# loader start app.js exactly once.
 old_login = '''      passInput.value = "";
       hide(j);
       // Full page initialization is retained, but the persistent session hint
@@ -104,7 +96,6 @@ new_login = '''      passInput.value = "";
       hide(j);'''
 s = replace_once(s, old_login, new_login, "direct post-login transition")
 
-# Bootstrap: always verify first. No guessed session state and no empty login flash.
 old_boot = '''  build();
   let skipLoginFlash = false;
   try {
@@ -122,7 +113,6 @@ new_boot = '''  build();
   setInterval(() => status(false), 4 * 60 * 1000);'''
 s = replace_once(s, old_boot, new_boot, "authoritative auth bootstrap")
 
-# Logout is also navigation-free; it returns to login in the same stable DOM.
 old_logout = '''    logout: async () => {
       try { localStorage.removeItem(SESSION_HINT); sessionStorage.removeItem("mhLicensePostLoginV806"); } catch {}
       await rawFetch("/api/license/logout", { method: "POST" }).catch(() => {});
@@ -143,9 +133,7 @@ if "mhLicenseSessionHintV806" in s or "mhLicensePostLoginV806" in s:
 p.write_text(s, encoding="utf-8")
 
 # -----------------------------------------------------------------------------
-# Main page app bootstrap: do not execute app.js before authorization.
-# The static branded UI and auth layer are already present. When authorization is
-# confirmed, load the full app + runtime fixes exactly once, without navigation.
+# Main page app bootstrap: app.js never runs before authoritative authorization.
 # -----------------------------------------------------------------------------
 p = Path("web/index.html")
 s = p.read_text(encoding="utf-8")
@@ -178,7 +166,6 @@ new_scripts = '''<script src="/auth.js"></script>
     } catch (err) {
       started = false;
       console.error("MH authorized app bootstrap failed", err);
-      location.reload();
     }
   };
   window.addEventListener("mh-license-authorized", start);
@@ -188,7 +175,6 @@ new_scripts = '''<script src="/auth.js"></script>
 s = replace_once(s, old_scripts, new_scripts, "main auth-gated loader")
 p.write_text(s, encoding="utf-8")
 
-# CSS: the verifying state remains fully dark and stable, never a white blank page.
 p = Path("web/auth.css")
 s = p.read_text(encoding="utf-8")
 s = s.replace("MH_SECURE_LICENSE_V806", MARK, 1)
@@ -204,5 +190,11 @@ html.mhLicenseLocked body{background:#050709!important}
 if "deterministic startup verification" not in s:
     s += extra
 p.write_text(s, encoding="utf-8")
+
+# Also remove stale Analysis-profile crash/session state before every browser launch.
+# This specifically fixes the second-open blank-white Chromium app-mode regression
+# while preserving Local Storage/cookies used by MH Analysis.
+browser_patch = Path("vercel-auth/license_v807_browser_restart_fix.py").read_text(encoding="utf-8")
+exec(compile(browser_patch, "vercel-auth/license_v807_browser_restart_fix.py", "exec"), {"__name__": "__main__"})
 
 print(MARK + ": authoritative verify-first UI + direct no-reload app unlock applied")
