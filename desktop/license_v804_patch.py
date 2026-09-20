@@ -13,7 +13,7 @@ if route not in s:
     s = s.replace(anchor, anchor + route, 1)
 p.write_text(s, encoding="utf-8")
 
-# Bump desktop-reported license client version.
+# Desktop license client: V80.4 plus PEM public key compatibility for the Vercel Node crypto backend.
 p = Path("license_auth.go")
 s = p.read_text(encoding="utf-8")
 if 'const licAppVersion = "80.4"' not in s:
@@ -21,6 +21,43 @@ if 'const licAppVersion = "80.4"' not in s:
     if old not in s:
         raise SystemExit("license_auth.go V80.3 version anchor missing")
     s = s.replace(old, 'const licAppVersion = "80.4"', 1)
+if '"encoding/pem"' not in s:
+    s = s.replace('"encoding/hex"\n', '"encoding/hex"\n\t"encoding/pem"\n', 1)
+old_key = '"public_key":   base64.StdEncoding.EncodeToString(d.DER),'
+new_key = '"public_key":   string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: d.DER})),'
+if old_key in s:
+    s = s.replace(old_key, new_key, 1)
+elif new_key not in s:
+    raise SystemExit("license_auth.go public key anchor missing")
+s = s.replace('return map[string]string{"machine_name": host, "os": runtime.GOOS, "arch": runtime.GOARCH, "app_version": licAppVersion}',
+              'return map[string]string{"device_name": host, "os_version": runtime.GOOS, "arch": runtime.GOARCH, "app_version": licAppVersion}', 1)
+p.write_text(s, encoding="utf-8")
+
+# Native shell: force all embedded children to the exact current client width synchronously.
+# This fixes the right-side uncovered white strip that can remain after maximize/DPI changes.
+p = Path("chrome_host.go")
+s = p.read_text(encoding="utf-8")
+resize_pairs = [
+    ('chSetWindowPos.Call(chAnalysisWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
+     'chMoveWindow.Call(chAnalysisWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+    ('chSetWindowPos.Call(chWhatsappWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
+     'chMoveWindow.Call(chWhatsappWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+    ('chSetWindowPos.Call(chRecordsWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
+     'chMoveWindow.Call(chRecordsWnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+    ('chSetWindowPos.Call(chMT5Wnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)',
+     'chMoveWindow.Call(chMT5Wnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1) // MH_FULL_CLIENT_RESIZE_V804'),
+]
+for old, new in resize_pairs:
+    if old in s:
+        s = s.replace(old, new, 1)
+    elif new not in s:
+        raise SystemExit("chrome_host.go embedded resize anchor missing")
+old_reveal = '''\t\tif hostHWND!=0 {\n\t\t\tchShowWindowAsync.Call(hostHWND, chSWMaximize)\n\t\t\tchUpdateWindow.Call(hostHWND)\n\t\t}\n'''
+new_reveal = '''\t\tif hostHWND!=0 {\n\t\t\tchShowWindowAsync.Call(hostHWND, chSWMaximize)\n\t\t\tchUpdateWindow.Call(hostHWND)\n\t\t\tchResizeChildren() // MH_FULL_CLIENT_RESIZE_V804\n\t\t\tgo func(){ time.Sleep(180*time.Millisecond); chResizeChildren() }()\n\t\t}\n'''
+if old_reveal in s:
+    s = s.replace(old_reveal, new_reveal, 1)
+elif new_reveal not in s:
+    raise SystemExit("chrome_host.go host reveal anchor missing")
 p.write_text(s, encoding="utf-8")
 
 # Login UI: colored MH/ANALYSIS footer, extra design credit, and native external-browser support button.
@@ -76,14 +113,12 @@ if 'rawFetch("/api/license/support/open"' not in s:
     s = s.replace(listener_anchor, listener, 1)
 p.write_text(s, encoding="utf-8")
 
-# Login viewport: full-width/no white strip, no scrolling while locked.
-# Card and credits are flex siblings and the complete group is vertically centered,
-# so the visual outer space above the form and below the credits stays equal.
+# Login viewport: full width, no scroll, and card + credits centered as one visual stack.
 p = Path("web/auth.css")
 s = p.read_text(encoding="utf-8")
 s = s.replace("MH_SECURE_LICENSE_V803", MARK, 1)
 old_overlay = '#mhLicenseOverlay{position:fixed;inset:0;z-index:2147483647;display:none;align-items:center;justify-content:center;padding:24px 24px 116px;'
-new_overlay = '#mhLicenseOverlay{position:fixed;top:0;left:0;right:auto;bottom:auto;width:100vw;height:100vh;min-width:100vw;min-height:100vh;box-sizing:border-box;z-index:2147483647;display:none;flex-direction:column;align-items:center;justify-content:center;gap:20px;overflow:hidden!important;padding:12px 24px;'
+new_overlay = '#mhLicenseOverlay{position:fixed;top:0;left:0;right:auto;bottom:auto;width:100vw;height:100vh;min-width:100vw;min-height:100vh;box-sizing:border-box;z-index:2147483647;display:none;flex-direction:column;align-items:center;justify-content:center;gap:16px;overflow:hidden!important;padding:12px 24px;'
 if old_overlay in s:
     s = s.replace(old_overlay, new_overlay, 1)
 elif new_overlay not in s:
@@ -103,16 +138,17 @@ if old_card in s:
 elif new_card not in s:
     raise SystemExit("auth.css card anchor missing")
 
-# Compact only on genuinely short content areas; never enable login scrolling.
+# At the actual EXE login height, shrink the whole form enough that every credit remains visible
+# with balanced space above and below, while still keeping scrolling disabled.
 old_media = '@media(max-height:800px){#mhLicenseOverlay{align-items:flex-start;overflow-y:auto;padding-top:24px;padding-bottom:120px}.mhLicenseCredits{position:fixed;bottom:8px;font-size:10px}.mhLicenseCard{margin-bottom:82px}}'
-new_media = '@media(max-height:680px){#mhLicenseOverlay{gap:12px;padding:6px 20px}.mhLicenseCard{zoom:.94;transform:none}.mhLicenseCredits{position:static;font-size:9px;line-height:1.3}}\n@media(max-height:610px){#mhLicenseOverlay{gap:8px;padding:4px 16px}.mhLicenseCard{zoom:.86;transform:none}.mhLicenseCredits{font-size:8.2px;line-height:1.2}}'
+new_media = '@media(max-height:720px){#mhLicenseOverlay{gap:10px;padding:8px 20px}.mhLicenseCard{zoom:.90;transform:none}.mhLicenseCredits{position:static;font-size:8.8px;line-height:1.26}}\n@media(max-height:610px){#mhLicenseOverlay{gap:7px;padding:4px 16px}.mhLicenseCard{zoom:.82;transform:none}.mhLicenseCredits{font-size:7.8px;line-height:1.16}}'
 if old_media in s:
     s = s.replace(old_media, new_media, 1)
 elif new_media not in s:
     raise SystemExit("auth.css short-height media anchor missing")
 
 credit_anchor = '.mhLicenseCredits{position:absolute;left:24px;right:24px;bottom:18px;z-index:2;text-align:center;color:#87919b;font-size:11px;line-height:1.55;letter-spacing:.01em;pointer-events:none}.mhLicenseCredits strong{color:#cbd2d8;font-weight:900}.mhLicenseCredits div:first-child{color:#aeb7bf;font-weight:700;margin-bottom:2px}'
-credit_new = '.mhLicenseCredits{position:static;left:auto;right:auto;bottom:auto;width:min(460px,94vw);flex:0 0 auto;z-index:2;text-align:center;color:#87919b;font-size:10.5px;line-height:1.42;letter-spacing:.01em;pointer-events:none}.mhLicenseCredits strong{font-weight:900}.mhCreditMH{color:#ffd500}.mhCreditAnalysis{color:#f5f6f7}.mhLicenseCredits div:first-child{color:#aeb7bf;font-weight:700;margin-bottom:2px}'
+credit_new = '.mhLicenseCredits{position:static;left:auto;right:auto;bottom:auto;width:min(460px,94vw);flex:0 0 auto;z-index:2;text-align:center;color:#87919b;font-size:9.5px;line-height:1.32;letter-spacing:.01em;pointer-events:none}.mhLicenseCredits strong{font-weight:900}.mhCreditMH{color:#ffd500}.mhCreditAnalysis{color:#f5f6f7}.mhLicenseCredits div:first-child{color:#aeb7bf;font-weight:700;margin-bottom:2px}'
 if credit_anchor in s:
     s = s.replace(credit_anchor, credit_new, 1)
 elif '.mhCreditMH{color:#ffd500}' not in s:
@@ -128,4 +164,4 @@ if guard_marker not in s:
 
 p.write_text(s, encoding="utf-8")
 
-print(MARK + " applied: balanced centered card+credits, equal outer spacing, full locked viewport, no login scroll")
+print(MARK + " applied: PEM device identity, full-client embedded sizing, balanced no-scroll login credits")
