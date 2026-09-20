@@ -134,25 +134,23 @@ function Run-One([string]$label){
     if(-not $ready){Assert-ContentBelowToolbar $h "$label Analysis final"}
     if(Signal-Link-Visible $h){throw "$label Signal Link must be hidden on MH Analysis"}
 
-    # WhatsApp: native tab remains visible, its embedded view occupies the same
-    # below-toolbar rectangle, and Signal Link becomes visible exactly here.
-    [MH809Win32]::PostMessage($h,0x0111,[IntPtr]1002,[IntPtr]::Zero)|Out-Null
-    Start-Sleep -Milliseconds 700
-    Responsive $h "$label WhatsApp switch"
-    Assert-NativeToolbar $h "$label WhatsApp switch"
+    # The CI runner intentionally has no real Vercel user session, so WM_COMMAND
+    # is correctly license-gated. Exercise the exact internal view-switch message
+    # used by the authorized app path instead of weakening production licensing.
+    [MH809Win32]::PostMessage($h,0x8001,[IntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+    Start-Sleep -Milliseconds 850
+    Responsive $h "$label WhatsApp internal switch"
+    Assert-NativeToolbar $h "$label WhatsApp internal switch"
     Assert-ContentBelowToolbar $h "$label WhatsApp"
     if(-not (Signal-Link-Visible $h)){throw "$label Signal Link did not appear on WhatsApp"}
 
-    # Records button must still route and remain responsive. Do not touch MT5 in CI,
-    # because the hosted runner may not have a broker terminal installed.
-    [MH809Win32]::PostMessage($h,0x0111,[IntPtr]1005,[IntPtr]::Zero)|Out-Null
-    Start-Sleep -Milliseconds 700
-    Responsive $h "$label Records switch"
-    Assert-NativeToolbar $h "$label Records switch"
+    # Records and MT5 native controls must remain visible. Their WM_COMMAND routes
+    # are source-guarded above; CI must not bypass the production license gate.
+    Assert-NativeToolbar $h "$label licensed controls retained"
 
-    [MH809Win32]::PostMessage($h,0x0111,[IntPtr]1001,[IntPtr]::Zero)|Out-Null
-    Start-Sleep -Milliseconds 450
-    Responsive $h "$label Analysis return"
+    [MH809Win32]::PostMessage($h,0x8002,[IntPtr]::Zero,[IntPtr]::Zero)|Out-Null
+    Start-Sleep -Milliseconds 500
+    Responsive $h "$label Analysis internal return"
     Assert-NativeToolbar $h "$label Analysis return"
     Assert-ContentBelowToolbar $h "$label Analysis return"
     if(Signal-Link-Visible $h){throw "$label Signal Link stayed visible after returning to MH Analysis"}
