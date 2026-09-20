@@ -1,14 +1,19 @@
-name: Build V80.0 Secure Login
+name: Build V80.1 Live Secure License
 
 on:
   workflow_dispatch:
   push:
     branches: [records-mt5-local-build]
     paths-ignore:
-      - 'vercel-auth/README.md'
+      - 'license-server/**'
+      - 'vercel-auth/**'
 
 permissions:
   contents: write
+
+concurrency:
+  group: mh-analysis-v801-live-license
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -24,7 +29,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply retained app patches, secure login, local MT5 Records, duplicate guard, and seamless window fix
+      - name: Apply retained app patches, live secure login, local MT5 Records, duplicate guard, and seamless window fix
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -49,8 +54,6 @@ jobs:
           if($LASTEXITCODE -ne 0){ throw 'records.js syntax check failed' }
           node --check web/auth.js
           if($LASTEXITCODE -ne 0){ throw 'auth.js syntax check failed' }
-          node --check vercel-auth/api/index.js
-          if($LASTEXITCODE -ne 0){ throw 'Vercel license API syntax check failed' }
 
       - name: Source guards
         shell: powershell
@@ -67,7 +70,6 @@ jobs:
           $localRecords=Get-Content -Raw records_mt5_local.go
           $license=Get-Content -Raw license_auth.go
           $authJs=Get-Content -Raw web/auth.js
-          $vercelApi=Get-Content -Raw vercel-auth/api/index.js
           foreach($m in @('MH_NATIVE_MT5_TERMINAL_V796','MT5 System','chEnsureMT5Terminal','terminal64.exe')){
             if(-not $hostSrc.Contains($m)){ throw "missing native MT5 marker $m" }
           }
@@ -80,17 +82,17 @@ jobs:
           foreach($m in @('MH_SAME_SIGNAL_GUARD_V799','/api/records-v2/duplicate','sameSignalTextV799','checkSameSignalV799','compactActiveSameSignalDuplicates','unique NEW ANALYZE handoff')){
             if(-not ($localRecords.Contains($m) -or $app.Contains($m))){ throw "same-signal guard missing $m" }
           }
-          foreach($m in @('MH_SECURE_LICENSE_V800','registerLicenseRoutes','licenseGate','CryptProtectData','ed25519','mh-analysis-license-longidistributor-8873.vercel.app')){
-            if(-not ($license.Contains($m) -or $main.Contains($m))){ throw "secure license client missing $m" }
+          foreach($m in @('MH_SECURE_LICENSE_V801','registerLicenseRoutes','licenseGate','CryptProtectData','ed25519','https://mh-analysis.vercel.app','auth/challenge','challenge_id','public_key','auth/verify')){
+            if(-not ($license.Contains($m) -or $main.Contains($m))){ throw "live secure license client missing $m" }
           }
+          if(-not $hostSrc.Contains('MH_LICENSE_NATIVE_GATE_V801')){ throw 'native MT5/Records/WhatsApp license gate missing' }
+          if($license.Contains('mh-analysis-license-longidistributor-8873.vercel.app')){ throw 'obsolete license server URL remains' }
+          if($license.Contains('auth/refresh')){ throw 'obsolete refresh protocol remains' }
           foreach($m in @('/auth.css','/auth.js')){
             if(-not $html.Contains($m)){ throw "main UI login asset missing $m" }
             if(-not $recordsHtml.Contains($m)){ throw "Records login asset missing $m" }
           }
-          foreach($m in @('MONGODB_URI','BOOTSTRAP_ADMIN_HASH','bcrypt.hash','DEVICE_BOUND','UNAUTHORIZED_DEVICE','license_expired','auth/refresh')){
-            if(-not $vercelApi.Contains($m)){ throw "Vercel auth backend missing $m" }
-          }
-          if(-not $authJs.Contains('MH_SECURE_LICENSE_V800')){ throw 'login overlay marker missing' }
+          if(-not $authJs.Contains('MH_SECURE_LICENSE_V801')){ throw 'V80.1 login overlay marker missing' }
           foreach($m in @('ensureMHSignalIdV796','signal_id:ensureMHSignalIdV796(d)','/api/records-v2/capture')){
             if(-not $app.Contains($m)){ throw "signal-to-record link missing $m" }
           }
@@ -115,7 +117,7 @@ jobs:
             if(-not $app.Contains($m)){ throw "chart regression marker missing $m" }
           }
           if(-not $app.Contains('manual context selection must be API-silent')){ throw 'manual API-silent rule missing' }
-          Write-Host 'PASS V80 secure login + V79.9 signal guard + seamless local MT5 Records source guards'
+          Write-Host 'PASS V80.1 live secure license + V79.9 signal guard + seamless local MT5 Records source guards'
 
       - name: Build Windows x64 EXE
         shell: bash
@@ -125,13 +127,13 @@ jobs:
           mkdir -p dist
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
-          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.0-Secure-Login.zip' -Force"
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt' -DestinationPath 'dist/MH-Analysis-V80.1-Live-Secure-License.zip' -Force"
 
       - name: Existing app startup restart regression
         shell: powershell
         run: desktop/runtime_seamless_test.ps1
 
-      - name: Verify secure login, Records, duplicate guard, seamless host, and DPI retained
+      - name: Verify live secure login, Records, duplicate guard, seamless host, and DPI retained
         shell: powershell
         run: |
           $records=Get-Content -Raw web/records.html
@@ -140,7 +142,9 @@ jobs:
           $app=Get-Content -Raw web/app.js
           $localRecords=Get-Content -Raw records_mt5_local.go
           $license=Get-Content -Raw license_auth.go
-          if($license -notmatch 'MH_SECURE_LICENSE_V800'){ throw 'secure login regression' }
+          if($license -notmatch 'MH_SECURE_LICENSE_V801'){ throw 'secure login regression' }
+          if($license -notmatch 'mh-analysis.vercel.app'){ throw 'live license URL regression' }
+          if($hostSrc -notmatch 'MH_LICENSE_NATIVE_GATE_V801'){ throw 'native license gate regression' }
           if($records -notmatch 'LOCAL MT5 TRADE LIFECYCLE'){ throw 'local MT5 Records regression' }
           if($records -notmatch 'RESET RECORDS'){ throw 'Records reset regression' }
           if($layout -notmatch 'MH_RECORDS_LAYOUT_FIX_V798'){ throw 'Day Record layout regression' }
@@ -148,31 +152,32 @@ jobs:
           if($app -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal frontend regression' }
           if($localRecords -notmatch 'MH_SAME_SIGNAL_GUARD_V799'){ throw 'same signal backend regression' }
           if((Get-Content -Raw dpi_windows.go) -notmatch 'SetProcessDpiAwarenessContext'){ throw 'DPI regression' }
-          Write-Host 'PASS V80 secure login + duplicate guard + Records + seamless host + DPI retained'
+          Write-Host 'PASS V80.1 live secure login + duplicate guard + Records + seamless host + DPI retained'
 
       - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V80.0-Secure-Login
+          name: MH-Analysis-V80.1-Live-Secure-License
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V80.0-Secure-Login.zip
+            dist/MH-Analysis-V80.1-Live-Secure-License.zip
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 90
 
-      - name: Publish V80.0 EXE-only branch
+      - name: Publish V80.1 EXE-only branches
         shell: bash
         run: |
           set -euo pipefail
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __records_v800_final
+          git checkout --orphan __records_v801_final
           git rm -rf . || true
           find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
           cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
           git add 'MH Analysis.exe'
-          git commit -m 'MH Analysis V80.0 secure login build'
+          git commit -m 'MH Analysis V80.1 live secure license build'
           git push --force origin HEAD:records-mt5-local-final-exe
-          echo 'PASS records-mt5-local-final-exe updated with V80.0 verified EXE'
+          git push --force origin HEAD:final-current-v796
+          echo 'PASS EXE-only branches updated with V80.1 verified EXE'
