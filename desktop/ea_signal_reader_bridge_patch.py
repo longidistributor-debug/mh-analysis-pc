@@ -44,7 +44,7 @@ async function sendManualNewAnalyzeSignalToEAV796(d){
   if(!sig)return null;
   const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
   try{
-    const payload={signal_id:signalId,symbol,type:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0,expiry:0};
+    const payload={signal_id:signalId,symbol,type:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0};
     const r=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     let j={};try{j=await r.json()}catch(_){ }
     if(!r.ok)throw new Error(j.error||`EA bridge HTTP ${r.status}`);
@@ -76,4 +76,4 @@ async function sendManualNewAnalyzeSignalToEAV796(d){
         'manual NEW ANALYZE EA handoff')
 p.write_text(s,encoding='utf-8')
 
-print('PASS EA signal reader bridge: no extra button; manual NEW ANALYZE signal is handed to attached EA automatically')
+print('PASS EA signal reader bridge: no extra button; manual NEW ANALYZE signal is handed to attached EA automatically with lot 0.02')
