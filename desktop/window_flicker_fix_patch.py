@@ -38,15 +38,15 @@ s=rep(s,
     '\tcmd := exec.Command(chBrowserPath, args...)\n\tcmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true}\n\tif err := cmd.Start(); err != nil {',
     'hidden browser process startup')
 
-# Detect the real Chrome top-level window before it becomes visible. This gives us time
-# to reparent it before Windows can create a taskbar button for the profile window.
+# Detect the real large Chromium app window before it becomes visible. Small hidden
+# Chrome helper windows are ignored so the actual page window is what gets reparented.
 old='''\t\tvis, _, _ := chIsWindowVisible.Call(hwnd)\n\t\tif vis == 0 {\n\t\t\treturn 1\n\t\t}\n\t\tbuf := make([]uint16, 128)'''
 new='''\t\tbuf := make([]uint16, 128)'''
 s=rep(s,old,new,'early hidden browser detection')
 s=rep(s,
-    'if strings.HasPrefix(cls, "Chrome_WidgetWin") {',
-    'if cls == "Chrome_WidgetWin_1" {',
-    'top-level chrome class')
+    '''\t\tcls := syscall.UTF16ToString(buf)\n\t\tif strings.HasPrefix(cls, "Chrome_WidgetWin") {''',
+    '''\t\tcls := syscall.UTF16ToString(buf)\n\t\tvar wr chRect\n\t\tchGetClientRect.Call(hwnd, uintptr(unsafe.Pointer(&wr)))\n\t\tww, wh := wr.R-wr.L, wr.B-wr.T\n\t\tif strings.HasPrefix(cls, "Chrome_WidgetWin") && ww >= 600 && wh >= 400 {''',
+    'large chromium app window filter')
 
 # Keep WS_VISIBLE off while converting the external browser into a child window,
 # and force TOOLWINDOW in case Windows cached an app/taskbar representation.
