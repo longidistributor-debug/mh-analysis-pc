@@ -11,35 +11,36 @@ if 'const licAppVersion = "80.8"' not in s:
         raise SystemExit("V80.7 license version anchor missing")
     s = s.replace(old, 'const licAppVersion = "80.8"', 1)
 
-# Keep one in-process copy so repeated logins during the same EXE run can never
-# race into a second key generation or depend on a temporarily locked file.
-var_anchor = '\tlicRemoteCheckMinSpacing = 90 * time.Second\n)'
-var_new = '\tlicRemoteCheckMinSpacing = 90 * time.Second\n\tlicDeviceMu              sync.Mutex // '+MARK+'\n\tlicDeviceMem             *licDevice\n)'
+# The V80.6 random-key design depended on local DPAPI files. If Windows secure
+# storage could not be written/read, the same PC could accidentally get another
+# key or fail before login. V80.8 makes the device signing key deterministic from
+# Windows installation identifiers. Same Windows installation => same Ed25519 key
+# on every login/restart, independent of temp/profile/session files.
+var_anchor = '''\tlicCryptProtectData      = licCrypt32.NewProc("CryptProtectData")
+\tlicCryptUnprotectData    = licCrypt32.NewProc("CryptUnprotectData")
+\tlicLocalFree             = licKernel32.NewProc("LocalFree")'''
+var_new = '''\tlicCryptProtectData      = licCrypt32.NewProc("CryptProtectData")
+\tlicCryptUnprotectData    = licCrypt32.NewProc("CryptUnprotectData")
+\tlicLocalFree             = licKernel32.NewProc("LocalFree")
+\tlicAdvapi32              = syscall.NewLazyDLL("advapi32.dll") // '''+MARK+'''
+\tlicRegOpenKeyExW         = licAdvapi32.NewProc("RegOpenKeyExW")
+\tlicRegQueryValueExW      = licAdvapi32.NewProc("RegQueryValueExW")
+\tlicRegCloseKey           = licAdvapi32.NewProc("RegCloseKey")
+\tlicGetVolumeInformationW = licKernel32.NewProc("GetVolumeInformationW")'''
 if var_new not in s:
     if var_anchor not in s:
-        raise SystemExit("license var anchor missing")
+        raise SystemExit("WinAPI var anchor missing")
     s = s.replace(var_anchor, var_new, 1)
 
-# Add a third machine-DPAPI recovery copy under ProgramData. LocalAppData remains
-# the primary location, so existing installs are fully backward compatible.
-path_anchor = 'func licDevicePath() string        { return filepath.Join(licRootDir(), "license-device-v1.bin") }\nfunc licDeviceMachinePath() string { return filepath.Join(licRootDir(), "license-device-v1-machine.bin") } // MH_SECURE_LICENSE_V806\nfunc licSessionPath() string       { return filepath.Join(licRootDir(), "license-session-v1.bin") }'
-path_new = '''func licDevicePath() string        { return filepath.Join(licRootDir(), "license-device-v1.bin") }
-func licDeviceMachinePath() string { return filepath.Join(licRootDir(), "license-device-v1-machine.bin") } // MH_SECURE_LICENSE_V806
-func licDeviceRecoveryPath() string {
-\tb := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
-\tif b == "" { b = licRootDir() } else { b = filepath.Join(b, "MHAnalysis") }
-\treturn filepath.Join(b, "license-device-v1-recovery.bin")
-} // '''+MARK+'''
-func licSessionPath() string       { return filepath.Join(licRootDir(), "license-session-v1.bin") }'''
-if path_new not in s:
-    if path_anchor not in s:
-        raise SystemExit("device path anchor missing")
-    s = s.replace(path_anchor, path_new, 1)
+mem_anchor = '\tlicRemoteCheckMinSpacing = 90 * time.Second\n)'
+mem_new = '\tlicRemoteCheckMinSpacing = 90 * time.Second\n\tlicDeviceMu              sync.Mutex // '+MARK+'\n\tlicDeviceMem             *licDevice\n)'
+if mem_new not in s:
+    if mem_anchor not in s:
+        raise SystemExit("license var anchor missing")
+    s = s.replace(mem_anchor, mem_new, 1)
 
-# Windows os.Rename does not replace an existing destination reliably. The old
-# writer could leave a perfectly valid .tmp file behind and then report failure.
-# Remove destination immediately before rename; .tmp is intentionally retained on
-# a rename failure and V80.8 knows how to recover from it next launch.
+# Windows os.Rename does not reliably replace an existing destination. Fix the
+# protected session writer too, so repeated logins can overwrite their token.
 old_write = '''\tif err = os.WriteFile(tmp, enc, 0600); err != nil {
 \t\treturn err
 \t}
@@ -53,7 +54,7 @@ new_write = '''\tif err = os.WriteFile(tmp, enc, 0600); err != nil {
 }'''
 if new_write not in s:
     if old_write not in s:
-        raise SystemExit("user DPAPI writer anchor missing")
+        raise SystemExit("protected writer anchor missing")
     s = s.replace(old_write, new_write, 1)
 
 start = s.find('func licEnsureDevice() (*licDevice, error) {')
@@ -61,117 +62,121 @@ end = s.find('\nfunc licLoadSession()', start)
 if start < 0 or end < 0:
     raise SystemExit("licEnsureDevice anchors missing")
 
-new_block = r'''func licPersistDeviceCopies(disk licDeviceDisk) error {
-	var ok int
-	var errs []string
-	if err := licWriteProtected(licDevicePath(), disk); err == nil {
-		ok++
-	} else {
-		errs = append(errs, "user="+err.Error())
+new_block = r'''func licReadMachineGuid() string {
+	const hklm = uintptr(0x80000002)
+	const keyRead = uintptr(0x20019)
+	const wow64_64 = uintptr(0x0100)
+	keyName, _ := syscall.UTF16PtrFromString(`SOFTWARE\Microsoft\Cryptography`)
+	valueName, _ := syscall.UTF16PtrFromString("MachineGuid")
+	for _, access := range []uintptr{keyRead | wow64_64, keyRead} {
+		var h uintptr
+		r, _, _ := licRegOpenKeyExW.Call(hklm, uintptr(unsafe.Pointer(keyName)), 0, access, uintptr(unsafe.Pointer(&h)))
+		if r != 0 || h == 0 {
+			continue
+		}
+		var typ uint32
+		var cb uint32
+		r, _, _ = licRegQueryValueExW.Call(h, uintptr(unsafe.Pointer(valueName)), 0, uintptr(unsafe.Pointer(&typ)), 0, uintptr(unsafe.Pointer(&cb)))
+		if r == 0 && cb >= 2 && cb <= 1024 {
+			buf := make([]uint16, int(cb/2)+1)
+			r, _, _ = licRegQueryValueExW.Call(h, uintptr(unsafe.Pointer(valueName)), 0, uintptr(unsafe.Pointer(&typ)), uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&cb)))
+			licRegCloseKey.Call(h)
+			if r == 0 {
+				if v := strings.TrimSpace(syscall.UTF16ToString(buf)); v != "" {
+					return strings.ToLower(v)
+				}
+			}
+		} else {
+			licRegCloseKey.Call(h)
+		}
 	}
-	if err := licWriteProtectedMachine(licDeviceMachinePath(), disk); err == nil {
-		ok++
-	} else {
-		errs = append(errs, "machine="+err.Error())
-	}
-	if err := licWriteProtectedMachine(licDeviceRecoveryPath(), disk); err == nil {
-		ok++
-	} else {
-		errs = append(errs, "recovery="+err.Error())
-	}
-	if ok == 0 {
-		return fmt.Errorf("could not persist secure device identity: %s", strings.Join(errs, " / "))
-	}
-	return nil
+	return ""
 }
 
-func licReadDeviceCandidate(path string, machine bool) (*licDevice, licDeviceDisk, error) {
-	var disk licDeviceDisk
-	var err error
-	if machine {
-		err = licReadProtectedMachine(path, &disk)
-	} else {
-		err = licReadProtected(path, &disk)
+func licSystemVolumeSerial() string {
+	drive := strings.TrimSpace(os.Getenv("SystemDrive"))
+	if drive == "" {
+		drive = "C:"
 	}
+	root, err := syscall.UTF16PtrFromString(strings.TrimRight(drive, `\/`) + `\`)
 	if err != nil {
-		return nil, disk, err
+		return ""
 	}
-	if disk.PrivateKey == "" {
-		return nil, disk, errors.New("stored device key is empty")
+	var serial uint32
+	r, _, _ := licGetVolumeInformationW.Call(uintptr(unsafe.Pointer(root)), 0, 0, uintptr(unsafe.Pointer(&serial)), 0, 0, 0, 0)
+	if r == 0 {
+		return ""
 	}
-	d, err := licDeviceFromDisk(disk)
-	return d, disk, err
+	return fmt.Sprintf("%08x", serial)
+}
+
+func licDeterministicDevice() (*licDevice, error) {
+	guid := licReadMachineGuid()
+	vol := licSystemVolumeSerial()
+	if guid == "" && vol == "" {
+		return nil, errors.New("stable Windows machine identity is unavailable")
+	}
+	seed := sha256.Sum256([]byte("MH-ANALYSIS-DEVICE-V808|" + guid + "|" + vol))
+	priv := ed25519.NewKeyFromSeed(seed[:])
+	pub := priv.Public().(ed25519.PublicKey)
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(der)
+	return &licDevice{Private: priv, Public: pub, DER: der, ID: hex.EncodeToString(sum[:])}, nil
 }
 
 func licEnsureDevice() (*licDevice, error) {
 	licDeviceMu.Lock()
 	defer licDeviceMu.Unlock()
-
 	if licDeviceMem != nil {
 		return licDeviceMem, nil
 	}
 
-	type candidate struct {
-		path    string
-		machine bool
-	}
-	candidates := []candidate{
-		{licDevicePath(), false},
-		{licDevicePath() + ".tmp", false},
-		{licDeviceMachinePath(), true},
-		{licDeviceMachinePath() + ".tmp", true},
-		{licDeviceRecoveryPath(), true},
-		{licDeviceRecoveryPath() + ".tmp", true},
-	}
-
-	identityArtifactExists := false
-	for _, c := range candidates {
-		if st, err := os.Stat(c.path); err == nil && !st.IsDir() {
-			identityArtifactExists = true
-			d, disk, err := licReadDeviceCandidate(c.path, c.machine)
-			if err == nil && d != nil {
-				// Self-heal every canonical copy from the exact same recovered key.
-				// No new identity is generated, so the server sees the same device.
-				_ = licPersistDeviceCopies(disk)
-				for _, tmp := range []string{licDevicePath()+".tmp", licDeviceMachinePath()+".tmp", licDeviceRecoveryPath()+".tmp"} {
-					_ = os.Remove(tmp)
-				}
-				licDeviceMem = d
-				return licDeviceMem, nil
-			}
-		}
-	}
-
-	// Never rotate silently when an old identity artifact exists. Generating a new
-	// key here would make the same PC appear as a second device and cause the exact
-	// DEVICE_NOT_AUTHORIZED problem V80.8 is designed to prevent.
-	if identityArtifactExists {
-		return nil, errors.New("existing secure device identity could not be recovered")
-	}
-
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	// Authoritative V80.8 identity: deterministic for this Windows installation.
+	// It does not rotate when EXE restarts, the LocalAppData profile changes, or
+	// old DPAPI identity/session files are missing/corrupt.
+	d, err := licDeterministicDevice()
 	if err != nil {
 		return nil, err
 	}
-	der, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		return nil, err
-	}
-	disk := licDeviceDisk{PrivateKey: base64.StdEncoding.EncodeToString(priv)}
-	if err := licPersistDeviceCopies(disk); err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(der)
-	licDeviceMem = &licDevice{Private: priv, Public: pub, DER: der, ID: hex.EncodeToString(sum[:])}
+	licDeviceMem = d
+
+	// Best-effort compatibility copy only. Login does NOT depend on this write.
+	// This keeps older builds recoverable without making V80.8 fragile.
+	disk := licDeviceDisk{PrivateKey: base64.StdEncoding.EncodeToString(d.Private)}
+	_ = licWriteProtected(licDevicePath(), disk)
 	return licDeviceMem, nil
 }
 '''
-
 s = s[:start] + new_block + s[end:]
 
-# Make the UI explain the only remaining safe failure case. If all encrypted
-# copies are physically corrupted/unrecoverable, an admin device reset is required;
-# silently inventing a new key would weaken one-device enforcement.
+# A successful online login must not be rejected solely because Windows DPAPI
+# session persistence is unavailable. Keep the session in memory and allow the
+# user to log in again on the next launch; the stable device key remains identical.
+old_save = '''func licSaveSession(s *licSession) error {
+\ts.SavedAt = time.Now()
+\tif err := licWriteProtected(licSessionPath(), s); err != nil {
+\t\treturn err
+\t}
+\tlicSessionMem = s
+\treturn nil
+}'''
+new_save = '''func licSaveSession(s *licSession) error {
+\ts.SavedAt = time.Now()
+\tlicSessionMem = s
+\t// '''+MARK+''': persistence is best-effort. Authorization remains valid in this
+\t// EXE run even when a Windows profile blocks DPAPI/file persistence.
+\t_ = licWriteProtected(licSessionPath(), s)
+\treturn nil
+}'''
+if new_save not in s:
+    if old_save not in s:
+        raise SystemExit("licSaveSession anchor missing")
+    s = s.replace(old_save, new_save, 1)
+
+# Replace the old generic creation failure with a stable-machine-identity message.
 old_err = '''\td, err := licEnsureDevice()
 \tif err != nil {
 \t\tw.WriteHeader(http.StatusInternalServerError)
@@ -181,13 +186,7 @@ old_err = '''\td, err := licEnsureDevice()
 new_err = '''\td, err := licEnsureDevice()
 \tif err != nil {
 \t\tw.WriteHeader(http.StatusInternalServerError)
-\t\tcode := "device_key_failed"
-\t\tmessage := "Could not create secure device identity."
-\t\tif strings.Contains(err.Error(), "existing secure device identity could not be recovered") {
-\t\t\tcode = "device_identity_recovery_required"
-\t\t\tmessage = "This Windows device has an old secure identity that could not be recovered. Use Admin Reset Device once, then log in again."
-\t\t}
-\t\t_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": code, "message": message})
+\t\t_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "device_identity_unavailable", "message": "Could not read this Windows device identity. Restart Windows and try again."})
 \t\treturn
 \t}'''
 if new_err not in s:
@@ -196,4 +195,4 @@ if new_err not in s:
     s = s.replace(old_err, new_err, 1)
 
 p.write_text(s, encoding="utf-8")
-print(MARK + ": durable same-device key reuse, tmp self-heal, LocalMachine recovery copy, and no silent key rotation applied")
+print(MARK + ": deterministic same-Windows device key + repeated-login safe session handling applied")
