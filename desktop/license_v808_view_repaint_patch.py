@@ -19,7 +19,7 @@ old_cleanup = '''\troot := filepath.Join(base, "MHAnalysis", "AnalysisRuntime")
 \tchAnalysisRuntimeDir = filepath.Join(root, fmt.Sprintf("run-%d-%d", os.Getpid(), time.Now().UnixNano()))'''
 new_cleanup = '''\troot := filepath.Join(base, "MHAnalysis", "AnalysisRuntime")
 \t_ = os.MkdirAll(root, 0755)
-\t// '''+MARK+''': each process owns only its own unique runtime profile.
+\t// '''+MARK+''': each process owns only its own unique directory runtime profile.
 \tchAnalysisRuntimeDir = filepath.Join(root, fmt.Sprintf("run-%d-%d", os.Getpid(), time.Now().UnixNano()))'''
 if new_cleanup not in s:
     if old_cleanup not in s:
