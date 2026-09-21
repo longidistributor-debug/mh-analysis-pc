@@ -502,7 +502,7 @@ func registerLicenseRoutes(mux *http.ServeMux) {
 func licenseGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/api/license/") || p == "/api/shutdown" {
+		if strings.HasPrefix(p, "/api/license/") || strings.HasPrefix(p, "/api/update/") || p == "/api/shutdown" {
 			next.ServeHTTP(w, r)
 			return
 		}
