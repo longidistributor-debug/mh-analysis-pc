@@ -1,0 +1,45 @@
+name: One-time Consolidate V.06 Source
+on:
+  push:
+    branches: [v02-restored-working-base]
+permissions:
+  contents: write
+jobs:
+  consolidate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Permanently consolidate V.06 into source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -eq 'V.06'){
+            Write-Host 'V.06 is already committed in source. Nothing to migrate.'
+            exit 0
+          }
+          python desktop/records_feature_patch.py
+          python desktop/records_mt5_local_patch.py
+          $mt5=Get-Content -Raw desktop/native_mt5_terminal_patch.py
+          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n)'")
+          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1004 // '+MARK+'\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1104 // '+MARK+'\n)'")
+          Set-Content -Encoding UTF8 desktop/native_mt5_terminal_patch.py $mt5
+          python desktop/native_mt5_terminal_patch.py
+          python desktop/native_mt5_prefill_patch.py
+          python desktop/v03_exact_changes_patch.py
+          python desktop/v03_wiring_patch.py
+          python desktop/v04_keyboard_version_patch.py
+          python desktop/v05_password_version_patch.py
+          python desktop/v06_native_keyboard_patch.py
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.06'){throw 'V.06 consolidation failed'}
+          if((Get-Content -Raw updater.go) -notmatch 'mhPublicVersionV001 = "V.06"'){throw 'updater.go was not consolidated to V.06'}
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.go chrome_host.go updater.go VERSION web/app.js web/auth.js web/auth.css web/index.html web/records.js web/records.html
+          if((git status --porcelain).Length -eq 0){
+            Write-Host 'No source changes to commit.'
+            exit 0
+          }
+          git commit -m 'Permanently consolidate MH Analysis V.06 runtime source'
+          git push origin HEAD:v02-restored-working-base
