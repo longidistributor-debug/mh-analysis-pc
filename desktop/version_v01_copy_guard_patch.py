@@ -23,6 +23,14 @@ if n != 1:
     raise SystemExit("records version anchor missing")
 p.write_text(s2, encoding="utf-8")
 
+# License/server app-version metadata uses the same public version source.
+p = Path("license_auth.go")
+s = p.read_text(encoding="utf-8")
+s2, n = re.subn(r'const licAppVersion = "[^"]+"', f'const licAppVersion = "{VERSION}"', s, count=1)
+if n != 1:
+    raise SystemExit("license app version anchor missing")
+p.write_text(s2, encoding="utf-8")
+
 # Normal copy/select/drag protection for displayed wording. Inputs remain usable.
 copy_css = r'''
 
@@ -67,4 +75,4 @@ for name in ("web/app.js", "web/records.js", "web/auth.js"):
         s += copy_js
     p.write_text(s, encoding="utf-8")
 
-print(f"{MARK}: main + Records version = {PUBLIC}; ordinary displayed-text copy/select blocked")
+print(f"{MARK}: UI + Records + license version = {PUBLIC}; ordinary displayed-text copy/select blocked")
