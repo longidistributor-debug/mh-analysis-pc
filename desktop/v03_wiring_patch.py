@@ -8,6 +8,9 @@ if 'licNavNoticeHandler' not in s:
 p.write_text(s,encoding='utf-8')
 
 p=Path('updater.go'); s=p.read_text(encoding='utf-8')
+# Build V.03 must identify itself as V.03 before any update comparison.
 s=s.replace('const mhPublicVersionV001 = "V.02"','const mhPublicVersionV001 = "V.03"')
+if 'const mhPublicVersionV001 = "V.03"' not in s:
+    raise SystemExit('V.03 updater identity was not applied')
 p.write_text(s,encoding='utf-8')
 print('PASS V.03 updater identity and login navigation notice route')
