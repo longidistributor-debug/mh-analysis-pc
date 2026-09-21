@@ -1,0 +1,98 @@
+name: Build MH Analysis V.09 WebView2
+on:
+  workflow_dispatch:
+  push:
+    branches: [v02-restored-working-base]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Restore complete runtime and switch only host architecture
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          # Recover the complete proven main.go; only replace its host call.
+          git checkout 181583ea3bfe0d744b97532a23b18743202e05c8 -- main.go
+          $m=Get-Content -Raw main.go
+          $m=$m.Replace('runChromeHost()','runWebView2Host()')
+          Set-Content -Encoding UTF8 main.go $m
+          # Real WebView2 dependency: no external Chrome/Edge app window.
+          go get github.com/jchv/go-webview2@master
+          # Promote actual source identity.
+          $u=Get-Content -Raw updater.go
+          $u=$u -replace 'mhPublicVersionV001 = "V\.\d+"','mhPublicVersionV001 = "V.09"'
+          Set-Content -Encoding UTF8 updater.go $u
+          Set-Content -Encoding UTF8 VERSION 'V.09'
+          $i=Get-Content -Raw web/index.html
+          $i=$i -replace 'id="mhUpdateVersionV001">V\.\d+<','id="mhUpdateVersionV001">V.09<'
+          Set-Content -Encoding UTF8 web/index.html $i
+          gofmt -w main.go webview2_host.go updater.go
+      - name: Compile V.09 architecture
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+      - name: Contract checks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $m=Get-Content -Raw main.go; $h=Get-Content -Raw webview2_host.go; $u=Get-Content -Raw updater.go
+          if($m -notmatch 'runWebView2Host\(\)'){throw 'main does not use WebView2 host'}
+          if($m -match 'runChromeHost\(\)'){throw 'legacy external browser host still active'}
+          if($h -notmatch 'edge.NewChromium\(\)'){throw 'embedded WebView2 controller missing'}
+          if($h -match 'exec.Command\(chBrowserPath'){throw 'external browser launch exists in V.09 host'}
+          if($u -notmatch 'mhPublicVersionV001 = "V.09"'){throw 'version identity wrong'}
+          Write-Host 'PASS one-window WebView2 V.09 architecture'
+      - name: Permanently commit compiled V.09 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add main.go webview2_host.go go.mod go.sum updater.go VERSION web/index.html
+          if((git status --porcelain).Length -gt 0){git commit -m 'Permanently migrate MH Analysis V.09 to embedded WebView2 [skip ci]';git push origin HEAD:v02-restored-working-base}
+      - name: Runtime smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          Start-Sleep -Seconds 12
+          if($p.HasExited){throw "V.09 exited during startup: $($p.ExitCode)"}
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+      - name: Build V.09 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          $iss=Get-Content -Raw 'installer/MHAnalysis-V04.iss'; $iss=$iss.Replace('V.04','V.09').Replace('MH Analysis V.04.exe','MH Analysis V.09.exe'); Set-Content -Encoding UTF8 'installer/MHAnalysis-V09.iss' $iss
+          & $iscc 'installer/MHAnalysis-V09.iss'; if($LASTEXITCODE -ne 0){throw 'installer failed'}
+          $x=Get-ChildItem -Recurse -Filter 'MH Analysis V.09.exe'|Select-Object -First 1; if(-not$x){throw 'installer missing'}; Copy-Item $x.FullName 'dist/MH-Analysis-V09-Installer.exe' -Force
+      - name: Publish V.09 manifest only after all tests pass
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel; git worktree add update-channel origin/mh-analysis-update-channel
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V09.exe' -Force
+          $manifest=[ordered]@{version='V.09';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V09.exe';sha256=$sha;notes='V.09 uses one embedded WebView2 host: keyboard input, one taskbar icon, smooth open and close.'}
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+          Push-Location update-channel; git add MH-Analysis-V09.exe update.json; git commit -m 'Publish mandatory MH Analysis V.09'; git push origin HEAD:mh-analysis-update-channel; Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V09-WebView2-Final
+          path: |
+            dist/MH-Analysis-V09-Installer.exe
+            dist/MH Analysis.exe
+          retention-days: 90
