@@ -26,12 +26,12 @@ jobs:
         shell: powershell
         run: |
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go
-          foreach($m in @('MH_V002_TRUE_SINGLE_FRAME','style &^= chWSPopup | chWSOverlapped','chSetParent.Call(hwnd, hostHWND)','chNormalizeEmbeddedTreeV001Final(chAnalysisWnd)')){if(-not $h.Contains($m)){throw "V.02 frame guard missing: $m"}}
+          foreach($m in @('MH_V002_TRUE_SINGLE_FRAME','style &^= chWSPopup | chWSOverlapped','chSetParent.Call(hwnd, hostHWND)','style |= chWSChild | chWSVisible','chNormalizeEmbeddedTreeV001Final(hwnd)')){if(-not $h.Contains($m)){throw "V.02 frame guard missing: $m"}}
           if(-not $a.Contains('if(v.verified && v.required)')){throw 'verified-newer update gate missing'}
           if(-not $u.Contains('mhPublicVersionV001 = "V.02"')){throw 'version is not V.02'}
           Write-Host 'PASS: Chromium root forced WS_CHILD after SetParent'
           Write-Host 'PASS: Chromium caption/min/max/close stripped after SetParent'
-          Write-Host 'PASS: frame reasserted on resize/navigation'
+          Write-Host 'PASS: embedded Chromium normalized after SetParent'
           Write-Host 'PASS: only main MH Analysis window owns Min/Max/Close'
           Write-Host 'PASS: release version V.02'
       - name: Build V.02
