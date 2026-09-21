@@ -23,19 +23,38 @@ if MARK not in s:
     p.write_text(s,encoding='utf-8')
 
 # 2) UPDATE MUST PRECEDE LOGIN.
-# The login is dynamically created by auth.js inside index.html, so gate the auth
-# bootstrap itself rather than looking for a separate login.html.
+# Earlier license patches can rewrite the final auth bootstrap. Locate the final
+# bootstrap semantically instead of requiring one exact whitespace/text block.
 p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    old='''  build();
-  show("login_required");
-  status(false);
-  setInterval(() => status(false), 4 * 60 * 1000);
-})();'''
-    new=r'''  // MH_V001_PERMANENT_SHELL_UPDATE_FIX
-  // Version verification always happens BEFORE Account Login becomes visible.
-  // Same version => normal login. New mandatory version => update screen only.
+    end=s.rfind('})();')
+    if end < 0:
+        raise SystemExit('auth closure missing')
+    prefix=s[:end]
+    # Remove the existing final bootstrap calls regardless of whitespace variants.
+    import re
+    patterns=[
+        r'\s*build\(\)\s*;\s*show\([\'\"]login_required[\'\"]\)\s*;\s*status\(false\)\s*;\s*setInterval\(\(\)\s*=>\s*status\(false\),\s*4\s*\*\s*60\s*\*\s*1000\)\s*;\s*$',
+        r'\s*build\(\)\s*;\s*show\([\'\"]login_required[\'\"]\)\s*;\s*status\(false\)\s*;\s*$'
+    ]
+    removed=False
+    for pat in patterns:
+        newer,n=re.subn(pat,'\n',prefix,flags=re.S)
+        if n:
+            prefix=newer; removed=True; break
+    if not removed:
+        # Last-resort safe cut: find the last top-level bootstrap build() occurring
+        # after MHLicense export. Never touch build() calls inside functions.
+        export_pos=prefix.rfind('window.MHLicense')
+        boot_pos=prefix.find('\n  build();', export_pos if export_pos >= 0 else 0)
+        if boot_pos < 0:
+            raise SystemExit('final auth bootstrap not found')
+        prefix=prefix[:boot_pos]+'\n'
+
+    injected=r'''
+  // MH_V001_PERMANENT_SHELL_UPDATE_FIX
+  // Version verification happens BEFORE Account Login becomes visible.
   async function mhPreLoginUpdateCheckV001(){
     try{
       const r=await rawFetch("/api/update/status?preauth=1&t="+Date.now(),{cache:"no-store"});
@@ -52,7 +71,6 @@ if MARK not in s:
     if(gate) gate.classList.remove("mhUpdateHiddenV001");
     const v=await mhPreLoginUpdateCheckV001();
     if(!v.verified || v.required){
-      // Keep license/login completely behind the mandatory update surface.
       if(overlay) overlay.classList.remove("show");
       document.documentElement.classList.remove("mhLicenseLocked");
       return;
@@ -66,22 +84,16 @@ if MARK not in s:
   mhBootAfterVersionV001();
   setInterval(async()=>{
     const v=await mhPreLoginUpdateCheckV001();
-    if(v.verified && !v.required){
-      if(!overlay || !overlay.classList.contains("show")){
-        status(false);
-      }
-    }
+    if(v.verified && !v.required && overlay && overlay.classList.contains("show")) status(false);
   },4 * 60 * 1000);
-})();'''
-    if old not in s:
-        raise SystemExit('auth bootstrap anchor missing')
-    s=s.replace(old,new,1)
+'''
+    s=prefix+injected+'})();\n'
     p.write_text(s,encoding='utf-8')
 
-# 3) Keep the update surface above every login/auth overlay.
+# 3) Keep update surface above every login/auth overlay.
 p=Path('web/update-v001.css')
 s=p.read_text(encoding='utf-8')
 s=s.replace('z-index:2147483646','z-index:2147483647')
 p.write_text(s,encoding='utf-8')
 
-print(MARK+': single outer frame + update-before-login bootstrap applied')
+print(MARK+': single outer frame + resilient update-before-login bootstrap applied')
