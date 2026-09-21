@@ -3,24 +3,34 @@ import re
 
 MARK='MH_V001_FINAL_SHELL_UPDATE_BEHAVIOR'
 
-# ------------------------------------------------------------------
-# A) ONE visible Windows frame only.
-# Strip non-client frame from the embedded browser AND all descendants.
-# ------------------------------------------------------------------
+# A) ONE visible Windows frame only: normalize browser root + every nested child.
 p=Path('chrome_host.go')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    proc_anchor='\tchEnumWindows            = chUser32.NewProc("EnumWindows")\n'
-    if proc_anchor not in s: raise SystemExit('EnumWindows anchor missing')
-    s=s.replace(proc_anchor,proc_anchor+'\tchEnumChildWindowsV001Final = chUser32.NewProc("EnumChildWindows") // '+MARK+'\n',1)
+    # Do not depend on an old exact EnumWindows declaration; insert beside any
+    # stable user32 proc declaration that survives all prior patches.
+    proc='\tchEnumChildWindowsV001Final = chUser32.NewProc("EnumChildWindows") // '+MARK+'\n'
+    if 'chEnumChildWindowsV001Final' not in s:
+        anchors=[
+            '\tchSetWindowText          = chUser32.NewProc("SetWindowTextW")',
+            '\tchSetForegroundWindow   = chUser32.NewProc("SetForegroundWindow")',
+            '\tchSetParent             = chUser32.NewProc("SetParent")'
+        ]
+        inserted=False
+        for a in anchors:
+            pos=s.find(a)
+            if pos>=0:
+                e=s.find('\n',pos)
+                s=s[:e+1]+proc+s[e+1:]
+                inserted=True
+                break
+        if not inserted: raise SystemExit('stable user32 proc anchor missing')
 
     helper_anchor='\nfunc chNormalizeEmbeddedFrame(hwnd uintptr) {'
     if helper_anchor not in s: raise SystemExit('normalize helper anchor missing')
     helper=r'''
 
-// MH_V001_FINAL_SHELL_UPDATE_BEHAVIOR: Chromium can create a nested native child
-// after navigation/login. Removing styles only from the first browser HWND leaves
-// a second Min/Max/Close bar. Normalize the complete embedded HWND tree.
+// MH_V001_FINAL_SHELL_UPDATE_BEHAVIOR: strip any nested Chromium native caption.
 func chNormalizeEmbeddedTreeV001Final(root uintptr) {
 	if root == 0 { return }
 	chNormalizeEmbeddedFrame(root)
@@ -34,40 +44,28 @@ func chNormalizeEmbeddedTreeV001Final(root uintptr) {
 '''
     s=s.replace(helper_anchor,helper+helper_anchor,1)
 
-    # Permanent loop: normalize full trees, not only root browser handles.
-    s=s.replace('chNormalizeEmbeddedFrame(child)\n\t\t\t}', 'chNormalizeEmbeddedTreeV001Final(child)\n\t\t\t}',1)
-    # Also normalize full tree whenever resize/reparent normalization is called.
-    # Keep original helper for callback safety; tree pass runs from protection loop.
+    old='chNormalizeEmbeddedFrame(child)\n\t\t\t}'
+    if old not in s: raise SystemExit('permanent child normalize call missing')
+    s=s.replace(old,'chNormalizeEmbeddedTreeV001Final(child)\n\t\t\t}',1)
     s=s.replace('package main\n','package main\n\n// '+MARK+'\n',1)
     p.write_text(s,encoding='utf-8')
 
-# ------------------------------------------------------------------
-# B) UPDATE UX: update surface appears ONLY for a positively verified newer
-# mandatory version. No update => login immediately. Network/check failure =>
-# normal login; background checks continue. Update is always detected pre-login
-# when server positively reports a newer version.
-# ------------------------------------------------------------------
+# B) UPDATE UX: only a positively verified newer mandatory release blocks login.
 p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    # Existing function currently treats unverified/error as required. Change that.
     s=s.replace('if(!r.ok || j.verified!==true) return {verified:false,required:true};','if(!r.ok || j.verified!==true) return {verified:false,required:false};')
-    s=s.replace('return {verified:false,required:true};\n    }catch{\n      return {verified:false,required:true};','return {verified:false,required:false};\n    }catch{\n      return {verified:false,required:false};')
     s=s.replace('}catch{\n      return {verified:false,required:true};\n    }','}catch{\n      return {verified:false,required:false};\n    }')
-    # Gate only on verified + required. Otherwise hide gate and continue login.
     s=s.replace('if(!v.verified || v.required){','if(v.verified && v.required){')
+    # Mark the transformed auth source so guards can prove this patch ran.
+    s='// '+MARK+'\n'+s
     p.write_text(s,encoding='utf-8')
 
-# updater UI itself: never show update screen for check errors/current version.
 p=Path('web/update-v001.js')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    s='// '+MARK+'\n'+s
-    # Force gate hidden initially. It is displayed only after required===true.
-    s += r'''
+    s='// '+MARK+'\n'+s+r'''
 
-// MH_V001_FINAL_SHELL_UPDATE_BEHAVIOR
-// Safety net: a current/no-update response must never leave the update surface up.
 (function(){
   async function enforceRealUpdateOnly(){
     const gate=document.getElementById('mhMandatoryUpdateV001');
@@ -75,15 +73,9 @@ if MARK not in s:
     try{
       const r=await fetch('/api/update/status?realupdate=1&t='+Date.now(),{cache:'no-store'});
       const j=await r.json();
-      if(r.ok && j.verified===true && j.required===true){
-        gate.classList.remove('mhUpdateHiddenV001');
-      }else{
-        gate.classList.add('mhUpdateHiddenV001');
-      }
-    }catch(e){
-      // Check failure is not proof that an update exists.
-      gate.classList.add('mhUpdateHiddenV001');
-    }
+      if(r.ok && j.verified===true && j.required===true) gate.classList.remove('mhUpdateHiddenV001');
+      else gate.classList.add('mhUpdateHiddenV001');
+    }catch(e){ gate.classList.add('mhUpdateHiddenV001'); }
   }
   enforceRealUpdateOnly();
   setInterval(enforceRealUpdateOnly,30000);
@@ -91,11 +83,10 @@ if MARK not in s:
 '''
     p.write_text(s,encoding='utf-8')
 
-# Backend: a manifest fetch failure is NOT an available update.
+# C) Backend manifest failure means unknown/current UX, never 'update available'.
 p=Path('desktop/version_v001_mandatory_updater_patch.py')
 s=p.read_text(encoding='utf-8')
-# This patch generates updater.go during build, so correct the generated source.
 s=s.replace('"ok": false, "verified": false, "required": true,','"ok": false, "verified": false, "required": false,')
 p.write_text(s,encoding='utf-8')
 
-print(MARK+': one native frame tree + real-update-only pre-login behavior applied')
+print(MARK+': nested frame stripping + verified-newer-only update behavior applied')
