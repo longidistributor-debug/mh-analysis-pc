@@ -778,7 +778,12 @@ async function openWhatsappSettingsPrompt(){
   }catch(e){setAutoStatus('Could not open Signal Link','bad');return false}
 }
 $('#openKey').onclick=openNativeApiSettings;
-const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{await fetch('/api/open-whatsapp',{method:'POST'})}catch(_){}};
+const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{
+  const s=await fetch('/api/settings',{cache:'no-store'}).then(r=>r.json()).catch(()=>({}));
+  backendSettings={...backendSettings,...s};
+  if(!String(s.whatsapp_link||'').trim()){await fetch('/api/open-whatsapp-settings',{method:'POST'});return;}
+  await fetch('/api/open-whatsapp',{method:'POST'});
+}catch(_){try{await fetch('/api/open-whatsapp-settings',{method:'POST'})}catch(__){}}};
 $('#analyze').onclick=runAnalyze;$('#reevaluate').onclick=runReevaluate;$('#autoSignalToggle').onclick=()=>setAutoSignalEnabled(!autoSignalEnabled);$('#exitApp').onclick=async()=>{try{await fetch('/api/shutdown',{method:'POST'})}catch(e){}window.close()};
 $$('.pair').forEach(b=>b.onclick=()=>{$$('.pair').forEach(x=>x.classList.remove('active'));b.classList.add('active');symbol=b.dataset.symbol;contextChanged()});
 $('#timeframe').onchange=e=>{timeframe=e.target.value;contextChanged()};
