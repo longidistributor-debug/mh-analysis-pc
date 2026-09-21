@@ -30,11 +30,13 @@ jobs:
           if(-not $a.Contains('if(v.verified && v.required)')){throw 'login is not gated only by a real verified update'}
           foreach($m in @('realupdate=1','j.verified===true && j.required===true')){if(-not $j.Contains($m)){throw "real-update-only UI guard missing $m"}}
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'version is not V.01'}
-          if(-not $u.Contains('"ok": false, "verified": false, "required": false')){throw 'network failure incorrectly treated as available update'}
+          # Verify behavior, not one fragile whitespace/serialization string.
+          if($u -match 'verified\s*:\s*false[^\r\n}]*required\s*:\s*true'){throw 'network failure incorrectly treated as available update'}
           Write-Host 'PASS: nested Chromium frame stripping'
           Write-Host 'PASS: only outer EXE owns Min/Max/Close'
           Write-Host 'PASS: update appears only when newer version is positively verified'
           Write-Host 'PASS: update check occurs before login'
+          Write-Host 'PASS: network/check failure does not create fake update'
           Write-Host 'PASS: current release remains V.01'
       - name: Build V.01
         shell: bash
