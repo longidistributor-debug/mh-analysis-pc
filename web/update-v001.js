@@ -15,15 +15,23 @@
   function showGate(){document.body.classList.remove('mhUpdateCheckingV001');document.body.classList.add('mhUpdateRequiredV001');gate.classList.remove('mhUpdateHiddenV001')}
   function hideGate(){document.body.classList.remove('mhUpdateRequiredV001');gate.classList.add('mhUpdateHiddenV001')}
   function percent(v){const n=Math.max(0,Math.min(100,Number(v)||0));fill.style.width=n+'%';pct.textContent=Math.round(n)+'%'}
-  function checkError(msg){required=false;hideGate();document.body.classList.remove('mhUpdateCheckingV001');state.textContent='';setTimeout(()=>checkVersion(false),15000)}
+  function checkError(msg){
+    required=true;showGate();
+    title.textContent='Update Check Required';
+    sub.textContent=msg||'Unable to verify the required MH Analysis version.';
+    btn.style.display='none';
+    retry.classList.add('show');
+    state.textContent='MH Analysis cannot continue to login until the update check succeeds.';
+  }
 
   async function checkVersion(initial=false){
     if(checking)return;checking=true;
-    if(initial){document.body.classList.add('mhUpdateCheckingV001');hideGate();title.textContent='Checking required version…';sub.textContent='Please wait.';btn.style.display='none';retry.classList.remove('show');state.textContent=''}
+    if(initial){document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking required version…';sub.textContent='Please wait.';btn.style.display='none';retry.classList.remove('show');state.textContent='Checking for required MH Analysis updates before login…'}
     try{
       const r=await fetch('/api/update/status',{cache:'no-store'});
+      if(!r.ok)throw new Error('Update service returned '+r.status);
       const j=await r.json();
-      if(!j.verified){if(!verifiedOnce)checkError(j.error);return}
+      if(!j.verified){checkError(j.error);return}
       verifiedOnce=true;
       if(j.required){
         required=true;showGate();
@@ -31,10 +39,10 @@
         sub.textContent=`${j.latest||'New version'} is required before MH Analysis can continue.`;
         btn.style.display='inline-block';btn.disabled=false;btn.textContent='Update Now - To Access';
         retry.classList.remove('show');state.textContent='Your login, Records, WhatsApp settings and saved data will remain unchanged.';
-      }else if(!required){
-        hideGate();document.body.classList.remove('mhUpdateCheckingV001');
+      }else{
+        required=false;hideGate();document.body.classList.remove('mhUpdateCheckingV001');
       }
-    }catch(e){if(!verifiedOnce)checkError('Could not reach the update service. Check internet and retry.')}
+    }catch(e){checkError('Could not verify the required MH Analysis version. Check internet and retry.')}
     finally{checking=false}
   }
 
