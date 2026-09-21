@@ -1,0 +1,94 @@
+name: Build MH Analysis Installer V81.6
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'installer/MHAnalysis.iss'
+      - '.github/workflows/build-installer-v816.yml'
+      - 'vercel-auth/trigger-installer-v816'
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source branch
+        uses: actions/checkout@v4
+        with:
+          ref: records-mt5-local-build
+          path: source
+          fetch-depth: 1
+
+      - name: Checkout verified EXE branch
+        uses: actions/checkout@v4
+        with:
+          ref: final-current-v796
+          path: verified
+          fetch-depth: 1
+
+      - name: Verify inputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if(-not (Test-Path 'verified\MH Analysis.exe')){ throw 'Verified MH Analysis.exe missing from final-current-v796' }
+          if(-not (Test-Path 'source\installer\MHAnalysis.iss')){ throw 'Installer definition missing' }
+          if(-not (Test-Path 'source\web\mh-analysis.ico')){ throw 'MH Analysis icon missing' }
+          New-Item -ItemType Directory -Force -Path dist-installer | Out-Null
+          Get-FileHash 'verified\MH Analysis.exe' -Algorithm SHA256 | Format-List
+
+      - name: Install Inno Setup if needed
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not (Test-Path $iscc)){
+            choco install innosetup -y --no-progress
+          }
+          if(-not (Test-Path $iscc)){ throw 'Inno Setup compiler not available' }
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          $src=(Resolve-Path 'verified\MH Analysis.exe').Path
+          $out=(Resolve-Path 'dist-installer').Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" 'source\installer\MHAnalysis.iss'
+          if($LASTEXITCODE -ne 0){ throw "ISCC failed with code $LASTEXITCODE" }
+          $setup=Join-Path $out 'MH-Analysis-Setup-V81.6.exe'
+          if(-not (Test-Path $setup)){ throw 'Installer output missing' }
+          Get-FileHash $setup -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *MH-Analysis-Setup-V81.6.exe" } | Set-Content -Encoding ascii (Join-Path $out 'SHA256SUMS.txt')
+
+      - name: Installer smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $setup=(Resolve-Path 'dist-installer\MH-Analysis-Setup-V81.6.exe').Path
+          $testRoot=Join-Path $env:TEMP 'MHAnalysisInstallerSmoke'
+          Remove-Item $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
+          $p=Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$testRoot" -Wait -PassThru
+          if($p.ExitCode -ne 0){ throw "Installer silent install failed: $($p.ExitCode)" }
+          $installed=Join-Path $testRoot 'MH Analysis.exe'
+          if(-not (Test-Path $installed)){ throw 'Installed EXE missing' }
+          if((Get-Item $installed).Length -lt 1000000){ throw 'Installed EXE unexpectedly small' }
+          $unins=Get-ChildItem $testRoot -Filter 'unins*.exe' | Select-Object -First 1
+          if(-not $unins){ throw 'Uninstaller missing' }
+          $u=Start-Process -FilePath $unins.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if($u.ExitCode -ne 0){ throw "Uninstall failed: $($u.ExitCode)" }
+          Write-Host 'PASS installer install/uninstall smoke test'
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-Setup-V81.6
+          path: |
+            dist-installer/MH-Analysis-Setup-V81.6.exe
+            dist-installer/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
