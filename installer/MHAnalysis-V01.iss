@@ -40,7 +40,7 @@ VersionInfoVersion=0.1.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=MH Analysis Installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion=0.1.0.0
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
