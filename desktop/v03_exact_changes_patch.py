@@ -1,7 +1,6 @@
 from pathlib import Path
 
 # Apply ONLY requested V.03 changes after existing Records/MT5 restore patches.
-
 p=Path('chrome_host.go'); s=p.read_text(encoding='utf-8')
 s=s.replace('chSetForegroundWindow   = chUser32.NewProc("SetForegroundWindow")', 'chSetForegroundWindow   = chUser32.NewProc("SetForegroundWindow")\n\tchSetFocus              = chUser32.NewProc("SetFocus")')
 s=s.replace('chEXAppWindow   = 0x00040000', 'chEXAppWindow   = 0x00040000\n\tchEXToolWindow  = 0x00000080')
@@ -14,7 +13,6 @@ s=s.replace(needle,replacement,1)
 s=s.replace('chShowWindowAsync.Call(chAnalysisWnd, chSWShow)', 'chShowWindowAsync.Call(chAnalysisWnd, chSWShow)\n\t\tchSetFocus.Call(chAnalysisWnd)', 1)
 p.write_text(s,encoding='utf-8')
 
-# Records: custom themed centered Clear/Cancel confirmation and exact footer.
 p=Path('web/records.js'); s=p.read_text(encoding='utf-8')
 old="""  if(!confirm(`Delete saved Records for ${label}?\\n\\nThis resets MH Analysis records only. It does not delete MT5 account history.`))return;"""
 new="""  if(!(await mhRecordsConfirm(`Delete saved Records for ${label}?`, 'This resets MH Analysis records only. It does not delete MT5 account history.')))return;"""
@@ -26,8 +24,7 @@ function mhRecordsConfirm(title,detail){
     const old=document.getElementById('mhRecordsConfirm');if(old)old.remove();
     const wrap=document.createElement('div');wrap.id='mhRecordsConfirm';wrap.className='mhRecordsConfirm';
     wrap.innerHTML=`<div class="mhRecordsConfirmCard" role="dialog" aria-modal="true"><div class="mhRecordsConfirmTag">MH ANALYSIS • RECORDS</div><h3>${esc(title)}</h3><p>${esc(detail)}</p><div class="mhRecordsConfirmActions"><button class="clear" type="button">CLEAR</button><button class="cancel" type="button">CANCEL</button></div></div>`;
-    document.body.appendChild(wrap);
-    const done=v=>{wrap.remove();resolve(v)};
+    document.body.appendChild(wrap);const done=v=>{wrap.remove();resolve(v)};
     wrap.querySelector('.clear').onclick=()=>done(true);wrap.querySelector('.cancel').onclick=()=>done(false);
   });
 }
@@ -40,10 +37,10 @@ s=s.replace('<span>Outcomes come from your attached MT5 EA trade_events.jsonl �
 s=s.replace('<link rel="stylesheet" href="/records-layout-fix.css" />','<link rel="stylesheet" href="/records-layout-fix.css" />\n<link rel="stylesheet" href="/v03.css" />')
 p.write_text(s,encoding='utf-8')
 
-# Main footer exact copyright and V.03 stylesheet.
 p=Path('web/index.html'); s=p.read_text(encoding='utf-8')
 s=s.replace('<link rel="stylesheet" href="/update-v001.css" />','<link rel="stylesheet" href="/update-v001.css" />\n<link rel="stylesheet" href="/v03.css" />')
 s=s.replace('<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.02</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.03</div>')
+s=s.replace('<script src="/auth.js"></script>','<script src="/auth.js"></script>\n<script src="/v03.js"></script>')
 footer='<footer class="mhMainCopyright">MH ANALYSIS by Muhammad Hammad Shaukat — © 2026. All Rights Reserved.</footer>'
 if footer not in s: s=s.replace('</div>\n<script src="/lightweight-charts.standalone.production.js"></script>', '</div>\n'+footer+'\n<script src="/lightweight-charts.standalone.production.js"></script>',1)
 p.write_text(s,encoding='utf-8')
