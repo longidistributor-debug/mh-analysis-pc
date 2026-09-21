@@ -37,6 +37,17 @@ jobs:
           if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
           if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
           if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
+      - name: Repair secure Windows device identity source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='license_auth.go'
+          $s=Get-Content -Raw $p
+          $bad='SOFTWARE\\Microsoft\\Cryptography'
+          $good='SOFTWARE\Microsoft\Cryptography'
+          if($s.Contains($bad)){$s=$s.Replace($bad,$good)}
+          if(-not $s.Contains($good)){throw 'MachineGuid registry path repair failed'}
+          [IO.File]::WriteAllText((Resolve-Path $p),$s,(New-Object Text.UTF8Encoding($false)))
       - name: Format and compile
         shell: powershell
         run: |
