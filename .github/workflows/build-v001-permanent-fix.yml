@@ -20,7 +20,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'; function P([string]$p){Write-Host "APPLY $p";python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
           foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py','desktop/version_v002_true_single_frame_patch.py','desktop/version_v001_final_exact_behavior_patch.py','desktop/version_v001_login_controls_regression_patch.py')){P $p}
-          $u=Get-Content -Raw updater.go;$u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.01"';Set-Content -Encoding UTF8 updater.go $u
+          $u=Get-Content -Raw updater.go;$u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.02"';Set-Content -Encoding UTF8 updater.go $u
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
           node --check web/auth.js; node --check web/update-v001.js
       - name: Full V.02 runtime contract audit
@@ -30,7 +30,7 @@ jobs:
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
           $errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
-          Need ($u.Contains('mhPublicVersionV001 = "V.01"')) 'version exactly V.02'
+          Need ($u.Contains('mhPublicVersionV001 = "V.02"')) 'version exactly V.02'
           Need ($a.Contains('MH_V002_RUNTIME_ACCEPTANCE_FIX')) 'latest V.02 runtime implementation present'
           Need (-not ($a -match 'show\("login_required"\);\s*status\(false\);')) 'fresh launch cannot auto-consume saved auth session'
           Need ($a.Contains('show("login_required")')) 'Account Login remains present'
@@ -45,6 +45,12 @@ jobs:
           Need ($h.Contains('MT5')) 'MT5 integration retained'
           Need (($h.Contains('Signal Link')) -or ($h.Contains('WhatsApp'))) 'WhatsApp/Signal Link integration retained'
           Need (($a.Contains('login')) -and ($a.Contains('password'))) 'username/password login logic retained'
+          Need ($a.Contains('mhManualLoginV002 = false')) 'fresh-process auth flag starts locked'
+          Need ($a.Contains('if (!mhManualLoginV002) { show("login_required"); return; }')) 'saved backend session cannot bypass fresh login'
+          Need ($h.Contains('chSetEmbeddedVisible(analysis, which==1 || which==3)')) 'MH Analysis and inline Records switching retained'
+          Need ($h.Contains('chSetEmbeddedVisible(whatsapp, which==2)')) 'WhatsApp switching retained'
+          Need ($h.Contains('chSetEmbeddedVisible(mt5, which==4)')) 'MT5 switching retained'
+          Need (-not ($h -match 'uintptr\(-crop\)')) 'negative browser crop removed'
           if($errors.Count -gt 0){Write-Host '--- ALL CONTRACT FAILURES ---';$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("V.02 audit failed with {0} issue(s)" -f $errors.Count)}
           Write-Host 'PASS: COMPLETE V.02 RUNTIME CONTRACT AUDIT'
       - name: Build V.02
@@ -53,7 +59,7 @@ jobs:
           set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
           mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
           sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
-          printf '{"version":"V.01","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 runtime acceptance"}\n' "$HASH" > dist/update.json; printf 'V.01\n' > dist/VERSION
+          printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 runtime acceptance"}\n' "$HASH" > dist/update.json; printf 'V.02\n' > dist/VERSION
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
@@ -69,8 +75,8 @@ jobs:
             dist/update.json
             dist/VERSION
           retention-days: 90
-      - name: Publish corrected V.01 current update channel
+      - name: Publish V.02 mandatory update channel
         shell: bash
         run: |
           set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_corrected;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 runtime acceptance release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002_runtime;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 runtime acceptance release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
