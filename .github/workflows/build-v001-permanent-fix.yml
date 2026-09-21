@@ -40,7 +40,7 @@ jobs:
           Need ($i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')) 'update gate hidden by default'
           Need ($j.Contains('if(initial){hideGate()')) 'silent startup update pre-check present'
           Need ($j.Contains('if(j.required)')) 'verified newer mandatory update path present'
-          Need (($u.Contains('chSetMandatoryUpdateLockV001')) -or ($j.Contains('setNativeLock')) -or ($j.Contains('mandatory'))) 'mandatory update locking path retained'
+          Need (($j.Contains('/api/update/apply')) -and ($j.Contains('required'))) 'mandatory update apply path retained'
           Need ($c.Contains('pointer-events:none!important')) 'hidden update overlay cannot block controls'
           Need ($h.Contains('chNormalizeEmbeddedTreeV001Final')) 'single outer frame normalization present'
           Need ($c.Contains('overflow:hidden!important')) 'update scrollbar suppressed'
