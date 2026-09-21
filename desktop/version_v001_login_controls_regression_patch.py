@@ -1,61 +1,97 @@
 from pathlib import Path
 import re
 
-MARK='MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'
+MARK='MH_V001_RUNTIME_ACCEPTANCE_FIX'
+
+# FINAL auth behavior: update precheck may run first, but when no newer mandatory
+# update exists the visible Account Login MUST remain until credentials are entered.
 p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
 
-# Manual login unlocks the current process; never reload into a saved server session.
-s=re.sub(r'(passInput\.value\s*=\s*"";\s*(?:\n\s*message\.textContent\s*=\s*"[^"]*";)?\s*\n\s*hide\(j\);)\s*\n\s*location\.reload\(\);',r'\1\n      // '+MARK+': manual login unlocks this process without reload.',s,count=1)
+# Successful manual login unlocks current process without reload; reload was causing
+# saved backend session to immediately bypass the visible login lifecycle.
+s=re.sub(r'(passInput\.value\s*=\s*"";\s*\n\s*hide\(j\);)\s*\n\s*location\.reload\(\);',r'\1\n      // '+MARK+': manual login unlocks this running process.',s,count=1)
 
-# The final exact-behavior patch owns startup/update precheck. Enforce fresh login
-# at the end of that precheck instead of depending on a legacy recurring timer.
-# Existing backend session may remain for saved data, but it must never bypass the
-# visible username/password prompt on a new EXE process.
+# Remove startup auto-authorization. Persistent backend/app data is NOT deleted.
+s=re.sub(r'(build\(\);\s*\n\s*show\("login_required"\);)\s*\n\s*status\(false\);',r'\1\n  // '+MARK+': never consume an old server session on fresh EXE startup.',s,count=1)
+
+# Periodic validation only after manual login has hidden the overlay.
+s=s.replace('setInterval(() => status(false), 4 * 60 * 1000);','setInterval(() => { if (!overlay?.classList.contains("show")) status(false); }, 4 * 60 * 1000);')
+
+# If update-aware bootstrap exists after earlier patches, force login only when the
+# mandatory-update gate is not active. Never hide login merely because /status has
+# an old authorized session.
 if 'async function mhV001Bootstrap' in s:
-    # Remove immediate auth status calls inside bootstrap only.
     start=s.index('async function mhV001Bootstrap')
     end=s.find('\n}',start)
-    if end < 0: raise SystemExit('bootstrap end missing')
-    end += 2
-    block=s[start:end]
-    block=re.sub(r'(?m)^\s*showChecking\([^\n]*\);\s*\n?','',block)
-    block=re.sub(r'(?m)^\s*status\(false\);\s*\n?','',block)
-    # Insert login after update verification path completes. If a verified required
-    # update exists, update JS/native lock remains in control and login stays behind it.
-    if MARK not in block:
-        pos=block.rfind('}')
-        block=block[:pos]+'  show("login_required");\n  // '+MARK+': fresh EXE always requires username + password; persistent app data untouched.\n'+block[pos:]
-    s=s[:start]+block+s[end:]
-else:
-    # Fallback for older generated auth: normalize final startup sequence.
-    s=re.sub(r'(?m)^\s*showChecking\([^\n]*\);\s*\n?','',s)
-    # Remove only startup immediate status call, not status() function body/calls used after login.
-    matches=list(re.finditer(r'(?m)^\s*status\(false\);\s*$',s))
-    if matches:
-        m=matches[-1]; s=s[:m.start()]+'  show("login_required");\n  // '+MARK+': fresh EXE login enforced; saved app data untouched.\n'+s[m.end():]
-    elif 'show("login_required")' not in s:
-        raise SystemExit('no safe final auth bootstrap anchor found')
+    if end>start:
+        block=s[start:end+2]
+        block=re.sub(r'(?m)^\s*status\(false\);\s*\n?','',block)
+        block=re.sub(r'(?m)^\s*showChecking\([^\n]*\);\s*\n?','',block)
+        if 'show("login_required")' not in block:
+            pos=block.rfind('}')
+            block=block[:pos]+'  if(!document.getElementById("mhMandatoryUpdateV001") || document.getElementById("mhMandatoryUpdateV001").classList.contains("mhUpdateHiddenV001")) show("login_required");\n'+block[pos:]
+        s=s[:start]+block+s[end+2:]
 
 if MARK not in s: s='// '+MARK+'\n'+s
 p.write_text(s,encoding='utf-8')
 
-# Hidden update overlay cannot swallow toolbar/login controls.
+# Restore original host geometry from V80.9 after later chrome-crop patches. This
+# removes the white bottom strip and guarantees the native toolbar remains visible.
+p=Path('chrome_host.go')
+s=p.read_text(encoding='utf-8')
+
+# Neutralize the later crop-layout helper by making it use the original content
+# rectangle below the toolbar, with no negative-Y child placement or artificial H.
+pat=r'func chLayoutUpdateChromeV001Final\(hwnd uintptr, w, h int32\) \{.*?\n\}'
+replacement=r'''func chLayoutUpdateChromeV001Final(hwnd uintptr, w, h int32) {
+	if hwnd == 0 { return }
+	// MH_V001_RUNTIME_ACCEPTANCE_FIX: original V80.9 geometry, no negative crop.
+	chNormalizeEmbeddedTreeV001Final(hwnd)
+	chMoveWindow.Call(hwnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1)
+}'''
+s,n=re.subn(pat,replacement,s,count=1,flags=re.S)
+if n!=1: raise SystemExit('final chrome layout helper missing')
+
+# Replace final resize routine with one authoritative rectangle for all views and
+# explicitly restore the four top buttons + WhatsApp Signal Link behavior.
+start=s.find('func chResizeChildren() {')
+end=s.find('\nfunc chApplyDesiredBrowserView(',start)
+if start<0 or end<0: raise SystemExit('resize/apply anchors missing')
+resize=r'''func chResizeChildren() {
+	if hostHWND == 0 { return }
+	var r chRect
+	chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
+	w := int32(r.R-r.L); clientH := int32(r.B-r.T); h := clientH-int32(barH)
+	if w<1 { w=1 }; if h<1 { h=1 }
+	layout := func(child uintptr) { if child!=0 { chMoveWindow.Call(child,0,uintptr(barH),uintptr(w),uintptr(h),1) } }
+	layout(chAnalysisWnd); layout(chWhatsappWnd); layout(chRecordsWnd); layout(chMT5Wnd)
+	if btnAnalysis!=0 { chMoveWindow.Call(btnAnalysis,8,7,140,30,1); chShowWindow.Call(btnAnalysis,chSWShow) }
+	if btnWhatsapp!=0 { chMoveWindow.Call(btnWhatsapp,156,7,140,30,1); chShowWindow.Call(btnWhatsapp,chSWShow) }
+	if btnRecords!=0 { chMoveWindow.Call(btnRecords,304,7,140,30,1); chShowWindow.Call(btnRecords,chSWShow) }
+	if btnMT5!=0 { chMoveWindow.Call(btnMT5,452,7,140,30,1); chShowWindow.Call(btnMT5,chSWShow) }
+	chViewMu.Lock(); which:=chDesiredView; chViewMu.Unlock()
+	if chSignalLinkBtn!=0 { chMoveWindow.Call(chSignalLinkBtn,600,7,145,30,1); if which==2 { chShowWindow.Call(chSignalLinkBtn,chSWShow) } else { chShowWindow.Call(chSignalLinkBtn,chSWHide) } }
+}'''
+s=s[:start]+resize+s[end:]
+p.write_text(s,encoding='utf-8')
+
+# Hidden update gate must occupy nothing and intercept nothing.
 p=Path('web/update-v001.css')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    s+='''\n/* MH_V001_LOGIN_CONTROLS_REGRESSION_FIX */
-#mhMandatoryUpdateV001.mhUpdateHiddenV001{display:none!important;visibility:hidden!important;pointer-events:none!important;}
-#mhMandatoryUpdateV001:not(.mhUpdateHiddenV001){pointer-events:auto!important;}
+    s+='''\n/* MH_V001_RUNTIME_ACCEPTANCE_FIX */
+#mhMandatoryUpdateV001.mhUpdateHiddenV001{display:none!important;visibility:hidden!important;pointer-events:none!important;width:0!important;height:0!important;overflow:hidden!important;}
 '''
 p.write_text(s,encoding='utf-8')
 
-# Lock toolbar only when backend verifies a genuinely newer mandatory version.
+# Keep release exactly V.01 and toolbar lock reversible only for verified newer update.
 p=Path('updater.go')
 s=p.read_text(encoding='utf-8')
+s=re.sub(r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.01"',s)
 pat=r'(required\s*:=\s*m\.Mandatory\s*&&\s*mhNewerVersionV001\(m\.Version,\s*mhPublicVersionV001\)\s*\n)(?:\s*if\s+required\s*\{\s*go\s+chSetMandatoryUpdateLockV001\(true\)\s*\}|\s*go\s+chSetMandatoryUpdateLockV001\([^\n]+\))?'
 m=re.search(pat,s)
-if not m: raise SystemExit('required-version calculation missing')
-s=s[:m.start()]+m.group(1)+'    go chSetMandatoryUpdateLockV001(required) // '+MARK+s[m.end():]
+if m: s=s[:m.start()]+m.group(1)+'    go chSetMandatoryUpdateLockV001(required) // '+MARK+s[m.end():]
 p.write_text(s,encoding='utf-8')
-print(MARK+': V.01 fresh login enforced at final update-aware bootstrap; data preserved; toolbar lock reversible')
+
+print(MARK+': V.01 login every launch + original toolbar/buttons + no white bottom strip + saved data preserved')
