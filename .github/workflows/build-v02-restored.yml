@@ -1,4 +1,4 @@
-name: Build and Publish MH Analysis V.07
+name: Build and Publish MH Analysis V.08
 on:
   workflow_dispatch:
   push:
@@ -11,16 +11,18 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Apply and permanently promote V.07
+      - name: Apply V.08 correction to real source
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          if((Get-Content -Raw VERSION).Trim() -eq 'V.06'){ python desktop/v07_single_taskbar_patch.py }
-      - name: V.07 contract checks
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.08'){ python desktop/v08_restore_view_keyboard_patch.py }
+      - name: V.08 contract checks
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -28,14 +30,27 @@ jobs:
           $a=Get-Content -Raw web/auth.js
           $u=Get-Content -Raw updater.go
           $i=Get-Content -Raw web/index.html
-          if((Get-Content -Raw VERSION).Trim() -ne 'V.07'){throw 'VERSION is not V.07'}
-          if($u -notmatch 'mhPublicVersionV001 = "V.07"'){throw 'updater is not V.07'}
-          if($i -notmatch 'id="mhUpdateVersionV001">V.07<'){throw 'V.07 UI identity missing'}
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.08'){throw 'VERSION is not V.08'}
+          if($u -notmatch 'mhPublicVersionV001 = "V.08"'){throw 'updater is not V.08'}
+          if($i -notmatch 'id="mhUpdateVersionV001">V.08<'){throw 'V.08 UI identity missing'}
           if($a -notmatch 'id="mhLicenseUser" type="text"'){throw 'username input missing'}
           if($a -notmatch 'id="mhLicensePass" type="text" class="mhSecurePasswordInput"'){throw 'password input missing'}
-          if($c -notmatch 'start-minimized'){throw 'child browser hidden startup missing'}
-          if($c -notmatch 'time.Sleep\(1200 \* time.Millisecond\)'){throw 'secondary child delayed startup missing'}
-          Write-Host 'PASS V.07 single-window/no-flicker contract'
+          if($c -notmatch 'chAttachThreadInput.Call\(hostThread, browserThread, 1\)'){throw 'proven native keyboard attachment missing'}
+          if($c -match 'chAttachThreadInput.Call\(hostThread, browserThread, 0\)'){throw 'V.06 detach regression still present'}
+          if($c -notmatch '"--window-size=1280,820"'){throw 'correct viewport geometry missing'}
+          if($c -match '"--start-minimized"'){throw 'V.07 distorted viewport startup still present'}
+          Write-Host 'PASS V.08 login keyboard + restored viewport contract'
+      - name: Permanently commit V.08 runtime source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add chrome_host.go updater.go VERSION web/index.html
+          if((git status --porcelain).Length -gt 0){
+            git commit -m 'Permanently promote MH Analysis runtime to V.08 [skip ci]'
+            git push origin HEAD:v02-restored-working-base
+          }
       - name: Syntax and compile
         shell: powershell
         run: |
@@ -55,21 +70,21 @@ jobs:
           Start-Sleep -Seconds 12
           if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-      - name: Build V.07 installer
+      - name: Build V.08 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
           $iss=Get-Content -Raw 'installer/MHAnalysis-V04.iss'
-          $iss=$iss.Replace('V.04','V.07').Replace('MH Analysis V.04.exe','MH Analysis V.07.exe')
-          Set-Content -Encoding UTF8 'installer/MHAnalysis-V07.iss' $iss
-          & $iscc 'installer/MHAnalysis-V07.iss'
+          $iss=$iss.Replace('V.04','V.08').Replace('MH Analysis V.04.exe','MH Analysis V.08.exe')
+          Set-Content -Encoding UTF8 'installer/MHAnalysis-V08.iss' $iss
+          & $iscc 'installer/MHAnalysis-V08.iss'
           if($LASTEXITCODE -ne 0){throw 'installer build failed'}
-          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.07.exe' | Select-Object -First 1
-          if(-not $installer){throw 'V.07 installer output not found'}
-          Copy-Item $installer.FullName 'dist/MH-Analysis-V07-Installer.exe' -Force
-      - name: Publish mandatory V.07 update
+          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.08.exe' | Select-Object -First 1
+          if(-not $installer){throw 'V.08 installer output not found'}
+          Copy-Item $installer.FullName 'dist/MH-Analysis-V08-Installer.exe' -Force
+      - name: Publish mandatory V.08 update
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -78,20 +93,19 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin mh-analysis-update-channel
           git worktree add update-channel origin/mh-analysis-update-channel
-          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V07.exe' -Force
-          $manifest=[ordered]@{version='V.07';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V07.exe';sha256=$sha;notes='MH Analysis V.07 single taskbar icon and no-flicker startup/shutdown fix.'}
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V08.exe' -Force
+          $manifest=[ordered]@{version='V.08';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V08.exe';sha256=$sha;notes='MH Analysis V.08 restores the correct viewport and fixes native login keyboard input.'}
           $json=$manifest | ConvertTo-Json
           [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),$json,(New-Object System.Text.UTF8Encoding($false)))
           Push-Location update-channel
-          git add MH-Analysis-V07.exe update.json
-          git commit -m 'Publish mandatory MH Analysis V.07 update'
+          git add MH-Analysis-V08.exe update.json
+          git commit -m 'Publish mandatory MH Analysis V.08 update'
           git push origin HEAD:mh-analysis-update-channel
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V07-Final
+          name: MH-Analysis-V08-Final
           path: |
-            dist/MH-Analysis-V07-Installer.exe
+            dist/MH-Analysis-V08-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
-# clean V.07 build trigger
