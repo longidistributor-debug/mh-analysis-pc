@@ -157,7 +157,18 @@ function setContextMeta(count,source='Market history'){
 function savedApiKey(){return backendSettings.has_api_key?'stored':''}
 async function refreshBackendSettings(){try{const r=await fetch('/api/settings',{cache:'no-store'}),j=await r.json();if(r.ok)backendSettings=j;return backendSettings}catch(_){return backendSettings}}
 async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allowCacheFallback=true,reason='refresh'}={}){
-  await refreshBackendSettings();
+  async function mhApplyCurrentVersion(){
+  try{
+    const v=await fetch('/api/update/version',{cache:'no-store'}).then(r=>r.json());
+    const cur=String(v.current||'').trim();
+    if(cur){
+      const ver=document.querySelector('.version'); if(ver) ver.textContent=cur+' (CH Shaukat Ali)';
+      const badge=document.getElementById('mhUpdateVersionV001'); if(badge) badge.textContent=cur;
+    }
+  }catch(_){}
+}
+await mhApplyCurrentVersion();
+await refreshBackendSettings();
   const accessKey=savedApiKey();
   if(!accessKey)throw new Error('Save your Access Key first.');
   const requestKey=`${targetSymbol}|${targetTimeframe}`;
