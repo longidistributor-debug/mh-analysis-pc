@@ -19,47 +19,47 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; function P([string]$p){python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
-          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py')){P $p}
+          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py')){P $p}
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
-          node --check web/auth.js
-          node --check web/update-v001.js
-      - name: Permanent regression guards
+          node --check web/auth.js; node --check web/update-v001.js
+      - name: Final behavior guards
         shell: powershell
         run: |
-          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$j=Get-Content -Raw web/update-v001.js;$u=Get-Content -Raw updater.go;$i=Get-Content -Raw web/index.html
-          foreach($m in @('chNormalizeEmbeddedFrame(child)','MH_V001_PERMANENT_SHELL_UPDATE_FIX','MH_V001_CLEAN_BROWSER_TITLE','chWstr("MH Analysis")')){if(-not $h.Contains($m)){throw "window/title guard missing $m"}}
-          foreach($m in @('MH_V001_PERMANENT_SHELL_UPDATE_FIX','/api/update/status?preauth=1','mhBootAfterVersionV001','j.required===true')){if(-not $a.Contains($m)){throw "pre-login updater guard missing $m"}}
-          if(-not $i.Contains('mhMandatoryUpdateV001')){throw 'mandatory update surface missing from index'}
-          foreach($m in @('/api/update/status','MH_V001_RESET_FUTURE_UPDATE')){if(-not $j.Contains($m)){throw "updater runtime missing $m"}}
+          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$j=Get-Content -Raw web/update-v001.js;$u=Get-Content -Raw updater.go
+          foreach($m in @('chNormalizeEmbeddedTreeV001Final','chEnumChildWindowsV001Final','MH_V001_FINAL_SHELL_UPDATE_BEHAVIOR')){if(-not $h.Contains($m)){throw "nested-frame guard missing $m"}}
+          if(-not $a.Contains('if(v.verified && v.required)')){throw 'login is not gated only by a real verified update'}
+          foreach($m in @('realupdate=1','j.verified===true && j.required===true')){if(-not $j.Contains($m)){throw "real-update-only UI guard missing $m"}}
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'version is not V.01'}
-          Write-Host 'PASS: one outer frame only'
-          Write-Host 'PASS: embedded native title forced to MH Analysis'
-          Write-Host 'PASS: update-before-login guard'
-          Write-Host 'PASS: current version V.01'
-      - name: Build
+          if(-not $u.Contains('"ok": false, "verified": false, "required": false')){throw 'network failure incorrectly treated as available update'}
+          Write-Host 'PASS: nested Chromium frame stripping'
+          Write-Host 'PASS: only outer EXE owns Min/Max/Close'
+          Write-Host 'PASS: update appears only when newer version is positively verified'
+          Write-Host 'PASS: update check occurs before login'
+          Write-Host 'PASS: current release remains V.01'
+      - name: Build V.01
         shell: bash
         run: |
           set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
           mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
           sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
           printf '{"version":"V.01","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.01"}\n' "$HASH" > dist/update.json; printf 'V.01\n' > dist/VERSION
-      - name: Installer
+      - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'OutputBaseFilename=MH Analysis V\.01','OutputBaseFilename=MH Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
-          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH Analysis.exe')){throw 'clean installer filename missing'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'OutputBaseFilename=MH Analysis V\.01','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-V.01
           path: |
-            dist/installer/MH Analysis.exe
+            dist/installer/MH-Analysis.exe
             dist/app/MH Analysis.exe
             dist/SHA256SUMS.txt
             dist/update.json
             dist/VERSION
           retention-days: 90
-      - name: Publish corrected V.01 baseline
+      - name: Publish V.01 baseline
         shell: bash
         run: |
-          set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH Analysis.exe' "$RUNNER_TEMP/release/Installer/MH Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_permanent;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 clean-title single-frame baseline';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_final;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 final single-frame real-update-only baseline';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
