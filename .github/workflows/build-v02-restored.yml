@@ -1,4 +1,4 @@
-name: Build and Publish MH Analysis V.03
+name: Build and Publish MH Analysis V.04
 on:
   workflow_dispatch:
   push:
@@ -15,7 +15,7 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Restore proven runtime then apply only requested V.03 changes
+      - name: Restore proven runtime and apply V.04 changes
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -29,7 +29,8 @@ jobs:
           python desktop/native_mt5_prefill_patch.py
           python desktop/v03_exact_changes_patch.py
           python desktop/v03_wiring_patch.py
-      - name: Exact V.03 contract checks
+          python desktop/v04_keyboard_version_patch.py
+      - name: Exact V.04 contract checks
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -39,19 +40,19 @@ jobs:
           $i=Get-Content -Raw web/index.html
           $u=Get-Content -Raw updater.go
           $m=Get-Content -Raw main.go
-          if((Get-Content -Raw VERSION).Trim() -ne 'V.03'){throw 'VERSION is not V.03'}
-          if($u -notmatch 'mhPublicVersionV001 = "V.03"'){throw 'updater current version is not V.03'}
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.04'){throw 'VERSION is not V.04'}
+          if($u -notmatch 'mhPublicVersionV001 = "V.04"'){throw 'updater current version is not V.04'}
+          if($c -notmatch 'chAttachThreadInput'){throw 'cross-process keyboard input fix missing'}
           if($c -notmatch 'chEXToolWindow'){throw 'embedded browser taskbar suppression missing'}
-          if($c -notmatch 'chSetFocus'){throw 'embedded browser keyboard focus fix missing'}
           if($c -notmatch '!licAuthorized'){throw 'pre-login native navigation guard missing'}
           if($m -notmatch 'licNavNoticeHandler'){throw 'login-required notice route missing'}
           if($r -notmatch 'mhRecordsConfirm'){throw 'themed records clear confirmation missing'}
           if($rh -notmatch 'MH ANALYSIS by Muhammad Hammad Shaukat — © 2026. All Rights Reserved.'){throw 'records footer incorrect'}
           if($i -notmatch 'mhMainCopyright'){throw 'main footer missing'}
-          if($i -notmatch '/v03.js'){throw 'V.03 login notice UI missing'}
+          if($i -notmatch 'id="mhUpdateVersionV001">V.04<'){throw 'V.04 update UI identity missing'}
           if($c -notmatch 'idRecords\s*=\s*1103'){throw 'Records command ID incorrect'}
           if($c -notmatch 'idMT5\s*=\s*1104'){throw 'MT5 command ID incorrect'}
-          Write-Host 'PASS exact V.03 requested contract'
+          Write-Host 'PASS exact V.04 requested contract'
       - name: Syntax and compile
         shell: powershell
         run: |
@@ -71,18 +72,18 @@ jobs:
           Start-Sleep -Seconds 10
           if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-      - name: Build V.03 installer
+      - name: Build V.04 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
-          & $iscc 'installer/MHAnalysis-V03.iss'
+          & $iscc 'installer/MHAnalysis-V04.iss'
           if($LASTEXITCODE -ne 0){throw 'installer build failed'}
-          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.03.exe' | Select-Object -First 1
-          if(-not $installer){throw 'V.03 installer output not found'}
-          Copy-Item $installer.FullName 'dist/MH-Analysis-V03-Installer.exe' -Force
-      - name: Publish mandatory V.03 update channel for existing V.02 users
+          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.04.exe' | Select-Object -First 1
+          if(-not $installer){throw 'V.04 installer output not found'}
+          Copy-Item $installer.FullName 'dist/MH-Analysis-V04-Installer.exe' -Force
+      - name: Publish mandatory V.04 update channel for existing V.03 users
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -91,18 +92,19 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin mh-analysis-update-channel
           git worktree add update-channel origin/mh-analysis-update-channel
-          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V03.exe' -Force
-          $manifest=[ordered]@{version='V.03';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V03.exe';sha256=$sha;notes='MH Analysis V.03 required update.'}
-          $manifest | ConvertTo-Json | Set-Content -Encoding UTF8 'update-channel/update.json'
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V04.exe' -Force
+          $manifest=[ordered]@{version='V.04';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V04.exe';sha256=$sha;notes='MH Analysis V.04 required update.'}
+          $json=$manifest | ConvertTo-Json
+          [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),$json,(New-Object System.Text.UTF8Encoding($false)))
           Push-Location update-channel
-          git add MH-Analysis-V03.exe update.json
-          git commit -m 'Publish mandatory MH Analysis V.03 update'
+          git add MH-Analysis-V04.exe update.json
+          git commit -m 'Publish mandatory MH Analysis V.04 update'
           git push origin HEAD:mh-analysis-update-channel
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V03-Final
+          name: MH-Analysis-V04-Final
           path: |
-            dist/MH-Analysis-V03-Installer.exe
+            dist/MH-Analysis-V04-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
