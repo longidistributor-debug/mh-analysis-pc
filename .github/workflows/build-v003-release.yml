@@ -1,0 +1,117 @@
+name: Build MH Analysis V.03 Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v003-release']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v003-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained systems plus V.03
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js; node --check web/records.js; node --check web/auth.js; node --check web/update-v001.js
+
+      - name: V.03 guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $u=Get-Content -Raw updater.go; $h=Get-Content -Raw chrome_host.go; $i=Get-Content -Raw web/index.html
+          foreach($m in @('mhPublicVersionV001 = "V.03"','mh-analysis-update-channel/update.json')){if(-not $u.Contains($m)){throw "V.03 updater guard $m"}}
+          foreach($m in @('MH_V003_PRIVACY_TITLE','chWDAExcludeFromCaptureV816','WDA_MONITOR fallback')){if(-not $h.Contains($m)){throw "V.03 privacy guard $m"}}
+          if($h.Contains('MH%20Analysis(')){throw 'timestamp/spam native title remains'}
+          if(-not $i.Contains('V.03 AUTO CYCLE')){throw 'V.03 UI version missing'}
+
+      - name: Build app
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
+          mkdir -p 'dist/app' 'dist/installer'
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
+          sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.03",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.03"
+          }
+          EOF
+          printf 'V.03\n' > dist/VERSION
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V003.iss'
+          if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+          if(-not(Test-Path 'dist\installer\MH Analysis V.03.exe')){throw 'V.03 installer missing'}
+
+      - name: Silent upgrade preservation test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $target=Join-Path $env:RUNNER_TEMP 'MHAnalysisInstalled'; New-Item -ItemType Directory -Force -Path $target|Out-Null
+          Set-Content (Join-Path $target 'preserve-test.dat') 'KEEP'
+          $p=Start-Process (Join-Path $PWD 'dist\installer\MH Analysis V.03.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0){throw "Setup failed $($p.ExitCode)"}
+          if(-not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'installed EXE missing'}
+          if(-not(Test-Path (Join-Path $target 'preserve-test.dat'))){throw 'existing data removed'}
+
+      - name: Upload V.03
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.03
+          path: |
+            dist/installer/MH Analysis V.03.exe
+            dist/app/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+          retention-days: 90
+
+      - name: Publish V.03 update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release/Installer"
+          cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe"
+          cp 'dist/installer/MH Analysis V.03.exe' "$RUNNER_TEMP/release/Installer/MH Analysis V.03.exe"
+          cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v003_release; git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r "$RUNNER_TEMP/release/." .; git add .
+          git commit -m 'MH Analysis V.03 privacy and clean installer release'
+          git push --force origin HEAD:mh-analysis-update-channel
+          git push --force origin HEAD:final-current-v796
