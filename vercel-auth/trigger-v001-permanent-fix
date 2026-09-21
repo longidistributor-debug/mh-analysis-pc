@@ -1,1 +1,1 @@
-Rebuild final MH Analysis V.01 after correcting nested-child frame patch. Only verified newer update blocks before login. Installer MH-Analysis.exe. Retry 2.
+Final MH Analysis V.01 build: nested child frame stripped, verified newer update only before login, no fake update on check failure, installer MH-Analysis.exe. Retry 3.
