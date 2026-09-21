@@ -27,10 +27,12 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows/registry"
 )
 
 const licDefaultBaseURL = "https://mh-analysis.vercel.app"
-const licAppVersion = "80.2"
+const licAppVersion = "V.12"
 
 type licDataBlob struct {
 	cbData uint32
@@ -194,21 +196,46 @@ func licReadProtected(path string, v any) error {
 	return json.Unmarshal(raw, v)
 }
 
-func licEnsureDevice() (*licDevice, error) {
-	var disk licDeviceDisk
-	if err := licReadProtected(licDevicePath(), &disk); err == nil && disk.PrivateKey != "" {
-		raw, err := base64.StdEncoding.DecodeString(disk.PrivateKey)
-		if err == nil && len(raw) == ed25519.PrivateKeySize {
-			priv := ed25519.PrivateKey(raw)
-			pub := priv.Public().(ed25519.PublicKey)
-			der, err := x509.MarshalPKIXPublicKey(pub)
-			if err != nil {
-				return nil, err
-			}
-			sum := sha256.Sum256(der)
-			return &licDevice{Private: priv, Public: pub, DER: der, ID: hex.EncodeToString(sum[:])}, nil
-		}
+func licStableMachineID() (string, error) {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\\Microsoft\\Cryptography`, registry.QUERY_VALUE)
+	if err != nil {
+		return "", fmt.Errorf("open MachineGuid: %w", err)
 	}
+	defer k.Close()
+	guid, _, err := k.GetStringValue("MachineGuid")
+	if err != nil || strings.TrimSpace(guid) == "" {
+		return "", errors.New("Windows MachineGuid is unavailable")
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(guid))))
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func licEnsureDevice() (*licDevice, error) {
+	machineID, err := licStableMachineID()
+	if err != nil {
+		return nil, err
+	}
+	path := licDevicePath()
+	var disk licDeviceDisk
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := licReadProtected(path, &disk); err != nil {
+			return nil, fmt.Errorf("existing device identity cannot be read: %w", err)
+		}
+		raw, err := base64.StdEncoding.DecodeString(disk.PrivateKey)
+		if err != nil || len(raw) != ed25519.PrivateKeySize {
+			return nil, errors.New("existing device identity is invalid")
+		}
+		priv := ed25519.PrivateKey(raw)
+		pub := priv.Public().(ed25519.PublicKey)
+		der, err := x509.MarshalPKIXPublicKey(pub)
+		if err != nil {
+			return nil, err
+		}
+		return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
+	} else if !os.IsNotExist(statErr) {
+		return nil, statErr
+	}
+
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, err
@@ -217,11 +244,10 @@ func licEnsureDevice() (*licDevice, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = licWriteProtected(licDevicePath(), licDeviceDisk{PrivateKey: base64.StdEncoding.EncodeToString(priv)}); err != nil {
+	if err = licWriteProtected(path, licDeviceDisk{PrivateKey: base64.StdEncoding.EncodeToString(priv)}); err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(der)
-	return &licDevice{Private: priv, Public: pub, DER: der, ID: hex.EncodeToString(sum[:])}, nil
+	return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
 }
 
 func licLoadSession() *licSession {
