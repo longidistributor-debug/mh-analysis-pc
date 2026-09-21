@@ -1,11 +1,11 @@
-name: Build MH Analysis V.01 Corrected Baseline
+name: Build MH Analysis V.02 Runtime Acceptance
 on:
   workflow_dispatch:
   push:
     branches: [records-mt5-local-build]
     paths: ['vercel-auth/trigger-v001-permanent-fix']
 permissions: {contents: write}
-concurrency: {group: mh-v001-corrected, cancel-in-progress: true}
+concurrency: {group: mh-v002-corrected, cancel-in-progress: true}
 jobs:
   build:
     runs-on: windows-latest
@@ -15,7 +15,7 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.2', cache: false}
-      - name: Apply complete system and corrected V.01 behavior
+      - name: Apply complete system and corrected V.02 behavior
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; function P([string]$p){Write-Host "APPLY $p";python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
@@ -23,15 +23,15 @@ jobs:
           $u=Get-Content -Raw updater.go;$u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.01"';Set-Content -Encoding UTF8 updater.go $u
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
           node --check web/auth.js; node --check web/update-v001.js
-      - name: Full V.01 contract audit
+      - name: Full V.02 runtime contract audit
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
           $errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
-          Need ($u.Contains('mhPublicVersionV001 = "V.01"')) 'version exactly V.01'
-          Need ($a.Contains('MH_V001_RUNTIME_ACCEPTANCE_FIX')) 'latest runtime login implementation present'
+          Need ($u.Contains('mhPublicVersionV001 = "V.01"')) 'version exactly V.02'
+          Need ($a.Contains('MH_V002_RUNTIME_ACCEPTANCE_FIX')) 'latest V.02 runtime implementation present'
           Need (-not ($a -match 'show\("login_required"\);\s*status\(false\);')) 'fresh launch cannot auto-consume saved auth session'
           Need ($a.Contains('show("login_required")')) 'Account Login remains present'
           Need ($i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')) 'update gate hidden by default'
@@ -45,23 +45,23 @@ jobs:
           Need ($h.Contains('MT5')) 'MT5 integration retained'
           Need (($h.Contains('Signal Link')) -or ($h.Contains('WhatsApp'))) 'WhatsApp/Signal Link integration retained'
           Need (($a.Contains('login')) -and ($a.Contains('password'))) 'username/password login logic retained'
-          if($errors.Count -gt 0){Write-Host '--- ALL CONTRACT FAILURES ---';$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("V.01 audit failed with {0} issue(s)" -f $errors.Count)}
-          Write-Host 'PASS: COMPLETE V.01 CONTRACT AUDIT'
-      - name: Build V.01
+          if($errors.Count -gt 0){Write-Host '--- ALL CONTRACT FAILURES ---';$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("V.02 audit failed with {0} issue(s)" -f $errors.Count)}
+          Write-Host 'PASS: COMPLETE V.02 RUNTIME CONTRACT AUDIT'
+      - name: Build V.02
         shell: bash
         run: |
           set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
           mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
           sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
-          printf '{"version":"V.01","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.01 corrected baseline"}\n' "$HASH" > dist/update.json; printf 'V.01\n' > dist/VERSION
+          printf '{"version":"V.01","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 runtime acceptance"}\n' "$HASH" > dist/update.json; printf 'V.01\n' > dist/VERSION
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=0.1.0';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=0.2.0';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.01
+          name: MH-Analysis-V.02
           path: |
             dist/installer/MH-Analysis.exe
             dist/app/MH Analysis.exe
@@ -73,4 +73,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_corrected;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 complete corrected baseline';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_corrected;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 runtime acceptance release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
