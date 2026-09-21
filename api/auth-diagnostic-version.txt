@@ -1,0 +1,3 @@
+MH Analysis auth diagnostics deployment marker
+version=2
+purpose=identify exact production login rejection without changing desktop client
