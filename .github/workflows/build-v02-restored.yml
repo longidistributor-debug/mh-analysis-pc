@@ -45,6 +45,9 @@ jobs:
           $a=Get-Content -Raw web/auth.js
           $m=Get-Content -Raw main.go
           $c=Get-Content -Raw chrome_host.go
+          $l=Get-Content -Raw license_auth.go
+          $i=Get-Content -Raw web/index.html
+          $u=Get-Content -Raw web/update-v001.js
           if($m -notmatch 'runChromeHost\(\)'){throw 'working Chrome host missing'}
           if($a -notmatch 'manualLoginThisProcess = false'){throw 'manual-login gate missing'}
           if($a -match 'show\("login_required"\);\s*status\(false\)'){throw 'startup login bypass detected'}
