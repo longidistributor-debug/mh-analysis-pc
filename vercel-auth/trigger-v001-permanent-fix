@@ -1,1 +1,1 @@
-Final MH Analysis V.01 build: nested child frame stripped, verified newer update only before login, no fake update on check failure, installer MH-Analysis.exe. Retry 3.
+MH Analysis V.02: permanently remove embedded Chromium second Minimize/Maximize/Close frame. Force browser WS_CHILD after SetParent and reassert during resize. Installer remains MH-Analysis.exe.
