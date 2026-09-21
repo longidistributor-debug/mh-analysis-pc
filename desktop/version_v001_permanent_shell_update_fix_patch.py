@@ -2,68 +2,86 @@ from pathlib import Path
 
 MARK='MH_V001_PERMANENT_SHELL_UPDATE_FIX'
 
-# 1) SINGLE WINDOW FRAME: re-assert content-only Chromium framing continuously.
+# 1) SINGLE WINDOW FRAME: permanently re-assert content-only framing.
 p=Path('chrome_host.go')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    # Ensure embedded child normalization happens not only on resize but also after
-    # Chromium navigation/login can recreate its non-client frame.
-    anchor='func chProtectionLoopV816() {\n\tfor {'
-    if anchor in s:
-        repl='''func chProtectionLoopV816() {\n\tfor {'''
-        s=s.replace(anchor,repl,1)
-        sleep='\t\tchBrandAndProtectNativeWindowsV816()\n\t\ttime.Sleep(250 * time.Millisecond)'
-        if sleep in s:
-            s=s.replace(sleep,'''\t\tchBrandAndProtectNativeWindowsV816()\n\t\t// '''+MARK+''': Chromium may restore a caption after navigation/login.\n\t\t// Strip it again so only the outer MH Analysis host owns Min/Max/Close.\n\t\tchMu.Lock()\n\t\tchildren := []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd}\n\t\tchMu.Unlock()\n\t\tfor _, child := range children { if child != 0 { chNormalizeEmbeddedFrame(child) } }\n\t\ttime.Sleep(250 * time.Millisecond)''',1)
-        else:
-            raise SystemExit('protection-loop body anchor missing')
-    else:
-        raise SystemExit('protection loop missing')
+    sleep='\t\tchBrandAndProtectNativeWindowsV816()\n\t\ttime.Sleep(250 * time.Millisecond)'
+    if sleep not in s:
+        raise SystemExit('protection-loop body anchor missing')
+    s=s.replace(sleep,'''\t\tchBrandAndProtectNativeWindowsV816()
+\t\t// MH_V001_PERMANENT_SHELL_UPDATE_FIX: Chromium/MT5 may restore a
+\t\t// non-client caption after navigation/login. Strip it continuously.
+\t\tchMu.Lock()
+\t\tchildren := []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd}
+\t\tchMu.Unlock()
+\t\tfor _, child := range children {
+\t\t\tif child != 0 { chNormalizeEmbeddedFrame(child) }
+\t\t}
+\t\ttime.Sleep(250 * time.Millisecond)''',1)
     s=s.replace('package main\n','package main\n\n// '+MARK+'\n',1)
     p.write_text(s,encoding='utf-8')
 
-# 2) UPDATE GATE BEFORE LOGIN: updater JS is loaded in the login page too.
-p=Path('web/login.html')
+# 2) UPDATE MUST PRECEDE LOGIN.
+# The login is dynamically created by auth.js inside index.html, so gate the auth
+# bootstrap itself rather than looking for a separate login.html.
+p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    # Reuse the exact mandatory-update UI/CSS already defined by the main page by
-    # loading a compact gate shell before auth becomes usable.
-    gate='''\n<!-- '''+MARK+''' -->\n<div id="mhUpdateGateV001" class="mhUpdateGateV001" style="display:none;position:fixed;inset:0;z-index:2147483647;background:#07101b;color:#fff;align-items:center;justify-content:center;font-family:Segoe UI,Arial,sans-serif">\n  <div style="width:min(560px,92vw);text-align:center">\n    <img src="/mh-logo.png" alt="MH" style="width:78px;height:78px;object-fit:contain">\n    <h1 style="margin:16px 0 4px">MH ANALYSIS</h1>\n    <div id="mhUpdateVersionV001" style="font-weight:700">V.01</div>\n    <h2 id="mhUpdateTitleV001">Checking required version…</h2>\n    <p id="mhUpdateSubV001">Please wait.</p>\n    <div id="mhUpdateStateV001"></div>\n    <div id="mhUpdateBarV001" style="height:8px;background:#253244;margin:16px 0"><i style="display:block;height:100%;width:0;background:#fff"></i></div>\n    <button id="mhUpdateBtnV001" type="button" style="display:none;width:100%;height:52px">Update Now - To Access</button>\n    <button id="mhUpdateRetryV001" type="button" style="display:none;width:100%;height:44px;margin-top:10px">Retry</button>\n  </div>\n</div>\n<script src="/update-v001.js"></script>\n'''
-    if '</body>' not in s: raise SystemExit('login body close missing')
-    s=s.replace('</body>',gate+'</body>',1)
-    p.write_text(s,encoding='utf-8')
-
-# 3) Login controls stay unusable until authoritative version verification says
-# current. If newer version exists, update gate remains and login never proceeds.
-p=Path('web/update-v001.js')
-s=p.read_text(encoding='utf-8')
-if MARK not in s:
-    s='// '+MARK+'\n'+s
-    s += r'''
-
-// MH_V001_PERMANENT_SHELL_UPDATE_FIX
-// Works on login.html and index.html. Authentication is not allowed to become
-// interactive until update status is positively verified.
-(function(){
-  const gate=document.getElementById('mhUpdateGateV001');
-  if(!gate)return;
-  const loginControls=()=>Array.from(document.querySelectorAll('input,button,select,textarea')).filter(x=>!x.id.startsWith('mhUpdate'));
-  function lockLogin(v){loginControls().forEach(x=>{x.disabled=!!v});}
-  async function preAuthVersionCheck(){
-    lockLogin(true); gate.style.display='flex';
+    old='''  build();
+  show("login_required");
+  status(false);
+  setInterval(() => status(false), 4 * 60 * 1000);
+})();'''
+    new=r'''  // MH_V001_PERMANENT_SHELL_UPDATE_FIX
+  // Version verification always happens BEFORE Account Login becomes visible.
+  // Same version => normal login. New mandatory version => update screen only.
+  async function mhPreLoginUpdateCheckV001(){
     try{
-      const r=await fetch('/api/update/status?preauth=1&t='+Date.now(),{cache:'no-store'});
-      if(!r.ok)throw new Error('version status '+r.status);
-      const j=await r.json();
-      if(!j || j.verified!==true)throw new Error('version not verified');
-      if(j.required===true){ gate.style.display='flex'; lockLogin(true); return; }
-      gate.style.display='none'; lockLogin(false);
-    }catch(e){ gate.style.display='flex'; lockLogin(true); }
+      const r=await rawFetch("/api/update/status?preauth=1&t="+Date.now(),{cache:"no-store"});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok || j.verified!==true) return {verified:false,required:true};
+      return {verified:true,required:j.required===true};
+    }catch{
+      return {verified:false,required:true};
+    }
   }
-  preAuthVersionCheck();
-  setInterval(preAuthVersionCheck,5000);
-})();
-'''
+
+  async function mhBootAfterVersionV001(){
+    const gate=document.getElementById("mhMandatoryUpdateV001");
+    if(gate) gate.classList.remove("mhUpdateHiddenV001");
+    const v=await mhPreLoginUpdateCheckV001();
+    if(!v.verified || v.required){
+      // Keep license/login completely behind the mandatory update surface.
+      if(overlay) overlay.classList.remove("show");
+      document.documentElement.classList.remove("mhLicenseLocked");
+      return;
+    }
+    if(gate) gate.classList.add("mhUpdateHiddenV001");
+    build();
+    show("login_required");
+    status(false);
+  }
+
+  mhBootAfterVersionV001();
+  setInterval(async()=>{
+    const v=await mhPreLoginUpdateCheckV001();
+    if(v.verified && !v.required){
+      if(!overlay || !overlay.classList.contains("show")){
+        status(false);
+      }
+    }
+  },4 * 60 * 1000);
+})();'''
+    if old not in s:
+        raise SystemExit('auth bootstrap anchor missing')
+    s=s.replace(old,new,1)
     p.write_text(s,encoding='utf-8')
 
-print(MARK+': permanent single native frame + update-before-login gate applied')
+# 3) Keep the update surface above every login/auth overlay.
+p=Path('web/update-v001.css')
+s=p.read_text(encoding='utf-8')
+s=s.replace('z-index:2147483646','z-index:2147483647')
+p.write_text(s,encoding='utf-8')
+
+print(MARK+': single outer frame + update-before-login bootstrap applied')
