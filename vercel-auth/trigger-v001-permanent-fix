@@ -1,1 +1,1 @@
-Build final MH Analysis V.01: one outer native frame only, update only when genuinely newer version exists, check before login, installer MH-Analysis.exe.
+Rebuild final MH Analysis V.01 after fixing nested-child native-frame patch anchor. Real update only before login. Installer MH-Analysis.exe.
