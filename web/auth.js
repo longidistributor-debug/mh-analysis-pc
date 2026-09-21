@@ -1,7 +1,7 @@
 // MH V.14 secure login gate — one bound Windows device, session survives in-app page navigation.
 (() => {
   const rawFetch = window.fetch.bind(window);
-  const SESSION_KEY = "mh_analysis_v14_logged_in";
+  const SESSION_KEY = "mh_analysis_logged_in";
   let overlay, message, form, userInput, passInput, button, meta;
   let checking = false;
   let manualLoginThisProcess = sessionStorage.getItem(SESSION_KEY) === "1";
@@ -20,5 +20,6 @@
   async function login(e){e?.preventDefault();const username=userInput.value.trim(),password=passInput.value;if(!username||!password){message.textContent="Enter username and password.";focusField(!username?"username":"password");return}button.disabled=true;button.textContent="VERIFYING…";message.textContent="Checking account, expiry and authorized device…";try{const r=await rawFetch("/api/license/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,password}),cache:"no-store"});const j=await r.json().catch(()=>({}));if(!r.ok||!j.authorized){show(j.code||j.error,j.message);return}manualLoginThisProcess=true;sessionStorage.setItem(SESSION_KEY,"1");passInput.value="";hide(j)}catch{show("internet_required")}finally{button.disabled=false;button.textContent="LOGIN"}}
   window.fetch=async function(input,init){const r=await rawFetch(input,init);try{const u=typeof input==="string"?input:input?.url||"";if((r.status===401||r.status===403)&&String(u).includes("/api/")&&!String(u).includes("/api/license/")){manualLoginThisProcess=false;sessionStorage.removeItem(SESSION_KEY);const j=await r.clone().json().catch(()=>({}));show(j.code||j.error||"authorization_required",j.message)}}catch{}return r};
   window.MHLicense={logout:async()=>{manualLoginThisProcess=false;sessionStorage.removeItem(SESSION_KEY);await rawFetch("/api/license/logout",{method:"POST"}).catch(()=>{});show("login_required")},status};
-  build();if(manualLoginThisProcess)status();else show("login_required");setInterval(()=>{if(manualLoginThisProcess)status()},4*60*1000);
+  async function mhApplyRuntimeVersion(){try{const v=await rawFetch("/api/update/version",{cache:"no-store"}).then(r=>r.json());const cur=String(v.current||"").trim();if(cur){const el=document.querySelector(".mhLoginVersion");if(el)el.textContent=cur;}}catch{}}
+  build();mhApplyRuntimeVersion();if(manualLoginThisProcess)status();else show("login_required");setInterval(()=>{if(manualLoginThisProcess)status()},4*60*1000);
 })();
