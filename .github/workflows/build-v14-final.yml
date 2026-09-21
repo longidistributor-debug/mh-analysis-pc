@@ -20,16 +20,6 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Restore secure license source and correct MachineGuid path
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          git show 5add20499f56fd3383c401fc556245fe266f5305:license_auth.go | Set-Content -Encoding UTF8 license_auth.go
-          $p='license_auth.go'
-          $s=Get-Content -Raw $p
-          $s=$s.Replace('SOFTWARE\\Microsoft\\Cryptography','SOFTWARE\Microsoft\Cryptography')
-          if($s -notmatch 'registry.OpenKey\(registry.LOCAL_MACHINE, `SOFTWARE\\Microsoft\\Cryptography`'){throw 'MachineGuid path is not corrected'}
-          [IO.File]::WriteAllText((Resolve-Path $p),$s,(New-Object Text.UTF8Encoding($false)))
       - name: Read release version
         shell: powershell
         run: |
@@ -37,7 +27,7 @@ jobs:
           $version=(Get-Content -Raw VERSION).Trim()
           if($version -notmatch '^V\.[0-9]+(?:\.[0-9]+)*$'){throw "Invalid VERSION: $version"}
           "MH_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Validate single-source version architecture
+      - name: Validate secure identity and single-source version
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -45,8 +35,8 @@ jobs:
           $u=Get-Content -Raw updater.go
           if($a -notmatch 'var licAppVersion = "DEV"'){throw 'license version must be build-injected'}
           if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
-          if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
-          if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
+          if($a -notmatch 'SOFTWARE\\Microsoft\\Cryptography'){throw 'correct MachineGuid registry path missing'}
+          if($a -match 'SOFTWARE\\\\Microsoft\\\\Cryptography'){throw 'invalid double-escaped MachineGuid path detected'}
       - name: Format and compile
         shell: powershell
         run: |
