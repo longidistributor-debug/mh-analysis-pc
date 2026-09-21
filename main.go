@@ -66,6 +66,10 @@ func main() {
 		return
 	}
 	mux := http.NewServeMux()
+	registerLicenseRoutes(mux)
+	mux.HandleFunc("/api/update/status", mhUpdateStatusHandlerV001)
+	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
+	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
 	mux.HandleFunc("/api/settings", settingsHandler)
 	mux.HandleFunc("/api/history", historyHandler)
 	mux.HandleFunc("/api/public-ticker", publicTickerHandler)
@@ -108,7 +112,7 @@ func main() {
 		return
 	}
 	serverURL = "http://" + ln.Addr().String() + "/"
-	server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	server = &http.Server{Handler: licenseGate(mux), ReadHeaderTimeout: 10 * time.Second}
 	go server.Serve(ln)
 	runChromeHost()
 	_ = server.Close()
