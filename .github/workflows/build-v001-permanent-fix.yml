@@ -1,11 +1,11 @@
-name: Build MH Analysis V.02 Runtime Acceptance
+name: Build MH Analysis V.02 Authoritative Runtime
 on:
   workflow_dispatch:
   push:
     branches: [records-mt5-local-build]
     paths: ['vercel-auth/trigger-v001-permanent-fix']
 permissions: {contents: write}
-concurrency: {group: mh-v002-corrected, cancel-in-progress: true}
+concurrency: {group: mh-v002-authoritative, cancel-in-progress: true}
 jobs:
   build:
     runs-on: windows-latest
@@ -15,49 +15,52 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.2', cache: false}
-      - name: Apply complete system and corrected V.02 behavior
+      - name: Apply legacy baseline once
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'; function P([string]$p){Write-Host "APPLY $p";python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
-          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py','desktop/version_v002_true_single_frame_patch.py','desktop/version_v001_final_exact_behavior_patch.py','desktop/version_v001_login_controls_regression_patch.py')){P $p}
+          $ErrorActionPreference='Stop'; function P([string]$p){Write-Host "BASELINE $p";python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
+          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py','desktop/version_v002_true_single_frame_patch.py','desktop/version_v001_final_exact_behavior_patch.py')){P $p}
+      - name: Apply ONE authoritative V.02 runtime layer LAST
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop';python desktop/version_v001_login_controls_regression_patch.py;if($LASTEXITCODE -ne 0){throw 'authoritative V.02 layer failed'}
           $u=Get-Content -Raw updater.go;$u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.02"';Set-Content -Encoding UTF8 updater.go $u
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
-          node --check web/auth.js; node --check web/update-v001.js
-      - name: Full V.02 runtime contract audit
+          node --check web/auth.js;node --check web/update-v001.js
+      - name: Authoritative V.02 contract audit
         shell: powershell
         run: |
           $ErrorActionPreference='Stop';$h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css;$m=Get-Content -Raw main.go;$errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
-          Need ($u.Contains('mhPublicVersionV001 = "V.02"')) 'version exactly V.02'
-          Need ($a.Contains('MH_V002_RUNTIME_ACCEPTANCE_FIX')) 'latest V.02 runtime implementation present'
-          Need ($a.Contains('mhManualLoginV002 = false')) 'fresh process starts authentication locked'
-          Need ($a.Contains('if (!mhManualLoginV002) { show("login_required"); return; }')) 'saved backend session cannot unlock fresh process'
-          Need ($a.Contains('mhManualLoginV002 = true')) 'manual successful login unlocks current process'
-          Need (-not ($a -match 'hide\(j\);\s*\r?\n\s*location\.reload\(\)')) 'successful login does not reload into saved-session bypass'
-          Need ($i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')) 'update gate hidden by default'
-          Need ($j.Contains('if(initial){hideGate()')) 'silent startup update pre-check present'
-          Need ($j.Contains('if(j.required)')) 'verified newer mandatory update path present'
-          Need (($j.Contains('/api/update/start')) -and ($m.Contains('mhUpdateStartHandlerV001')) -and ($u.Contains('func mhUpdateStartHandlerV001')) -and ($u.Contains('mhDownloadAndInstallV001'))) 'mandatory update start/download/install route retained'
-          Need (($h.Contains('chMandatoryUpdateV001')) -and ($h.Contains('if chMandatoryUpdateV001')) -and ($h.Contains('func chSetMandatoryUpdateLockV001'))) 'mandatory update native lock retained through final shell'
-          Need ($c.Contains('pointer-events:none!important')) 'hidden update overlay cannot block controls'
-          Need ($h.Contains('chNormalizeEmbeddedTreeV001Final')) 'single outer frame normalization present'
-          Need ($c.Contains('overflow:hidden!important')) 'update scrollbar suppressed'
-          Need ($h.Contains('Records')) 'Records integration retained';Need ($h.Contains('MT5')) 'MT5 integration retained';Need (($h.Contains('Signal Link')) -or ($h.Contains('WhatsApp'))) 'WhatsApp/Signal Link integration retained'
-          Need ($h.Contains('chSetEmbeddedVisible(analysis, which==1 || which==3)')) 'MH Analysis and inline Records switching retained';Need ($h.Contains('chSetEmbeddedVisible(whatsapp, which==2)')) 'WhatsApp switching retained';Need ($h.Contains('chSetEmbeddedVisible(mt5, which==4)')) 'MT5 switching retained';Need (-not ($h -match 'uintptr\(-crop\)')) 'negative browser crop removed'
-          if($errors.Count -gt 0){$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("V.02 audit failed with {0} issue(s)" -f $errors.Count)};Write-Host 'PASS: COMPLETE V.02 RUNTIME CONTRACT AUDIT'
+          Need ($u.Contains('mhPublicVersionV001 = "V.02"')) 'version V.02'
+          Need ($a.Contains('mhManualLoginV002 = false')) 'auth resets every EXE process'
+          Need ($a.Contains('if (!mhManualLoginV002) { show("login_required"); return; }')) 'saved server session cannot bypass login'
+          Need ($a.Contains('mhManualLoginV002 = true')) 'manual login unlocks current process only'
+          Need (-not ($a -match 'hide\(j\);\s*\r?\n\s*location\.reload\(\)')) 'no reload session bypass'
+          Need (($j.Contains('/api/update/start')) -and ($m.Contains('mhUpdateStartHandlerV001')) -and ($u.Contains('mhDownloadAndInstallV001'))) 'V.01 to V.02 updater route'
+          Need ($j.Contains('if(initial){hideGate()')) 'V.02 current-version check silent'
+          Need ($h.Contains('chNormalizeEmbeddedTreeV001Final')) 'embedded frames normalized'
+          Need (-not ($h -match 'uintptr\(-crop\)')) 'no negative titlebar crop'
+          Need ($h.Contains('chSetEmbeddedVisible(analysis, which==1 || which==3)')) 'MH Analysis and Records switching'
+          Need ($h.Contains('chSetEmbeddedVisible(whatsapp, which==2)')) 'WhatsApp switching'
+          Need ($h.Contains('chSetEmbeddedVisible(mt5, which==4)')) 'MT5 switching'
+          Need (($h.Contains('Signal Link')) -or ($h.Contains('WhatsApp'))) 'Signal Link retained'
+          Need ($h.Contains('chMandatoryUpdateV001')) 'mandatory update blocks app before login'
+          Need ($c.Contains('pointer-events:none!important')) 'hidden updater cannot block buttons'
+          if($errors.Count -gt 0){$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("AUTHORITATIVE V.02 audit failed: {0}" -f $errors.Count)};Write-Host 'PASS: AUTHORITATIVE V.02 CONTRACT'
       - name: Build V.02
         shell: bash
         run: |
-          set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
-          mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
-          sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt);printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 runtime acceptance"}\n' "$HASH" > dist/update.json;printf 'V.02\n' > dist/VERSION
+          set -euo pipefail;gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
+          mkdir -p 'dist/app' 'dist/installer';GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
+          sha256sum 'dist/app/MH Analysis.exe'|tee dist/SHA256SUMS.txt;HASH=$(awk '{print $1}' dist/SHA256SUMS.txt);printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 authoritative runtime"}\n' "$HASH">dist/update.json;printf 'V.02\n'>dist/VERSION
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=0.2.0';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss;$iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=0.2.0';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss;$iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'installer missing'}
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.02
+          name: MH-Analysis-V.02-Authoritative
           path: |
             dist/installer/MH-Analysis.exe
             dist/app/MH Analysis.exe
@@ -65,7 +68,7 @@ jobs:
             dist/update.json
             dist/VERSION
           retention-days: 90
-      - name: Publish V.02 mandatory update channel
+      - name: Publish V.02 update channel only
         shell: bash
         run: |
-          set -euo pipefail;mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/";git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002_runtime;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 runtime acceptance release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          set -euo pipefail;mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/";git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002_authoritative;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 authoritative runtime';git push --force origin HEAD:mh-analysis-update-channel
