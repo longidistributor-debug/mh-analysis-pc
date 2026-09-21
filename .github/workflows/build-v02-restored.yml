@@ -21,13 +21,20 @@ jobs:
           $ErrorActionPreference='Stop'
           python desktop/records_feature_patch.py
           python desktop/records_mt5_local_patch.py
+          # Keep native command IDs unique: Signal Link=1003, Records=1103, MT5=1104.
+          $mt5=Get-Content -Raw desktop/native_mt5_terminal_patch.py
+          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n)'")
+          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1004 // '+MARK+'\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1104 // '+MARK+'\n)'")
+          Set-Content -Encoding UTF8 desktop/native_mt5_terminal_patch.py $mt5
           python desktop/native_mt5_terminal_patch.py
           python desktop/native_mt5_prefill_patch.py
           $c=Get-Content -Raw chrome_host.go
           if($c -notmatch 'chRecordsWnd'){throw 'Records runtime restore failed'}
           if($c -notmatch 'chMT5Wnd'){throw 'MT5 runtime restore failed'}
           if($c -notmatch 'btnMT5'){throw 'MT5 button restore failed'}
-          Write-Host 'PASS original Records + MT5 host restored'
+          if($c -notmatch 'idRecords\s*=\s*1103'){throw 'Records command ID is not unique'}
+          if($c -notmatch 'idMT5\s*=\s*1104'){throw 'MT5 command ID is not unique'}
+          Write-Host 'PASS original Records + MT5 host restored with unique command IDs'
       - name: Contract checks
         shell: powershell
         run: |
