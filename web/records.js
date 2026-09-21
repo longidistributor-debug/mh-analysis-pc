@@ -205,6 +205,14 @@ $('#resetRecords').addEventListener('click',resetSelectedRecords);
 $('#prevMonth').addEventListener('click',()=>{monthCursor=new Date(monthCursor.getFullYear(),monthCursor.getMonth()-1,1);renderCalendar()});
 $('#nextMonth').addEventListener('click',()=>{if(isCurrentMonth(monthCursor))return;monthCursor=new Date(monthCursor.getFullYear(),monthCursor.getMonth()+1,1);if(monthAfterCurrent(monthCursor)){const n=new Date();monthCursor=new Date(n.getFullYear(),n.getMonth(),1)}renderCalendar()});
 $('#todayMonth').addEventListener('click',()=>{const n=new Date();monthCursor=new Date(n.getFullYear(),n.getMonth(),1);selectedDate=todayKey();renderCalendar();renderDay()});
+async function mhApplyRecordsVersion(){
+  try{
+    const v=await fetch('/api/update/version',{cache:'no-store'}).then(r=>r.json());
+    const cur=String(v.current||'').trim();
+    if(cur){const el=document.querySelector('.recordsVersion');if(el)el.textContent=cur+' (CH Shaukat Ali) • LOCAL MT5 TRADE LIFECYCLE';}
+  }catch(_){}
+}
+mhApplyRecordsVersion();
 loadRecords(false);
 setInterval(()=>loadRecords(true),5000);
 })();
