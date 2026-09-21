@@ -18,29 +18,24 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
-
       - name: Clean runtime contract audit
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $m=Get-Content -Raw main.go
-          $a=Get-Content -Raw web/auth.js
-          $l=Get-Content -Raw license_auth.go
-          $u=Get-Content -Raw updater.go
-          $i=Get-Content -Raw web/index.html
-          $errors=@()
+          $m=Get-Content -Raw main.go;$a=Get-Content -Raw web/auth.js;$l=Get-Content -Raw license_auth.go;$u=Get-Content -Raw updater.go;$i=Get-Content -Raw web/index.html;$errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
           Need ($m.Contains('runHost()')) 'single WebView2 host is runtime entrypoint'
           Need (-not ($m.Contains('runChromeHost()'))) 'legacy Chrome host is not launched'
           Need ($l.Contains('return licSessionMem')) 'login session is process-only'
           Need (-not ($l.Contains('licReadProtected(licSessionPath()'))) 'persisted login token is never loaded'
           Need ($a.Contains('manualLoginThisProcess = false')) 'fresh JS process starts logged out'
-          Need (-not ($a.Contains('status(false);'))) 'fresh startup cannot auto-authorize'
+          Need ($a.Contains('if (!manualLoginThisProcess) { show("login_required"); return; }')) 'license status cannot authorize before manual login'
+          Need ($a.Contains('setInterval(() => { if (manualLoginThisProcess) status(false); }')) 'periodic status check runs only after manual login'
+          Need ($a.Contains('manualLoginThisProcess = true')) 'successful credentials unlock current process only'
           Need ($m.Contains('btnRecords')) 'Records native button exists'
           Need ($m.Contains('btnMT5')) 'MT5 native button exists'
           Need ($m.Contains('btnSignalLink')) 'Signal Link native button exists'
@@ -53,18 +48,15 @@ jobs:
           Need ($i.Contains('mhUpdateHiddenV001')) 'current-version update gate starts hidden'
           Need ($i.Contains('/auth.js')) 'login UI is wired'
           if($errors.Count -gt 0){$errors|ForEach-Object{Write-Host "FAIL: $_"};throw ("Clean V.02 contract failed: {0}" -f $errors.Count)}
-
       - name: Syntax and build
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          node --check web/auth.js
-          node --check web/update-v001.js
-          node --check web/app.js
+          node --check web/auth.js;node --check web/update-v001.js;node --check web/app.js
           gofmt -w main.go license_auth.go updater.go records.go records_mt5_local.go ea_signal_bridge.go license_support_external.go dpi_windows.go native_settings.go chrome_host.go
+          New-Item -ItemType Directory -Force -Path dist\app | Out-Null
           go build -trimpath -ldflags="-H=windowsgui -s -w" -o "dist/app/MH Analysis.exe" .
           if(-not(Test-Path "dist/app/MH Analysis.exe")){throw "application EXE missing"}
-
       - name: Build V.02 manifest
         shell: bash
         run: |
@@ -73,22 +65,12 @@ jobs:
           printf '%s  %s\n' "$HASH" 'MH Analysis.exe' > dist/SHA256SUMS.txt
           printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis Clean V.02"}\n' "$HASH" > dist/update.json
           printf 'V.02\n' > dist/VERSION
-
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'
-          New-Item -ItemType Directory -Force -Path dist\installer | Out-Null
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss'
-          $iss=$iss -replace '#define MyAppVersion "[^"]+"','#define MyAppVersion "V.02"'
-          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis'
-          Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
-          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
-          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
-          & $iscc 'installer\MH-Analysis-V001-Reset.iss'
-          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
-          if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
-
+          $ErrorActionPreference='Stop';New-Item -ItemType Directory -Force -Path dist\installer | Out-Null
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace '#define MyAppVersion "[^"]+"','#define MyAppVersion "V.02"';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer build failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-Clean-V.02
@@ -99,22 +81,7 @@ jobs:
             dist/update.json
             dist/VERSION
           retention-days: 90
-
       - name: Publish V.02 update channels
         shell: bash
         run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/release/Installer"
-          cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe"
-          cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe"
-          cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __mh_clean_v02_release
-          git rm -rf . || true
-          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -r "$RUNNER_TEMP/release/." .
-          git add .
-          git commit -m 'MH Analysis Clean V.02 release'
-          git push --force origin HEAD:mh-analysis-update-channel
-          git push --force origin HEAD:final-current-v796
+          set -euo pipefail;mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/";git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_clean_v02_release;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis Clean V.02 release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
