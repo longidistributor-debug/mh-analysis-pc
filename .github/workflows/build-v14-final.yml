@@ -1,7 +1,5 @@
 name: Build MH Analysis Current Final
 on:
-  push:
-    branches: [v14-fixes]
   workflow_dispatch:
 permissions:
   contents: write
