@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -32,7 +33,10 @@ type settings struct {
 var settingsMu sync.RWMutex
 var cfg settings
 var server *http.Server
-var hostHWND, btnAnalysis, btnWhatsapp uintptr
+var hostHWND, btnAnalysis, btnWhatsapp, btnRecords, btnMT5, btnSignalLink uintptr
+var mandatoryUpdateLock bool
+var mt5Cmd *exec.Cmd
+var mt5Wnd uintptr
 var serverURL string
 
 func settingsPath() string {
@@ -66,6 +70,12 @@ func main() {
 		return
 	}
 	mux := http.NewServeMux()
+	registerLicenseRoutes(mux)
+	registerRecordsRoutes(mux)
+	registerRecordsV2Routes(mux)
+	mux.HandleFunc("/api/update/status", mhUpdateStatusHandlerV001)
+	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
+	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
 	mux.HandleFunc("/api/settings", settingsHandler)
 	mux.HandleFunc("/api/history", historyHandler)
 	mux.HandleFunc("/api/public-ticker", publicTickerHandler)
@@ -108,9 +118,9 @@ func main() {
 		return
 	}
 	serverURL = "http://" + ln.Addr().String() + "/"
-	server = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	server = &http.Server{Handler: licenseGate(mux), ReadHeaderTimeout: 10 * time.Second}
 	go server.Serve(ln)
-	runChromeHost()
+	runHost()
 	_ = server.Close()
 }
 func noCache(h http.Handler) http.Handler {
@@ -595,6 +605,7 @@ const (
 	wmSwitchAnalysis = 0x8002
 	wmWhatsAppSend   = 0x8003
 	wmWhatsAppClick  = 0x8004
+	wmAuthChanged    = 0x8005
 	wsOverlapped     = 0x00CF0000
 	wsVisible        = 0x10000000
 	wsChild          = 0x40000000
@@ -605,6 +616,9 @@ const (
 	barH             = 46
 	idAnalysis       = 1001
 	idWhatsapp       = 1002
+	idRecords        = 1003
+	idMT5            = 1004
+	idSignalLink     = 1005
 )
 
 type wndClassEx struct {
@@ -656,10 +670,10 @@ type cbObj struct {
 }
 
 var cbTable cbVtbl
-var envCB, analysisCB, whatsappCB *cbObj
-var wvEnv, analysisCtl, analysisCore, whatsappCtl, whatsappCore uintptr
+var envCB, analysisCB, whatsappCB, recordsCB *cbObj
+var wvEnv, analysisCtl, analysisCore, whatsappCtl, whatsappCore, recordsCtl, recordsCore uintptr
 var activeView = 1
-var whatsappCreating bool
+var whatsappCreating, recordsCreating bool
 var runtimeDLL *syscall.DLL
 var createEnvProc *syscall.Proc
 
@@ -731,12 +745,16 @@ func cbInvoke(this, result, arg uintptr) uintptr {
 		whatsappCreating = false
 		if whatsappCore != 0 {
 			wvNavigate(whatsappCore, "https://web.whatsapp.com/")
-			wvVisible(whatsappCtl, activeView == 2)
-			resizeWebViews()
-			if activeView == 2 {
-				wvVisible(analysisCtl, false)
-			}
+			applyNativeView()
 			processWhatsAppQueue()
+		}
+	case 4:
+		recordsCtl = arg
+		recordsCore = getCore(arg)
+		recordsCreating = false
+		if recordsCore != 0 {
+			wvNavigate(recordsCore, serverURL+"records.html")
+			applyNativeView()
 		}
 	}
 	return 0
@@ -873,9 +891,7 @@ func startWebView2() error {
 	return nil
 }
 func ensureWhatsappWebView() {
-	if whatsappCore != 0 || whatsappCreating || wvEnv == 0 {
-		return
-	}
+	if whatsappCore != 0 || whatsappCreating || wvEnv == 0 { return }
 	whatsappCreating = true
 	whatsappCB = newCB(3)
 	if hr := createController(wvEnv, hostHWND, whatsappCB); int32(hr) < 0 {
@@ -883,36 +899,96 @@ func ensureWhatsappWebView() {
 		messageBox(hostHWND, "Could not create WhatsApp WebView2 control.", "MH Analysis", 0x10)
 	}
 }
-func resizeWebViews() {
-	if hostHWND == 0 {
-		return
+func ensureRecordsWebView() {
+	if recordsCore != 0 || recordsCreating || wvEnv == 0 { return }
+	recordsCreating = true
+	recordsCB = newCB(4)
+	if hr := createController(wvEnv, hostHWND, recordsCB); int32(hr) < 0 {
+		recordsCreating = false
+		messageBox(hostHWND, "Could not create Records view.", "MH Analysis", 0x10)
 	}
+}
+func nativeAuthorized() bool {
+	licMu.Lock(); ok:=licAuthorized; licMu.Unlock()
+	return ok && !mandatoryUpdateLock
+}
+
+func showNativeToolbar(show bool) {
+	for _,b:=range []uintptr{btnAnalysis,btnWhatsapp,btnRecords,btnMT5} {
+		if b!=0 { if show { pShowWindow.Call(b, swShow) } else { pShowWindow.Call(b, swHide) } }
+	}
+	if btnSignalLink!=0 {
+		if show && activeView==2 { pShowWindow.Call(btnSignalLink, swShow) } else { pShowWindow.Call(btnSignalLink, swHide) }
+	}
+}
+
+func resizeWebViews() {
+	if hostHWND == 0 { return }
 	var rc rect
 	pGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&rc)))
-	w := rc.R - rc.L
-	h := rc.B - rc.T
-	if w < 1 || h <= barH {
-		return
+	w,h:=rc.R-rc.L,rc.B-rc.T
+	if w<1||h<1{return}
+	top:=int32(0)
+	if nativeAuthorized(){ top=barH }
+	r:=rect{L:0,T:top,R:w,B:h}
+	wvBounds(analysisCtl,r);wvBounds(whatsappCtl,r);wvBounds(recordsCtl,r)
+	if mt5Wnd!=0 {
+		chSetWindowPos.Call(mt5Wnd,0,0,uintptr(top),uintptr(w),uintptr(h-top),chSWPNoZOrder|chSWPNoActivate|chSWPFrame)
 	}
-	r := rect{L: 0, T: barH, R: w, B: h}
-	wvBounds(analysisCtl, r)
-	wvBounds(whatsappCtl, r)
+	showNativeToolbar(nativeAuthorized())
 }
-func switchAnalysis() {
-	activeView = 1
-	wvVisible(analysisCtl, true)
-	wvVisible(whatsappCtl, false)
+
+func applyNativeView() {
+	if mandatoryUpdateLock || !nativeAuthorized() {
+		activeView=1
+		wvVisible(analysisCtl,true);wvVisible(whatsappCtl,false);wvVisible(recordsCtl,false)
+		if mt5Wnd!=0 { chShowWindow.Call(mt5Wnd,chSWHide) }
+		resizeWebViews();return
+	}
+	wvVisible(analysisCtl,activeView==1)
+	wvVisible(whatsappCtl,activeView==2)
+	wvVisible(recordsCtl,activeView==3)
+	if mt5Wnd!=0 {
+		if activeView==4 { chShowWindow.Call(mt5Wnd,chSWShow) } else { chShowWindow.Call(mt5Wnd,chSWHide) }
+	}
 	resizeWebViews()
 }
-func switchWhatsapp() {
-	activeView = 2
-	ensureWhatsappWebView()
-	if whatsappCtl != 0 {
-		wvVisible(analysisCtl, false)
-		wvVisible(whatsappCtl, true)
-		resizeWebViews()
+
+func switchAnalysis(){ if !nativeAuthorized(){return};activeView=1;applyNativeView() }
+func switchWhatsapp(){ if !nativeAuthorized(){return};activeView=2;ensureWhatsappWebView();applyNativeView() }
+func switchRecords(){ if !nativeAuthorized(){return};activeView=3;ensureRecordsWebView();applyNativeView() }
+func switchMT5(){ if !nativeAuthorized(){return};activeView=4;if err:=ensureMT5Clean();err!=nil{messageBox(hostHWND,err.Error(),"MT5 System",0x10);activeView=1};applyNativeView() }
+
+func chNotifyAuthChanged(){ if hostHWND!=0 { postMessage(hostHWND,wmAuthChanged,0,0) } }
+func setMandatoryUpdateLock(locked bool){ mandatoryUpdateLock=locked;if locked{activeView=1};chNotifyAuthChanged() }
+
+func cleanMT5Executable()(string,error){
+	if p:=strings.TrimSpace(os.Getenv("MH_MT5_PATH"));p!="" { if st,e:=os.Stat(p);e==nil&&!st.IsDir(){return p,nil} }
+	for _,base:=range []string{os.Getenv("PROGRAMFILES"),os.Getenv("PROGRAMFILES(X86)"),filepath.Join(os.Getenv("LOCALAPPDATA"),"Programs")} {
+		if base==""{continue}
+		for _,p:=range []string{filepath.Join(base,"MetaTrader 5","terminal64.exe"),filepath.Join(base,"MetaTrader 5","terminal.exe")} {
+			if st,e:=os.Stat(p);e==nil&&!st.IsDir(){return p,nil}
+		}
 	}
+	return "",fmt.Errorf("MetaTrader 5 terminal64.exe was not found")
 }
+func cleanFindProcessWindow(pid uint32) uintptr {
+	var found uintptr
+	cb:=syscall.NewCallback(func(hwnd,lparam uintptr)uintptr{
+		var wp uint32;chGetWindowThreadPID.Call(hwnd,uintptr(unsafe.Pointer(&wp)));if wp!=pid{return 1}
+		found=hwnd;return 0
+	})
+	chEnumWindows.Call(cb,0);return found
+}
+func ensureMT5Clean() error {
+	if mt5Wnd!=0{return nil}
+	path,err:=cleanMT5Executable();if err!=nil{return err}
+	cmd:=exec.Command(path);if err=cmd.Start();err!=nil{return err};mt5Cmd=cmd
+	deadline:=time.Now().Add(30*time.Second)
+	for time.Now().Before(deadline){ if h:=cleanFindProcessWindow(uint32(cmd.Process.Pid));h!=0 { mt5Wnd=h;chAttachBrowser(h);chShowWindow.Call(h,chSWHide);resizeWebViews();return nil };time.Sleep(150*time.Millisecond) }
+	return fmt.Errorf("MT5 started but its main window could not be embedded")
+}
+
 func processWhatsAppQueue() {
 	if whatsappCore == 0 {
 		ensureWhatsappWebView()
@@ -955,6 +1031,10 @@ func runHost() {
 	hostHWND = hwnd
 	btnAnalysis, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(wstr("BUTTON"))), uintptr(unsafe.Pointer(wstr("MH Analysis"))), wsChild|wsVisible, 8, 7, 140, 32, hwnd, idAnalysis, hinst, 0)
 	btnWhatsapp, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(wstr("BUTTON"))), uintptr(unsafe.Pointer(wstr("WhatsApp"))), wsChild|wsVisible, 156, 7, 140, 32, hwnd, idWhatsapp, hinst, 0)
+	btnRecords, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(wstr("BUTTON"))), uintptr(unsafe.Pointer(wstr("Records"))), wsChild|wsVisible, 304, 7, 140, 32, hwnd, idRecords, hinst, 0)
+	btnMT5, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(wstr("BUTTON"))), uintptr(unsafe.Pointer(wstr("MT5"))), wsChild|wsVisible, 452, 7, 140, 32, hwnd, idMT5, hinst, 0)
+	btnSignalLink, _, _ = pCreateWindowEx.Call(0, uintptr(unsafe.Pointer(wstr("BUTTON"))), uintptr(unsafe.Pointer(wstr("Signal Link"))), wsChild, 600, 7, 145, 32, hwnd, idSignalLink, hinst, 0)
+	showNativeToolbar(false)
 	if err := startWebView2(); err != nil {
 		messageBox(hwnd, err.Error(), "MH Analysis", 0x10)
 		pDestroyWindow.Call(hwnd)
@@ -974,10 +1054,13 @@ func wndProc(hwnd uintptr, m uint32, w, l uintptr) uintptr {
 	switch m {
 	case wmCommand:
 		id := int(w & 0xffff)
-		if id == idAnalysis {
-			switchAnalysis()
-		} else if id == idWhatsapp {
-			switchWhatsapp()
+		switch id {
+		case idAnalysis: switchAnalysis()
+		case idWhatsapp: switchWhatsapp()
+		case idRecords: switchRecords()
+		case idMT5: switchMT5()
+		case idSignalLink:
+			if nativeAuthorized() && activeView==2 { chShowNativeSettingsDialog(2) }
 		}
 		return 0
 	case wmSwitchWhatsApp:
@@ -992,6 +1075,10 @@ func wndProc(hwnd uintptr, m uint32, w, l uintptr) uintptr {
 	case wmWhatsAppClick:
 		clickWhatsAppSend()
 		return 0
+	case wmAuthChanged:
+		if nativeAuthorized(){ activeView=1 }
+		applyNativeView()
+		return 0
 	case wmSize:
 		if w != sizeMinimized {
 			resizeWebViews()
@@ -1004,9 +1091,9 @@ func wndProc(hwnd uintptr, m uint32, w, l uintptr) uintptr {
 		if analysisCtl != 0 {
 			_ = comCall(analysisCtl, 24)
 		}
-		if whatsappCtl != 0 {
-			_ = comCall(whatsappCtl, 24)
-		}
+		if whatsappCtl != 0 { _ = comCall(whatsappCtl, 24) }
+		if recordsCtl != 0 { _ = comCall(recordsCtl, 24) }
+		if mt5Cmd!=nil && mt5Cmd.Process!=nil { _=exec.Command("taskkill.exe","/PID",strconv.Itoa(mt5Cmd.Process.Pid),"/T","/F").Run() }
 		pPostQuit.Call(0)
 		return 0
 	}
