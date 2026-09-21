@@ -1,0 +1,73 @@
+name: Build MH Analysis V.02 Restored
+on:
+  workflow_dispatch:
+  push:
+    branches: [v02-restored-working-base]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Contract checks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $a=Get-Content -Raw web/auth.js
+          $m=Get-Content -Raw main.go
+          if($m -notmatch 'runChromeHost\(\)'){throw 'working Chrome host missing'}
+          if($a -notmatch 'manualLoginThisProcess = false'){throw 'manual-login gate missing'}
+          if($a -match 'show\("login_required"\);\s*status\(false\)'){throw 'startup login bypass detected'}
+          if($a -notmatch 'if\(!manualLoginThisProcess\)'){throw 'status login guard missing'}
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.02'){throw 'VERSION is not V.02'}
+          Write-Host 'PASS restored runtime + mandatory manual login V.02 contract'
+      - name: Syntax and compile
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/auth.js
+          node --check web/app.js
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if(-not(Test-Path 'dist/MH Analysis.exe')){throw 'EXE missing'}
+      - name: Runtime startup smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          Start-Sleep -Seconds 8
+          if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Write-Host 'PASS application remains alive through startup'
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iss=Get-Content -Raw 'installer/MHAnalysis-V02.iss'
+          $iss=$iss -replace 'Source: "[^\r\n]*MH Analysis\.exe"','Source: "..\dist\MH Analysis.exe"'
+          Set-Content -Encoding UTF8 'installer/MHAnalysis-V02.iss' $iss
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer/MHAnalysis-V02.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+      - name: Collect installer
+        shell: powershell
+        run: |
+          $candidates=Get-ChildItem -Recurse -Filter '*.exe' | Where-Object {$_.FullName -notlike '*dist\MH Analysis.exe'} | Sort-Object LastWriteTime -Descending
+          $installer=$candidates | Where-Object {$_.DirectoryName -match 'installer|Output'} | Select-Object -First 1
+          if(-not $installer){throw 'installer output not found'}
+          Copy-Item $installer.FullName 'dist/MH-Analysis-V02-Installer.exe' -Force
+          Get-FileHash 'dist/MH-Analysis-V02-Installer.exe' -Algorithm SHA256 | Format-List
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V02-Restored
+          path: |
+            dist/MH-Analysis-V02-Installer.exe
+            dist/MH Analysis.exe
+          retention-days: 90
