@@ -20,6 +20,16 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
+      - name: Restore secure license source and correct MachineGuid path
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git show 5add20499f56fd3383c401fc556245fe266f5305:license_auth.go | Set-Content -Encoding UTF8 license_auth.go
+          $p='license_auth.go'
+          $s=Get-Content -Raw $p
+          $s=$s.Replace('SOFTWARE\\Microsoft\\Cryptography','SOFTWARE\Microsoft\Cryptography')
+          if($s -notmatch 'registry.OpenKey\(registry.LOCAL_MACHINE, `SOFTWARE\\Microsoft\\Cryptography`'){throw 'MachineGuid path is not corrected'}
+          [IO.File]::WriteAllText((Resolve-Path $p),$s,(New-Object Text.UTF8Encoding($false)))
       - name: Read release version
         shell: powershell
         run: |
@@ -37,17 +47,6 @@ jobs:
           if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
           if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
           if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
-      - name: Repair secure Windows device identity source
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $p='license_auth.go'
-          $s=Get-Content -Raw $p
-          $bad='SOFTWARE\\Microsoft\\Cryptography'
-          $good='SOFTWARE\Microsoft\Cryptography'
-          if($s.Contains($bad)){$s=$s.Replace($bad,$good)}
-          if(-not $s.Contains($good)){throw 'MachineGuid registry path repair failed'}
-          [IO.File]::WriteAllText((Resolve-Path $p),$s,(New-Object Text.UTF8Encoding($false)))
       - name: Format and compile
         shell: powershell
         run: |
@@ -97,11 +96,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add $binary update.json
-          if((git status --porcelain).Length -gt 0){
-            git commit -m ("Publish mandatory MH Analysis "+$version)
-            git pull --rebase origin mh-analysis-update-channel
-            git push origin HEAD:mh-analysis-update-channel
-          }
+          if((git status --porcelain).Length -gt 0){git commit -m ("Publish mandatory MH Analysis "+$version);git pull --rebase origin mh-analysis-update-channel;git push origin HEAD:mh-analysis-update-channel}
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
