@@ -1,11 +1,11 @@
-name: Build MH Analysis V.02 True Single Frame
+name: Build MH Analysis V.01 Exact Behavior
 on:
   workflow_dispatch:
   push:
     branches: [records-mt5-local-build]
     paths: ['vercel-auth/trigger-v001-permanent-fix']
 permissions: {contents: write}
-concurrency: {group: mh-v002-single-frame, cancel-in-progress: true}
+concurrency: {group: mh-v001-exact, cancel-in-progress: true}
 jobs:
   build:
     runs-on: windows-latest
@@ -15,42 +15,46 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.2', cache: false}
-      - name: Apply complete system plus V.02 single-frame fix
+      - name: Apply complete system and final exact V.01 behavior
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; function P([string]$p){Write-Host "APPLY $p";python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
-          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py','desktop/version_v002_true_single_frame_patch.py')){P $p}
+          foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py','desktop/version_v001_clean_browser_title_patch.py','desktop/version_v001_final_shell_update_behavior_patch.py','desktop/version_v002_true_single_frame_patch.py','desktop/version_v001_final_exact_behavior_patch.py')){P $p}
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
           node --check web/auth.js; node --check web/update-v001.js
-      - name: V.02 behavior guards
+      - name: Exact behavior guards
         shell: powershell
         run: |
-          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js
-          foreach($m in @('MH_V002_TRUE_SINGLE_FRAME','style &^= chWSPopup | chWSOverlapped','chSetParent.Call(hwnd, hostHWND)','style |= chWSChild | chWSVisible','chNormalizeEmbeddedTreeV001Final(hwnd)')){if(-not $h.Contains($m)){throw "V.02 frame guard missing: $m"}}
-          if(-not $a.Contains('if(!v.verified || v.required)')){throw 'strict verified-before-login gate missing'}
-          if(-not $j.Contains('enforceVerifiedPreLoginGate')){throw 'pre-login update UI verification loop missing'}
-          if(-not $u.Contains('mhPublicVersionV001 = "V.02"')){throw 'version is not V.02'}
-          Write-Host 'PASS: Chromium root forced WS_CHILD after SetParent'
-          Write-Host 'PASS: only main MH Analysis window owns Min/Max/Close'
-          Write-Host 'PASS: login blocked until update status is positively verified'
-          Write-Host 'PASS: verified newer release shows update before login'
-          Write-Host 'PASS: current verified release proceeds to login'
-          Write-Host 'PASS: release version V.02'
-      - name: Build V.02
+          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
+          if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'release is not V.01'}
+          if(-not $i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')){throw 'update gate is visible before verification'}
+          if(-not $j.Contains("if(initial){hideGate()")){throw 'initial version check exposes update screen'}
+          if(-not $j.Contains("if(j.required)")){throw 'verified newer update path missing'}
+          if(-not $a.Contains('if(!v.verified || v.required)')){throw 'pre-login verification gate missing'}
+          if(-not $h.Contains('chLayoutUpdateChromeV001Final')){throw 'update view Chrome-title crop missing'}
+          if(-not $h.Contains('chNormalizeEmbeddedTreeV001Final')){throw 'nested native-frame normalization missing'}
+          if(-not $c.Contains('overflow:hidden!important')){throw 'update scrollbar suppression missing'}
+          Write-Host 'PASS: release reset to V.01'
+          Write-Host 'PASS: current V.01 never shows Update Required screen'
+          Write-Host 'PASS: only verified future V.02+ can show update screen before login'
+          Write-Host 'PASS: update surface has no scrollbar'
+          Write-Host 'PASS: Chrome/Aura internal title strip cropped from update view'
+          Write-Host 'PASS: only outer MH Analysis owns Minimize/Maximize/Close'
+      - name: Build V.01
         shell: bash
         run: |
           set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
           mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
           sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
-          printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 - true single window frame + verified pre-login updater"}\n' "$HASH" > dist/update.json; printf 'V.02\n' > dist/VERSION
+          printf '{"version":"V.01","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.01 exact baseline"}\n' "$HASH" > dist/update.json; printf 'V.01\n' > dist/VERSION
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=0\.1\.0','AppVersion=0.2.0';$iss=$iss -replace 'OutputBaseFilename=MH Analysis V\.01','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V001-Reset.iss';$iss=$iss -replace 'AppVersion=0\.2\.0','AppVersion=0.1.0';$iss=$iss -replace 'OutputBaseFilename=MH Analysis V\.01','OutputBaseFilename=MH-Analysis';Set-Content -Encoding UTF8 'installer\MH-Analysis-V001-Reset.iss' $iss
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y};& $iscc 'installer\MH-Analysis-V001-Reset.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'};if(-not(Test-Path 'dist\installer\MH-Analysis.exe')){throw 'MH-Analysis.exe missing'}
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.02
+          name: MH-Analysis-V.01
           path: |
             dist/installer/MH-Analysis.exe
             dist/app/MH Analysis.exe
@@ -58,8 +62,8 @@ jobs:
             dist/update.json
             dist/VERSION
           retention-days: 90
-      - name: Publish V.02 update channel
+      - name: Publish corrected V.01 baseline
         shell: bash
         run: |
           set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 true single-frame verified-prelogin release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_exact;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 exact single-frame conditional-update baseline';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
