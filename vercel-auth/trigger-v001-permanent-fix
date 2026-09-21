@@ -1,1 +1,1 @@
-MH Analysis V.02 rebuild: strict verified-before-login update contract. V.01 must detect published V.02 before login; network failure stays on verification gate, never opens login and never pretends an update exists. Single outer frame retained. Installer MH-Analysis.exe.
+MH Analysis V.02 FINAL retry: strict verified-before-login gate corrected and guard aligned. V.02 current opens login only after verified current status; future V.03 mandatory appears before login. Single outer frame only. Installer MH-Analysis.exe.
