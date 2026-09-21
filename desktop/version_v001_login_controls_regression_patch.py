@@ -3,24 +3,33 @@ import re
 
 MARK='MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'
 
-# Keep Account Login mandatory on every fresh EXE launch. Do not silently consume
-# an old authorized session and bypass the visible username/password form.
+# Rule: saved application/trading state survives, but AUTHORIZATION NEVER survives
+# an EXE restart. Every fresh process must visibly require username + password.
 p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
-if MARK not in s:
-    s=s.replace('''      hide(j);
+# Successful manual login must unlock the current loaded app without a reload that
+# can immediately consume the server session and bypass the intended UI state.
+s=s.replace('''      hide(j);
       location.reload();''','''      hide(j);
-      // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: remain in this loaded UI; no login bypass reload.''')
-    s=s.replace('''    build();
-    show("login_required");
-    status(false);''','''    build();
-    show("login_required");
-    // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: never auto-authorize a previous session at startup.''')
-    s=s.replace('''    if(v.verified && !v.required && overlay && overlay.classList.contains("show")) status(false);''','''    // Login overlay is intentionally user-driven on every fresh launch.''')
+      // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: manual login succeeded; unlock this loaded UI.''')
+# Fresh startup: build + show login. Do NOT call status(false), because an existing
+# server cookie/session is not permission to skip username/password on a new EXE run.
+s=s.replace('''  build();
+  show("login_required");
+  status(false);
+  setInterval(() => status(false), 4 * 60 * 1000);''','''  build();
+  show("login_required");
+  // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: every fresh EXE launch requires credentials.
+  // Saved Analysis/WhatsApp/Records/MT5 state remains untouched.
+  setInterval(() => {
+    // Only validate an already-unlocked running session; never auto-unlock a fresh launch.
+    if (!overlay?.classList.contains("show")) status(false);
+  }, 4 * 60 * 1000);''')
+if MARK not in s:
     s='// '+MARK+'\n'+s
 p.write_text(s,encoding='utf-8')
 
-# Hidden update overlay must never swallow KEYS / EXIT / Get Signal clicks.
+# Hidden update overlay must never swallow normal app controls after login.
 p=Path('web/update-v001.css')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
@@ -30,8 +39,8 @@ if MARK not in s:
 '''
 p.write_text(s,encoding='utf-8')
 
-# Update lock must be reversible. Older patches may format this block differently,
-# so normalize the first required-calculation block instead of depending on one stale anchor.
+# Update lock exact/reversible: only a verified newer mandatory version hides the
+# native four-button toolbar. Current V.01 must explicitly unlock it again.
 p=Path('updater.go')
 s=p.read_text(encoding='utf-8')
 required_pat=r'(required\s*:=\s*m\.Mandatory\s*&&\s*mhNewerVersionV001\(m\.Version,\s*mhPublicVersionV001\)\s*\n)(?:\s*if\s+required\s*\{\s*go\s+chSetMandatoryUpdateLockV001\(true\)\s*\}|\s*go\s+chSetMandatoryUpdateLockV001\([^\n]+\))?'
@@ -42,4 +51,4 @@ replacement=m.group(1)+'    go chSetMandatoryUpdateLockV001(required) // MH_V001
 s=s[:m.start()]+replacement+s[m.end():]
 p.write_text(s,encoding='utf-8')
 
-print(MARK+': mandatory visible login restored; hidden update overlay non-interactive; native tab lock reversible')
+print(MARK+': credentials required every fresh launch; app data preserved; toolbar unlock reversible')
