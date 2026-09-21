@@ -1,4 +1,4 @@
-name: Build MH Analysis V.14 Final
+name: Build MH Analysis Current Final
 on:
   push:
     branches: [v14-fixes]
@@ -20,25 +20,81 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Validate every V.14 version source
+      - name: Read release version
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          if((Get-Content -Raw VERSION).Trim() -ne 'V.14'){throw 'VERSION is not V.14'}
+          $version=(Get-Content -Raw VERSION).Trim()
+          if($version -notmatch '^V\.[0-9]+(?:\.[0-9]+)*
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          gofmt -w license_auth.go updater.go chrome_host.go webview2_host.go native_settings.go main.go
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $ld="-H=windowsgui -s -w -X main.mhPublicVersionV001=$env:MH_RELEASE_VERSION -X main.licAppVersion=$env:MH_RELEASE_VERSION"
+          go build -trimpath -ldflags="$ld" -o 'dist/MH Analysis.exe' .
+      - name: Runtime smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          Start-Sleep 10
+          if($p.HasExited -and $p.ExitCode -ne 0){throw "V.14 launch failed: $($p.ExitCode)"}
+          Get-Process -Name 'MH Analysis' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+      - name: Build current installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $version=$env:MH_RELEASE_VERSION
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          $src=Get-Content -Raw 'installer/MHAnalysis-V04.iss'
+          $src=$src.Replace('V.04',$version).Replace('MH Analysis V.04.exe',("MH Analysis "+$version+".exe"))
+          Set-Content -Encoding UTF8 'installer/MHAnalysis-Current.iss' $src
+          & $iscc 'installer/MHAnalysis-Current.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer failed'}
+          $target="MH Analysis $version.exe"
+          $x=Get-ChildItem -Recurse -Filter $target | Select-Object -First 1
+          if(-not $x){throw "installer output missing: $target"}
+          Copy-Item $x.FullName 'dist/MH-Analysis-Current-Installer.exe' -Force
+      - name: Publish mandatory current manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $version=$env:MH_RELEASE_VERSION
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          git fetch origin mh-analysis-update-channel
+          git worktree add update-channel origin/mh-analysis-update-channel
+          $binary=("MH-Analysis-"+$version+".exe")
+          Copy-Item 'dist/MH Analysis.exe' (Join-Path 'update-channel' $binary) -Force
+          $url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'+$binary
+          $manifest=[ordered]@{version=$version;mandatory=$true;download_url=$url;sha256=$sha;notes=("MH Analysis "+$version+" current mandatory release.")}
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+          Push-Location update-channel
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add $binary update.json
+          if((git status --porcelain).Length -gt 0){git commit -m ("Publish mandatory MH Analysis "+$version);git pull --rebase origin mh-analysis-update-channel;git push origin HEAD:mh-analysis-update-channel}
+          Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-Current-Final
+          path: |
+            dist/MH-Analysis-Current-Installer.exe
+            dist/MH Analysis.exe
+          retention-days: 90
+){throw "Invalid VERSION: $version"}
+          "MH_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Validate single-source version architecture
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
           $a=Get-Content -Raw license_auth.go
           $u=Get-Content -Raw updater.go
-          $i=Get-Content -Raw web/index.html
-          $r=Get-Content -Raw web/records.html
-          $j=Get-Content -Raw web/auth.js
-          if($a -notmatch 'const licAppVersion = "V.14"'){throw 'license client version is not V.14'}
-          if($u -notmatch 'const mhPublicVersionV001 = "V.14"'){throw 'updater current version is not V.14'}
-          if($i -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'main V.14 label missing'}
-          if($r -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'records V.14 label missing'}
-          if($j -notmatch 'mhLoginVersion">V\.14'){throw 'login V.14 label missing'}
-          if($j -notmatch 'sessionStorage'){throw 'navigation session fix missing'}
-          if($j -notmatch 'mhLicenseStage'){throw 'login layout fix missing'}
-          $bad = Get-ChildItem -Recurse -File -Include *.go,*.html,*.js | Select-String -Pattern 'mhPublicVersionV001 = "V\.(?!14")' -ErrorAction SilentlyContinue
-          if($bad){throw 'stale updater version detected'}
+          if($a -notmatch 'var licAppVersion = "DEV"'){throw 'license version must be build-injected'}
+          if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
+          if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
+          if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
       - name: Format and compile
         shell: powershell
         run: |
