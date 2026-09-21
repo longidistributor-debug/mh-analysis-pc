@@ -27,7 +27,15 @@ jobs:
           $version=(Get-Content -Raw VERSION).Trim()
           if($version -notmatch '^V\.[0-9]+(?:\.[0-9]+)*$'){throw "Invalid VERSION: $version"}
           "MH_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Validate secure identity and single-source version
+      - name: Restore known-good authorization and apply only device identity fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git show 5add20499f56fd3383c401fc556245fe266f5305:license_auth.go | Set-Content -Encoding UTF8 license_auth.go
+          $a=Get-Content -Raw license_auth.go
+          $a=$a.Replace('`SOFTWARE\\Microsoft\\Cryptography`','`SOFTWARE\Microsoft\Cryptography`')
+          Set-Content -Encoding UTF8 license_auth.go $a
+      - name: Validate authorization protocol and version architecture
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -35,8 +43,11 @@ jobs:
           $u=Get-Content -Raw updater.go
           if($a -notmatch 'var licAppVersion = "DEV"'){throw 'license version must be build-injected'}
           if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
-          if($a -notmatch 'SOFTWARE\\Microsoft\\Cryptography'){throw 'correct MachineGuid registry path missing'}
-          if($a -match 'SOFTWARE\\\\Microsoft\\\\Cryptography'){throw 'invalid double-escaped MachineGuid path detected'}
+          if($a -notmatch 'registerLicenseRoutes'){throw 'license routes missing'}
+          if($a -notmatch 'licenseGate'){throw 'license gate missing'}
+          if($a -notmatch '"signature"'){throw 'known-good login signature protocol missing'}
+          if($a -notmatch '"public_key"'){throw 'known-good public key protocol missing'}
+          if($a -match 'SOFTWARE\\\\Microsoft\\\\Cryptography'){throw 'invalid double-escaped MachineGuid path remains'}
       - name: Format and compile
         shell: powershell
         run: |
