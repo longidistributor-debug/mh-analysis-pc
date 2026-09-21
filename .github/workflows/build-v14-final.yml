@@ -6,8 +6,8 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: mh-analysis-v14-final
-  cancel-in-progress: false
+  group: mh-analysis-current-final
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: windows-latest
@@ -25,7 +25,19 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $version=(Get-Content -Raw VERSION).Trim()
-          if($version -notmatch '^V\.[0-9]+(?:\.[0-9]+)*
+          if($version -notmatch '^V\.[0-9]+(?:\.[0-9]+)*$'){throw "Invalid VERSION: $version"}
+          "MH_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Validate single-source version architecture
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $a=Get-Content -Raw license_auth.go
+          $u=Get-Content -Raw updater.go
+          if($a -notmatch 'var licAppVersion = "DEV"'){throw 'license version must be build-injected'}
+          if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
+          if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
+          if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
+      - name: Format and compile
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -39,7 +51,7 @@ jobs:
           $ErrorActionPreference='Stop'
           $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
           Start-Sleep 10
-          if($p.HasExited -and $p.ExitCode -ne 0){throw "V.14 launch failed: $($p.ExitCode)"}
+          if($p.HasExited -and $p.ExitCode -ne 0){throw "App launch failed: $($p.ExitCode)"}
           Get-Process -Name 'MH Analysis' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       - name: Build current installer
         shell: powershell
@@ -74,76 +86,16 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add $binary update.json
-          if((git status --porcelain).Length -gt 0){git commit -m ("Publish mandatory MH Analysis "+$version);git pull --rebase origin mh-analysis-update-channel;git push origin HEAD:mh-analysis-update-channel}
+          if((git status --porcelain).Length -gt 0){
+            git commit -m ("Publish mandatory MH Analysis "+$version)
+            git pull --rebase origin mh-analysis-update-channel
+            git push origin HEAD:mh-analysis-update-channel
+          }
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-Current-Final
           path: |
             dist/MH-Analysis-Current-Installer.exe
-            dist/MH Analysis.exe
-          retention-days: 90
-){throw "Invalid VERSION: $version"}
-          "MH_RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
-      - name: Validate single-source version architecture
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $a=Get-Content -Raw license_auth.go
-          $u=Get-Content -Raw updater.go
-          if($a -notmatch 'var licAppVersion = "DEV"'){throw 'license version must be build-injected'}
-          if($u -notmatch 'var mhPublicVersionV001 = "DEV"'){throw 'updater version must be build-injected'}
-          if($u -match 'mhPublicVersionV001 = "V\.'){throw 'hardcoded updater version detected'}
-          if($a -match 'licAppVersion = "V\.'){throw 'hardcoded license version detected'}
-      - name: Format and compile
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          gofmt -w license_auth.go updater.go chrome_host.go webview2_host.go native_settings.go main.go
-          New-Item -ItemType Directory -Force dist | Out-Null
-          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
-      - name: Runtime smoke test
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
-          Start-Sleep 10
-          if($p.HasExited -and $p.ExitCode -ne 0){throw "V.14 launch failed: $($p.ExitCode)"}
-          Get-Process -Name 'MH Analysis' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-      - name: Build V.14 installer
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
-          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
-          $src=Get-Content -Raw 'installer/MHAnalysis-V04.iss'
-          $src=$src.Replace('V.04','V.14').Replace('MH Analysis V.04.exe','MH Analysis V.14.exe')
-          Set-Content -Encoding UTF8 'installer/MHAnalysis-V14.iss' $src
-          & $iscc 'installer/MHAnalysis-V14.iss'
-          if($LASTEXITCODE -ne 0){throw 'installer failed'}
-          $x=Get-ChildItem -Recurse -Filter 'MH Analysis V.14.exe' | Select-Object -First 1
-          if(-not $x){throw 'installer output missing'}
-          Copy-Item $x.FullName 'dist/MH-Analysis-V14-Installer.exe' -Force
-      - name: Publish mandatory V.14 manifest
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
-          git fetch origin mh-analysis-update-channel
-          git worktree add update-channel origin/mh-analysis-update-channel
-          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V14.exe' -Force
-          $manifest=[ordered]@{version='V.14';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V14.exe';sha256=$sha;notes='MH Analysis V.14 current mandatory release.'}
-          [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
-          Push-Location update-channel
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add MH-Analysis-V14.exe update.json
-          if((git status --porcelain).Length -gt 0){git commit -m 'Publish corrected mandatory MH Analysis V.14';git pull --rebase origin mh-analysis-update-channel;git push origin HEAD:mh-analysis-update-channel}
-          Pop-Location
-      - uses: actions/upload-artifact@v4
-        with:
-          name: MH-Analysis-V14-Final
-          path: |
-            dist/MH-Analysis-V14-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
