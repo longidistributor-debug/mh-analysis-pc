@@ -110,7 +110,7 @@ func mhUpdateStatusHandlerV001(w http.ResponseWriter, r *http.Request) {
         return
     }
     required := m.Mandatory && mhNewerVersionV001(m.Version, mhPublicVersionV001)
-    if required { go setMandatoryUpdateLock(true) }
+    go setMandatoryUpdateLock(required)
     mhWriteJSONV001(w, map[string]any{
         "ok": true, "verified": true, "required": required, "mandatory": m.Mandatory,
         "current": mhPublicVersionV001, "latest": m.Version, "notes": m.Notes,
