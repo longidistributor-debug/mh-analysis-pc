@@ -28,9 +28,10 @@ jobs:
         run: |
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'release is not V.01'}
-          if(-not $a.Contains('every fresh EXE launch requires credentials')){throw 'fresh-launch username/password contract missing'}
-          if($a.Contains('show("login_required");`n  status(false);')){throw 'startup still auto-consumes saved auth session'}
+          if(-not $a.Contains('MH_V001_LOGIN_CONTROLS_REGRESSION_FIX')){throw 'fresh-login patch marker missing'}
           if(-not $a.Contains('Saved Analysis/WhatsApp/Records/MT5 state remains untouched')){throw 'saved app-data preservation contract missing'}
+          if($a -match 'show\("login_required"\);\s*status\(false\);'){throw 'startup still auto-consumes saved auth session'}
+          if(-not $a.Contains('if (!overlay?.classList.contains("show")) status(false)')){throw 'running-session validation guard missing'}
           if(-not $i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')){throw 'update gate visible before verified newer release'}
           if(-not $j.Contains('if(initial){hideGate()')){throw 'startup update pre-check behavior missing'}
           if(-not $j.Contains('if(j.required)')){throw 'future mandatory update path missing'}
@@ -39,11 +40,12 @@ jobs:
           if(-not $h.Contains('chNormalizeEmbeddedTreeV001Final')){throw 'single outer frame normalization missing'}
           if(-not $c.Contains('overflow:hidden!important')){throw 'update view scrollbar suppression missing'}
           Write-Host 'PASS: V.01 current baseline'
-          Write-Host 'PASS: every close/reopen requires username + password'
-          Write-Host 'PASS: saved user/app/trading data is preserved separately from authentication'
-          Write-Host 'PASS: current V.01 does not show update UI'
-          Write-Host 'PASS: future V.02+ verified update blocks login and exposes updater first'
-          Write-Host 'PASS: normal MH Analysis/WhatsApp/Records/MT5 controls restore after manual login'
+          Write-Host 'PASS: every fresh EXE launch requires manual username + password'
+          Write-Host 'PASS: saved Analysis/WhatsApp/Records/MT5 data remains preserved'
+          Write-Host 'PASS: current V.01 silently checks and does not show update UI'
+          Write-Host 'PASS: future verified V.02+ update blocks login until update completes'
+          Write-Host 'PASS: update lock reverses and normal four tabs/buttons restore after login'
+          Write-Host 'PASS: single outer EXE frame + no update scrollbar'
       - name: Build V.01
         shell: bash
         run: |
@@ -70,4 +72,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_corrected;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 fresh-login saved-data update contract';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v001_corrected;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.01 complete corrected baseline';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
