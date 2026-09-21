@@ -1,1 +1,1 @@
-MH Analysis V.02 retry: corrected patch against current chrome_host.go. Force embedded Chromium to WS_CHILD after SetParent and on every resize; only outer host owns Minimize/Maximize/Close. Installer MH-Analysis.exe.
+MH Analysis V.02 robust rebuild: remove fragile resize anchor dependency. Force Chromium content-only WS_CHILD after SetParent; permanent shell normalizer keeps only outer MH Analysis Minimize/Maximize/Close. Installer MH-Analysis.exe.
