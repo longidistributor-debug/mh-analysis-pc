@@ -29,8 +29,13 @@ jobs:
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$j=Get-Content -Raw web/update-v001.js;$u=Get-Content -Raw updater.go;$i=Get-Content -Raw web/index.html
           foreach($m in @('chNormalizeEmbeddedFrame(child)','MH_V001_PERMANENT_SHELL_UPDATE_FIX')){if(-not $h.Contains($m)){throw "single-frame guard missing $m"}}
           foreach($m in @('MH_V001_PERMANENT_SHELL_UPDATE_FIX','/api/update/status?preauth=1','mhBootAfterVersionV001','j.required===true')){if(-not $a.Contains($m)){throw "pre-login updater guard missing $m"}}
-          foreach($m in @('mhMandatoryUpdateV001','/update-v001.js')){if(-not $i.Contains($m)){throw "update surface missing $m"}}
+          if(-not $i.Contains('mhMandatoryUpdateV001')){throw 'mandatory update surface missing from index'}
+          foreach($m in @('/api/update/status','MH_V001_RESET_FUTURE_UPDATE')){if(-not $j.Contains($m)){throw "updater runtime missing $m"}}
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'version is not V.01'}
+          Write-Host 'PASS: single outer frame guard'
+          Write-Host 'PASS: update-before-login guard'
+          Write-Host 'PASS: mandatory update surface/runtime'
+          Write-Host 'PASS: current version V.01'
       - name: Build
         shell: bash
         run: |
