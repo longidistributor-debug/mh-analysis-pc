@@ -25,14 +25,16 @@ jobs:
       - name: V.02 behavior guards
         shell: powershell
         run: |
-          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go
+          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js
           foreach($m in @('MH_V002_TRUE_SINGLE_FRAME','style &^= chWSPopup | chWSOverlapped','chSetParent.Call(hwnd, hostHWND)','style |= chWSChild | chWSVisible','chNormalizeEmbeddedTreeV001Final(hwnd)')){if(-not $h.Contains($m)){throw "V.02 frame guard missing: $m"}}
-          if(-not $a.Contains('if(v.verified && v.required)')){throw 'verified-newer update gate missing'}
+          if(-not $a.Contains('if(!v.verified || v.required)')){throw 'strict verified-before-login gate missing'}
+          if(-not $j.Contains('enforceVerifiedPreLoginGate')){throw 'pre-login update UI verification loop missing'}
           if(-not $u.Contains('mhPublicVersionV001 = "V.02"')){throw 'version is not V.02'}
           Write-Host 'PASS: Chromium root forced WS_CHILD after SetParent'
-          Write-Host 'PASS: Chromium caption/min/max/close stripped after SetParent'
-          Write-Host 'PASS: embedded Chromium normalized after SetParent'
           Write-Host 'PASS: only main MH Analysis window owns Min/Max/Close'
+          Write-Host 'PASS: login blocked until update status is positively verified'
+          Write-Host 'PASS: verified newer release shows update before login'
+          Write-Host 'PASS: current verified release proceeds to login'
           Write-Host 'PASS: release version V.02'
       - name: Build V.02
         shell: bash
@@ -40,7 +42,7 @@ jobs:
           set -euo pipefail; gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
           mkdir -p 'dist/app' 'dist/installer'; GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
           sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt; HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
-          printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 - true single window frame"}\n' "$HASH" > dist/update.json; printf 'V.02\n' > dist/VERSION
+          printf '{"version":"V.02","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%%20Analysis.exe","sha256":"%s","notes":"MH Analysis V.02 - true single window frame + verified pre-login updater"}\n' "$HASH" > dist/update.json; printf 'V.02\n' > dist/VERSION
       - name: Build installer MH-Analysis.exe
         shell: powershell
         run: |
@@ -60,4 +62,4 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail; mkdir -p "$RUNNER_TEMP/release/Installer";cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe";cp 'dist/installer/MH-Analysis.exe' "$RUNNER_TEMP/release/Installer/MH-Analysis.exe";cp dist/SHA256SUMS.txt dist/update.json dist/VERSION "$RUNNER_TEMP/release/"
-          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 true single-frame release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __mh_v002;git rm -rf . || true;find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +;cp -r "$RUNNER_TEMP/release/." .;git add .;git commit -m 'MH Analysis V.02 true single-frame verified-prelogin release';git push --force origin HEAD:mh-analysis-update-channel;git push --force origin HEAD:final-current-v796
