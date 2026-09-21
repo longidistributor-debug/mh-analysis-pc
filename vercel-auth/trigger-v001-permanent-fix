@@ -1,1 +1,1 @@
-MH Analysis V.02 robust rebuild after correcting behavior guard. Embedded Chromium remains child-only; only outer MH Analysis frame owns Minimize/Maximize/Close. Installer MH-Analysis.exe.
+MH Analysis V.02 rebuild: strict verified-before-login update contract. V.01 must detect published V.02 before login; network failure stays on verification gate, never opens login and never pretends an update exists. Single outer frame retained. Installer MH-Analysis.exe.
