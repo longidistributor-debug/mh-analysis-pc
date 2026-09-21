@@ -1,0 +1,139 @@
+name: Build MH Analysis V.23
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v14-fixes]
+    paths: ['vercel-auth/trigger-v023']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v023
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: V.23 regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $fix=Get-Content -Raw v23_runtime_fix.go
+          foreach($m in @('chSignalLinkBtn','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','licAuthorized')){if(-not $hostSrc.Contains($m)){throw "Working-system regression: $m"}}
+          foreach($m in @('mhV23ApplyNav','mhV23EnsureMT5','mhV23FindExistingMT5Window')){if(-not $fix.Contains($m)){throw "V.23 fix missing: $m"}}
+          if(-not (Test-Path 'VERSION')){throw 'VERSION missing'}
+          $v=(Get-Content -Raw VERSION).Trim()
+          if($v -ne 'V.23'){throw "Expected V.23, got $v"}
+          Write-Host 'PASS V.23 source guards'
+
+      - name: Syntax and compile tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if(Test-Path 'web/app.js'){ node --check web/app.js }
+          if(Test-Path 'web/records.js'){ node --check web/records.js }
+          if(Test-Path 'web/auth.js'){ node --check web/auth.js }
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Build Windows x64 V.23
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w v23_runtime_fix.go
+          mkdir -p dist dist-installer
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.23",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.23 - Signal Link navigation and MT5 embedding reliability"
+          }
+          EOF
+          printf 'V.23\n' > dist/VERSION
+
+      - name: Build V.23 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if(-not (Test-Path $iscc)){ choco install innosetup -y --no-progress; $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if(-not (Test-Path $iscc)){throw 'Inno Setup compiler unavailable'}
+          @'
+          [Setup]
+          AppName=MH Analysis
+          AppVersion=23.0
+          DefaultDirName={autopf}\MH Analysis
+          DefaultGroupName=MH Analysis
+          OutputDir=..\dist-installer
+          OutputBaseFilename=MH Analysis V.23
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          UninstallDisplayIcon={app}\MH Analysis.exe
+          [Files]
+          Source: "..\dist\MH Analysis.exe"; DestDir: "{app}"; Flags: ignoreversion
+          [Icons]
+          Name: "{autoprograms}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          Name: "{autodesktop}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          [Run]
+          Filename: "{app}\MH Analysis.exe"; Description: "Launch MH Analysis"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Encoding UTF8 installer\MHAnalysis-V23.iss
+          & $iscc 'installer\MHAnalysis-V23.iss'
+          if($LASTEXITCODE -ne 0){throw 'Installer compile failed'}
+          if(-not (Test-Path 'dist-installer\MH Analysis V.23.exe')){throw 'V.23 installer missing'}
+
+      - name: Upload verified V.23 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.23
+          path: |
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH Analysis V.23.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V.23 stable update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v023-release"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/v023-release/MH Analysis.exe"
+          cp 'dist/SHA256SUMS.txt' "$RUNNER_TEMP/v023-release/SHA256SUMS.txt"
+          cp 'dist/update.json' "$RUNNER_TEMP/v023-release/update.json"
+          cp 'dist/VERSION' "$RUNNER_TEMP/v023-release/VERSION"
+          cp 'dist-installer/MH Analysis V.23.exe' "$RUNNER_TEMP/v023-release/MH Analysis V.23.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v023_release
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/v023-release/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/v023-release/SHA256SUMS.txt" './SHA256SUMS.txt'
+          cp "$RUNNER_TEMP/v023-release/update.json" './update.json'
+          cp "$RUNNER_TEMP/v023-release/VERSION" './VERSION'
+          cp "$RUNNER_TEMP/v023-release/MH Analysis V.23.exe" './MH Analysis V.23.exe'
+          git add 'MH Analysis.exe' 'MH Analysis V.23.exe' SHA256SUMS.txt update.json VERSION
+          git commit -m 'MH Analysis V.23 stable release'
+          git push --force origin HEAD:mh-analysis-update-channel
