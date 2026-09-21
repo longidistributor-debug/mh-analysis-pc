@@ -1,0 +1,36 @@
+name: Fix V11 License Device Key Compatibility
+on:
+  workflow_dispatch:
+  push:
+    branches: [license-server-deploy]
+    paths: ['.github/workflows/fix-license-v11-device-key.yml']
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Correct Go client DER public-key handling on server
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('api/[...route].js')
+          s=p.read_text()
+          old="function keyFingerprint(pem){const key=crypto.createPublicKey(pem);const der=key.export({type:'spki',format:'der'});return crypto.createHash('sha256').update(der).digest('hex');}\nfunction verifyDevice(pem,challenge,sig){try{return crypto.verify(null,Buffer.from(challenge,'utf8'),crypto.createPublicKey(pem),Buffer.from(sig,'base64'));}catch{return false;}}"
+          new="function devicePublicKey(v){const raw=String(v||'').trim();if(!raw)throw new Error('empty public key');if(raw.includes('BEGIN PUBLIC KEY'))return crypto.createPublicKey(raw);const der=Buffer.from(raw,'base64');if(!der.length)throw new Error('invalid public key');return crypto.createPublicKey({key:der,format:'der',type:'spki'});}\nfunction keyFingerprint(v){const key=devicePublicKey(v);const der=key.export({type:'spki',format:'der'});return crypto.createHash('sha256').update(der).digest('hex');}\nfunction verifyDevice(v,challenge,sig){try{return crypto.verify(null,Buffer.from(challenge,'utf8'),devicePublicKey(v),Buffer.from(sig,'base64'));}catch{return false;}}"
+          if old not in s:
+              raise SystemExit('Expected key handling block not found; refusing unsafe edit')
+          p.write_text(s.replace(old,new))
+      - name: Validate syntax and contract
+        run: |
+          node --check 'api/[...route].js'
+          grep -q "format:'der',type:'spki'" 'api/[...route].js'
+      - name: Commit backend-only correction
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add 'api/[...route].js'
+          git commit -m 'Accept V11 base64 DER Ed25519 device public keys [skip ci]'
+          git push origin HEAD:license-server-deploy
