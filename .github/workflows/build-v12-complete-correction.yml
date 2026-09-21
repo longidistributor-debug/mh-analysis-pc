@@ -36,8 +36,8 @@ jobs:
           if($c -notmatch 'SetWindowDisplayAffinity'){throw 'capture API missing'}
           if($i -notmatch 'V\.12 \(CH Shaukat Ali\)'){throw 'MH Analysis V12 label missing'}
           if($r -notmatch 'V\.12 \(CH Shaukat Ali\)'){throw 'Records V12 label missing'}
-          if($i -match 'â€”|Ø¨Ù|â€¢|â—†'){throw 'mojibake still present in main HTML'}
           if($a -notmatch 'const licAppVersion = "V.12"'){throw 'V12 auth client version missing'}
+          python -c "from pathlib import Path; s=Path('web/index.html').read_text(encoding='utf-8-sig'); bad=['\\u00e2\\u20ac\\u201d','\\u00d8\\u00a8\\u00d9','\\u00e2\\u20ac\\u00a2','\\u00e2\\u2014\\u2020']; assert not any(x in s for x in bad), 'mojibake still present in main HTML'"
       - name: Compile
         shell: powershell
         run: |
@@ -85,7 +85,7 @@ jobs:
           git fetch origin mh-analysis-update-channel
           git worktree add update-channel origin/mh-analysis-update-channel
           Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V12.exe' -Force
-          $manifest=[ordered]@{version='V.12';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V12.exe';sha256=$sha;notes='V.12 preserves bound-device login, fixes MT5 tab visibility, restores corrupted UI text, adds Windows capture exclusion, and displays V.12 (CH Shaukat Ali) in MH Analysis and Records.'}
+          $manifest=[ordered]@{version='V.12';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V12.exe';sha256=$sha;notes='V.12 preserves credential login on the bound device, rejects other devices, fixes MT5 tab visibility, restores corrupted UI text, adds Windows capture exclusion, and displays V.12 (CH Shaukat Ali) in MH Analysis and Records.'}
           [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
           Push-Location update-channel
           git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
