@@ -68,6 +68,7 @@ func main() {
 	mux := http.NewServeMux()
 	registerLicenseRoutes(mux)
 	mux.HandleFunc("/api/license/nav-notice", licNavNoticeHandler)
+	mux.HandleFunc("/api/update/version", mhRuntimeVersionHandlerV001)
 	mux.HandleFunc("/api/update/status", mhUpdateStatusHandlerV001)
 	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
 	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
