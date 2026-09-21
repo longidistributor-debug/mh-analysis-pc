@@ -20,20 +20,25 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Validate V.14 source
+      - name: Validate every V.14 version source
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           if((Get-Content -Raw VERSION).Trim() -ne 'V.14'){throw 'VERSION is not V.14'}
           $a=Get-Content -Raw license_auth.go
+          $u=Get-Content -Raw updater.go
           $i=Get-Content -Raw web/index.html
           $r=Get-Content -Raw web/records.html
           $j=Get-Content -Raw web/auth.js
-          if($a -notmatch 'const licAppVersion = "V.14"'){throw 'license client version missing'}
+          if($a -notmatch 'const licAppVersion = "V.14"'){throw 'license client version is not V.14'}
+          if($u -notmatch 'const mhPublicVersionV001 = "V.14"'){throw 'updater current version is not V.14'}
           if($i -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'main V.14 label missing'}
           if($r -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'records V.14 label missing'}
+          if($j -notmatch 'mhLoginVersion">V\.14'){throw 'login V.14 label missing'}
           if($j -notmatch 'sessionStorage'){throw 'navigation session fix missing'}
           if($j -notmatch 'mhLicenseStage'){throw 'login layout fix missing'}
+          $bad = Get-ChildItem -Recurse -File -Include *.go,*.html,*.js | Select-String -Pattern 'mhPublicVersionV001 = "V\.(?!14")' -ErrorAction SilentlyContinue
+          if($bad){throw 'stale updater version detected'}
       - name: Format and compile
         shell: powershell
         run: |
@@ -47,8 +52,6 @@ jobs:
           $ErrorActionPreference='Stop'
           $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
           Start-Sleep 10
-          # The native launcher can hand off to its UI child and exit cleanly with code 0.
-          # Compilation plus a clean launch is sufficient here; kill any remaining app child.
           if($p.HasExited -and $p.ExitCode -ne 0){throw "V.14 launch failed: $($p.ExitCode)"}
           Get-Process -Name 'MH Analysis' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
       - name: Build V.14 installer
@@ -73,23 +76,13 @@ jobs:
           git fetch origin mh-analysis-update-channel
           git worktree add update-channel origin/mh-analysis-update-channel
           Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V14.exe' -Force
-          $manifest=[ordered]@{
-            version='V.14'
-            mandatory=$true
-            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V14.exe'
-            sha256=$sha
-            notes='V.14 fixes same-session navigation login, same-device access flow, WhatsApp signal-link setup, login/credits overlap, main footer visibility, and V.14 branding.'
-          }
+          $manifest=[ordered]@{version='V.14';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V14.exe';sha256=$sha;notes='MH Analysis V.14 current mandatory release.'}
           [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
           Push-Location update-channel
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add MH-Analysis-V14.exe update.json
-          if((git status --porcelain).Length -gt 0){
-            git commit -m 'Publish mandatory MH Analysis V.14'
-            git pull --rebase origin mh-analysis-update-channel
-            git push origin HEAD:mh-analysis-update-channel
-          }
+          if((git status --porcelain).Length -gt 0){git commit -m 'Publish corrected mandatory MH Analysis V.14';git pull --rebase origin mh-analysis-update-channel;git push origin HEAD:mh-analysis-update-channel}
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
