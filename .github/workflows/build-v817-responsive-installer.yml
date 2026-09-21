@@ -1,0 +1,202 @@
+name: Build V81.7 Responsive Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v817']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v817-responsive-installer
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained systems plus V81.7 responsive fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py',
+            'desktop/license_v809_preserve_original_ui_patch.py',
+            'desktop/license_v810_single_frame_patch.py',
+            'desktop/license_v811_chrome_frame_hard_fix_patch.py',
+            'desktop/license_v812_password_responsive_fix_patch.py',
+            'desktop/license_v813_single_exe_crop_patch.py',
+            'desktop/license_v814_records_view_recovery_patch.py',
+            'desktop/license_v815_records_inline_patch.py',
+            'desktop/license_v816_branding_security_patch.py',
+            'desktop/license_v817_responsive_whatsapp_installer_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          node --check web/records.js
+          node --check web/auth.js
+
+      - name: V81.7 exact-request source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $recordsHtml=Get-Content -Raw web/records.html
+          $recordsJs=Get-Content -Raw web/records.js
+          $recordsCss=Get-Content -Raw web/records.css
+          $index=Get-Content -Raw web/index.html
+          $styles=Get-Content -Raw web/styles.css
+          $app=Get-Content -Raw web/app.js
+          $license=Get-Content -Raw license_auth.go
+          foreach($m in @('MH_V817_RESPONSIVE_WHATSAPP','chResizeToolbarV817','chEnsureWhatsAppSurfaceV817','WhatsAppProfile')){if(-not $hostSrc.Contains($m)){throw "V81.7 host regression $m"}}
+          if(-not $index.Contains('v79.6 (CH Shaukat Ali)')){throw 'main version label missing'}
+          if(-not $recordsHtml.Contains('v79.6 (CH Shaukat Ali)')){throw 'Records version label missing'}
+          $resetFirst='<div class="mhResetActionsV816"><button type="button" class="confirm">RESET</button><button type="button" class="cancel">CANCEL</button></div>'
+          if(-not $recordsJs.Contains($resetFirst)){throw 'RESET/CANCEL order regression'}
+          foreach($m in @('MH_V817_RESPONSIVE_WHATSAPP','@media(max-width:1050px)','@media(max-width:700px)')){if(-not $styles.Contains($m)){throw "main responsive regression $m"};if(-not $recordsCss.Contains($m)){throw "Records responsive regression $m"}}
+          foreach($m in @('mhRecordsPrevOverflowV817','document.documentElement.style.overflow = ''hidden''','MH_RECORDS_INLINE_V815')){if(-not $app.Contains($m)){throw "Records single-scroll regression $m"}}
+          foreach($m in @('MH_V816_BRANDING_SECURITY','chWDAExcludeFromCaptureV816')){if(-not $hostSrc.Contains($m)){throw "V81.6 protection regression $m"}}
+          foreach($m in @('licAppVersion = "80.8"','MH_SECURE_LICENSE_V808','licDeterministicDevice')){if(-not $license.Contains($m)){throw "license regression $m"}}
+          if(-not $app.Contains('MH_SAME_SIGNAL_GUARD_V799')){throw 'duplicate guard regression'}
+          Write-Host 'PASS V81.7 source guards'
+
+      - name: Native Records bridge regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import("encoding/json";"net/http/httptest";"testing")
+          func TestNativeViewHandlerV817(t *testing.T){
+            chViewMu.Lock(); old:=chDesiredView; chDesiredView=3; chViewMu.Unlock()
+            defer func(){ chViewMu.Lock(); chDesiredView=old; chViewMu.Unlock() }()
+            rr:=httptest.NewRecorder(); req:=httptest.NewRequest("GET","/api/native-view",nil)
+            nativeViewHandlerV815(rr,req)
+            if rr.Code!=200{t.Fatalf("status %d",rr.Code)}
+            var v map[string]int
+            if err:=json.Unmarshal(rr.Body.Bytes(),&v);err!=nil{t.Fatal(err)}
+            if v["view"]!=3{t.Fatalf("view=%d",v["view"])}
+          }
+          '@ | Set-Content -Encoding UTF8 native_view_v817_windows_test.go
+          go test -run TestNativeViewHandlerV817 -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'native Records bridge regression failed'}
+          Remove-Item native_view_v817_windows_test.go -Force
+
+      - name: Same-device unlimited-login regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import("os";"testing")
+          func TestSameDeviceIdentityV817(t *testing.T){
+            root:=t.TempDir();t.Setenv("LOCALAPPDATA",root+"\\local")
+            licDeviceMem=nil
+            d1,e:=licEnsureDevice();if e!=nil{t.Fatal(e)}
+            for i:=0;i<100;i++{d,e:=licEnsureDevice();if e!=nil||d.ID!=d1.ID{t.Fatalf("same-device login %d changed: %v",i,e)}}
+            for i:=0;i<10;i++{licDeviceMem=nil;_=os.Remove(licDevicePath());d,e:=licEnsureDevice();if e!=nil||d.ID!=d1.ID{t.Fatalf("restart %d changed: %v",i,e)}}
+          }
+          '@ | Set-Content -Encoding UTF8 license_v817_same_device_windows_test.go
+          go test -run TestSameDeviceIdentityV817 -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'same-device V81.7 regression failed'}
+          Remove-Item license_v817_same_device_windows_test.go -Force
+
+      - name: Build Windows x64 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+
+      - name: Startup resize restart and EXIT regression
+        shell: powershell
+        run: desktop/runtime_v815_records_inline_test.ps1
+
+      - name: Build Windows Setup installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not (Test-Path $iscc)){
+            choco install innosetup --no-progress -y
+          }
+          if(-not (Test-Path $iscc)){throw 'Inno Setup compiler unavailable'}
+          & $iscc 'installer\MH-Analysis-V81.7.iss'
+          if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+          if(-not (Test-Path 'dist\MH-Analysis-Setup-V81.7.exe')){throw 'Setup EXE missing'}
+          Write-Host 'PASS V81.7 installer created'
+
+      - name: Installer silent-install verification
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $target=Join-Path $env:RUNNER_TEMP 'MHAnalysisInstalled'
+          $setup=Join-Path $PWD 'dist\MH-Analysis-Setup-V81.7.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0){throw "Setup exit code $($p.ExitCode)"}
+          if(-not (Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Installed EXE missing'}
+          Write-Host 'PASS installer installs MH Analysis executable'
+
+      - name: Hash verified outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum 'dist/MH Analysis.exe' 'dist/MH-Analysis-Setup-V81.7.exe' | tee dist/SHA256SUMS.txt
+
+      - name: Upload verified V81.7 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V81.7-Responsive-Installer
+          path: |
+            dist/MH-Analysis-Setup-V81.7.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish verified V81.7 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __records_v817_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          git add 'MH Analysis.exe'
+          git commit -m 'MH Analysis V81.7 responsive installer verified build'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
