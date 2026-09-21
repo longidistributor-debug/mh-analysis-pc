@@ -21,14 +21,15 @@ jobs:
           $ErrorActionPreference='Stop'; function P([string]$p){python $p;if($LASTEXITCODE -ne 0){throw "Patch failed $p"}}
           foreach($p in @('desktop/branding_text_patch.py','desktop/header_center_layout_patch.py','desktop/records_feature_patch.py','desktop/chart_reset_only_patch.py','desktop/native_mt5_terminal_patch.py','desktop/native_button_id_fix_patch.py','desktop/ea_signal_reader_bridge_patch.py','desktop/records_mt5_local_patch.py','desktop/signal_duplicate_guard_patch.py','desktop/license_auth_patch.py','desktop/window_flicker_fix_patch.py','desktop/license_login_focus_patch.py','desktop/license_v803_patch.py','desktop/license_v804_patch.py','desktop/license_v806_runtime_fix_patch.py','vercel-auth/license_v807_auth_loader_patch.py','desktop/license_v808_device_identity_patch.py','desktop/license_v809_preserve_original_ui_patch.py','desktop/license_v810_single_frame_patch.py','desktop/license_v811_chrome_frame_hard_fix_patch.py','desktop/license_v812_password_responsive_fix_patch.py','desktop/license_v813_single_exe_crop_patch.py','desktop/license_v814_records_view_recovery_patch.py','desktop/license_v815_records_inline_patch.py','desktop/license_v816_branding_security_patch.py','desktop/version_v001_mandatory_updater_patch.py','desktop/version_v002_update_repair_patch.py','desktop/version_v003_privacy_title_patch.py','desktop/version_v001_reset_future_update_patch.py','desktop/version_v001_permanent_shell_update_fix_patch.py')){P $p}
           if(Test-Path exness_bridge.go){Remove-Item exness_bridge.go -Force}
+          node --check web/auth.js
           node --check web/update-v001.js
       - name: Permanent regression guards
         shell: powershell
         run: |
-          $h=Get-Content -Raw chrome_host.go;$l=Get-Content -Raw web/login.html;$j=Get-Content -Raw web/update-v001.js;$u=Get-Content -Raw updater.go
+          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$j=Get-Content -Raw web/update-v001.js;$u=Get-Content -Raw updater.go;$i=Get-Content -Raw web/index.html
           foreach($m in @('chNormalizeEmbeddedFrame(child)','MH_V001_PERMANENT_SHELL_UPDATE_FIX')){if(-not $h.Contains($m)){throw "single-frame guard missing $m"}}
-          foreach($m in @('mhUpdateGateV001','/update-v001.js')){if(-not $l.Contains($m)){throw "pre-login gate missing $m"}}
-          foreach($m in @('/api/update/status?preauth=1','lockLogin(true)','j.required===true')){if(-not $j.Contains($m)){throw "pre-auth logic missing $m"}}
+          foreach($m in @('MH_V001_PERMANENT_SHELL_UPDATE_FIX','/api/update/status?preauth=1','mhBootAfterVersionV001','j.required===true')){if(-not $a.Contains($m)){throw "pre-login updater guard missing $m"}}
+          foreach($m in @('mhMandatoryUpdateV001','/update-v001.js')){if(-not $i.Contains($m)){throw "update surface missing $m"}}
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'version is not V.01'}
       - name: Build
         shell: bash
