@@ -6,6 +6,7 @@ on:
     paths:
       - 'desktop/v12_complete_correction_patch.py'
       - '.github/workflows/build-v12-complete-correction.yml'
+      - 'license_auth.go'
 permissions:
   contents: write
 concurrency:
