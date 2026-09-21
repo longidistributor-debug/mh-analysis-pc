@@ -27,7 +27,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
+          $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css;$m=Get-Content -Raw main.go
           $errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
           Need ($u.Contains('mhPublicVersionV001 = "V.02"')) 'version exactly V.02'
@@ -40,7 +40,8 @@ jobs:
           Need ($i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')) 'update gate hidden by default'
           Need ($j.Contains('if(initial){hideGate()')) 'silent startup update pre-check present'
           Need ($j.Contains('if(j.required)')) 'verified newer mandatory update path present'
-          Need (($j.Contains('/api/update/apply')) -and ($j.Contains('required'))) 'mandatory update apply path retained'
+          Need (($j.Contains('/api/update/start')) -and ($m.Contains('mhUpdateStartHandlerV001')) -and ($u.Contains('func mhUpdateStartHandlerV001')) -and ($u.Contains('mhDownloadAndInstallV001'))) 'mandatory update start/download/install route retained'
+          Need ($u.Contains('go chSetMandatoryUpdateLockV001(true)')) 'mandatory update native lock retained'
           Need ($c.Contains('pointer-events:none!important')) 'hidden update overlay cannot block controls'
           Need ($h.Contains('chNormalizeEmbeddedTreeV001Final')) 'single outer frame normalization present'
           Need ($c.Contains('overflow:hidden!important')) 'update scrollbar suppressed'
