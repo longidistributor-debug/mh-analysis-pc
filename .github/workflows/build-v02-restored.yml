@@ -15,23 +15,28 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Restore proven runtime and apply V.06 changes
+      - name: Use committed V.06 runtime source
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          python desktop/records_feature_patch.py
-          python desktop/records_mt5_local_patch.py
-          $mt5=Get-Content -Raw desktop/native_mt5_terminal_patch.py
-          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n)'")
-          $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1004 // '+MARK+'\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1104 // '+MARK+'\n)'")
-          Set-Content -Encoding UTF8 desktop/native_mt5_terminal_patch.py $mt5
-          python desktop/native_mt5_terminal_patch.py
-          python desktop/native_mt5_prefill_patch.py
-          python desktop/v03_exact_changes_patch.py
-          python desktop/v03_wiring_patch.py
-          python desktop/v04_keyboard_version_patch.py
-          python desktop/v05_password_version_patch.py
-          python desktop/v06_native_keyboard_patch.py
+          if((Get-Content -Raw VERSION).Trim() -eq 'V.06'){
+            Write-Host 'PASS using permanently consolidated V.06 source; no version patch chain'
+          } else {
+            Write-Host 'Legacy source detected; applying one-time migration patches'
+            python desktop/records_feature_patch.py
+            python desktop/records_mt5_local_patch.py
+            $mt5=Get-Content -Raw desktop/native_mt5_terminal_patch.py
+            $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n)'")
+            $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1004 // '+MARK+'\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1104 // '+MARK+'\n)'")
+            Set-Content -Encoding UTF8 desktop/native_mt5_terminal_patch.py $mt5
+            python desktop/native_mt5_terminal_patch.py
+            python desktop/native_mt5_prefill_patch.py
+            python desktop/v03_exact_changes_patch.py
+            python desktop/v03_wiring_patch.py
+            python desktop/v04_keyboard_version_patch.py
+            python desktop/v05_password_version_patch.py
+            python desktop/v06_native_keyboard_patch.py
+          }
       - name: Exact V.06 contract checks
         shell: powershell
         run: |
