@@ -282,21 +282,17 @@ func chAttachBrowser(hwnd uintptr) {
 
 func chFocusEmbeddedBrowser(hwnd uintptr) {
 	if hwnd == 0 || hostHWND == 0 { return }
-	// The browser is a separate process/thread. Windows keyboard focus must be
-	// transferred while the host and browser input queues are temporarily attached.
 	var browserPID uint32
 	browserThread, _, _ := chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&browserPID)))
 	hostThread, _, _ := chGetWindowThreadPID.Call(hostHWND, 0)
-	fg, _, _ := chGetForegroundWindow.Call()
-	fgThread := uintptr(0)
-	if fg != 0 { fgThread, _, _ = chGetWindowThreadPID.Call(fg, 0) }
-	if hostThread != 0 && browserThread != 0 && hostThread != browserThread { chAttachThreadInput.Call(hostThread, browserThread, 1) }
-	if fgThread != 0 && browserThread != 0 && fgThread != browserThread { chAttachThreadInput.Call(fgThread, browserThread, 1) }
+	if hostThread == 0 { hostThread, _, _ = chGetCurrentThreadId.Call() }
+	// V.08: keep the host/browser input queues attached for the lifetime of the
+	// embedded child. This is the proven V.04 behavior where username typing worked.
+	if browserThread != 0 && hostThread != 0 && browserThread != hostThread {
+		chAttachThreadInput.Call(hostThread, browserThread, 1)
+	}
 	chSetForegroundWindow.Call(hostHWND)
-	chBringWindowToTop.Call(hostHWND)
 	chSetFocus.Call(hwnd)
-	if fgThread != 0 && browserThread != 0 && fgThread != browserThread { chAttachThreadInput.Call(fgThread, browserThread, 0) }
-	if hostThread != 0 && browserThread != 0 && hostThread != browserThread { chAttachThreadInput.Call(hostThread, browserThread, 0) }
 }
 
 func chResizeChildren() {
@@ -466,6 +462,11 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case chWMClose:
+		chMu.Lock()
+		for _, w := range []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd} {
+			if w != 0 { chShowWindow.Call(w, chSWHide) }
+		}
+		chMu.Unlock()
 		chDestroyWindow.Call(hwnd)
 		return 0
 	case chWMDestroy:
@@ -680,7 +681,7 @@ func runChromeHost() {
 	}()
 
 	go func() {
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(1000 * time.Millisecond)
 		cmd, wnd, err := chLaunchBrowser("WhatsAppProfile", "https://web.whatsapp.com/", 17879)
 		if err != nil {
 			return
@@ -700,7 +701,7 @@ func runChromeHost() {
 	}()
 
 	go func() {
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(1300 * time.Millisecond)
 		recordsDebugPort := 0
 		if os.Getenv("MH_SMOKE_TEST") == "1" { recordsDebugPort = 17881 }
 		cmd, wnd, err := chLaunchBrowser("RecordsProfile", serverURL+"records.html", recordsDebugPort)
