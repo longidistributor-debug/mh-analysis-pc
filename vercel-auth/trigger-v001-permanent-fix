@@ -1,1 +1,1 @@
-MH Analysis V.02 robust rebuild: remove fragile resize anchor dependency. Force Chromium content-only WS_CHILD after SetParent; permanent shell normalizer keeps only outer MH Analysis Minimize/Maximize/Close. Installer MH-Analysis.exe.
+MH Analysis V.02 robust rebuild after correcting behavior guard. Embedded Chromium remains child-only; only outer MH Analysis frame owns Minimize/Maximize/Close. Installer MH-Analysis.exe.
