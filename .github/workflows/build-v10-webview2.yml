@@ -5,6 +5,9 @@ on:
     branches: [v02-restored-working-base]
 permissions:
   contents: write
+concurrency:
+  group: mh-analysis-v10-publish
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: windows-latest
@@ -42,16 +45,24 @@ jobs:
           $ErrorActionPreference='Stop'; $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
           $iss=Get-Content -Raw 'installer/MHAnalysis-V04.iss'; $iss=$iss.Replace('V.04','V.10').Replace('MH Analysis V.04.exe','MH Analysis V.10.exe'); Set-Content -Encoding UTF8 'installer/MHAnalysis-V10.iss' $iss; & $iscc 'installer/MHAnalysis-V10.iss'; if($LASTEXITCODE -ne 0){throw 'installer failed'}
           $x=Get-ChildItem -Recurse -Filter 'MH Analysis V.10.exe'|Select-Object -First 1; if(-not$x){throw 'installer missing'}; Copy-Item $x.FullName 'dist/MH-Analysis-V10-Installer.exe'
-      - name: Commit V.10 source
+      - name: Commit V.10 source without stale-branch failure
         shell: powershell
         run: |
-          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git add webview2_host.go updater.go VERSION web/index.html main.go go.mod go.sum; if((git status --porcelain).Length -gt 0){git commit -m 'Permanently promote corrected WebView2 runtime to V.10 [skip ci]'; git push origin HEAD:v02-restored-working-base}
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add webview2_host.go updater.go VERSION web/index.html main.go go.mod go.sum
+          if((git status --porcelain).Length -gt 0){
+            git commit -m 'Permanently promote corrected WebView2 runtime to V.10 [skip ci]'
+            git fetch origin v02-restored-working-base
+            git rebase origin/v02-restored-working-base
+            git push origin HEAD:v02-restored-working-base
+          }
       - name: Publish V.10 only after successful build
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); git fetch origin mh-analysis-update-channel; git worktree add update-channel origin/mh-analysis-update-channel; Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V10.exe' -Force
           $manifest=[ordered]@{version='V.10';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V10.exe';sha256=$sha;notes='V.10 corrects embedded WebView2 visibility while preserving one-window keyboard-safe architecture.'}; [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
-          Push-Location update-channel; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git add MH-Analysis-V10.exe update.json; git commit -m 'Publish mandatory MH Analysis V.10'; git push origin HEAD:mh-analysis-update-channel; Pop-Location
+          Push-Location update-channel; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git add MH-Analysis-V10.exe update.json; if((git status --porcelain).Length -gt 0){git commit -m 'Publish mandatory MH Analysis V.10'; git pull --rebase origin mh-analysis-update-channel; git push origin HEAD:mh-analysis-update-channel}; Pop-Location
       - uses: actions/upload-artifact@v4
         with:
           name: MH-Analysis-V10-Final
