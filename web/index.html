@@ -8,13 +8,31 @@
 <link rel="stylesheet" href="/styles.css" />
 <link rel="stylesheet" href="/v81.css" />
 <link rel="stylesheet" href="/runtime-fixes.css" />
+<link rel="stylesheet" href="/auth.css" />
+<link rel="stylesheet" href="/update-v001.css" />
 </head>
 <body>
+<div id="mhMandatoryUpdateV001" class="mhUpdateGateV001 mhUpdateHiddenV001" role="dialog" aria-modal="true" aria-label="MH Analysis Update">
+  <div class="mhUpdateCenterV001">
+    <img src="/mh-logo.png" class="mhUpdateLogoV001" alt="MH Analysis" />
+    <div class="mhUpdateBrandV001"><span>MH</span> ANALYSIS</div>
+    <div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.02</div>
+    <div class="mhUpdateTitleV001" id="mhUpdateTitleV001">Update Required</div>
+    <div class="mhUpdateSubV001" id="mhUpdateSubV001"></div>
+    <button type="button" id="mhUpdateNowV001" class="mhUpdateButtonV001">Update Now - To Access</button>
+    <div class="mhUpdateProgressWrapV001" id="mhUpdateProgressWrapV001">
+      <div class="mhUpdateTrackV001"><div class="mhUpdateFillV001" id="mhUpdateFillV001"></div></div>
+      <div class="mhUpdatePercentV001" id="mhUpdatePercentV001">0%</div>
+    </div>
+    <button type="button" id="mhUpdateRetryV001" class="mhUpdateRetryV001">Retry Check</button>
+    <div class="mhUpdateStateV001" id="mhUpdateStateV001"></div>
+  </div>
+</div>
 <div class="appShell">
   <header class="appHeader">
     <div class="brandArea">
       <img src="/mh-logo.png" class="logo" alt="MH" />
-      <div><div class="brandName">MH ANALYSIS</div><div class="version">v79.6 AUTO CYCLE (HAMMAD & SOMI)</div></div>
+      <div><div class="brandName">MH ANALYSIS</div><div class="version">V.02 AUTO CYCLE (HAMMAD & SOMI)</div></div>
       <button class="supportLink" id="openWhatsappTab" type="button">WhatsApp: 24/7 Support</button>
       <button class="autoSignalToggle off" id="autoSignalToggle" type="button">Get Signal: OFF</button>
       <span class="autoSignalStatus" id="autoSignalStatus">Manual only</span>
@@ -195,6 +213,8 @@
   </main>
 </div>
 <script src="/lightweight-charts.standalone.production.js"></script>
+<script src="/update-v001.js"></script>
+<script src="/auth.js"></script>
 <script src="/app.js"></script>
 <script src="/runtime-fixes.js"></script>
 </body>
