@@ -1,0 +1,161 @@
+name: Build MH Analysis V.02 Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v002-release']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v002-release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained systems plus mandatory updater V.02
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py',
+            'desktop/license_v809_preserve_original_ui_patch.py',
+            'desktop/license_v810_single_frame_patch.py',
+            'desktop/license_v811_chrome_frame_hard_fix_patch.py',
+            'desktop/license_v812_password_responsive_fix_patch.py',
+            'desktop/license_v813_single_exe_crop_patch.py',
+            'desktop/license_v814_records_view_recovery_patch.py',
+            'desktop/license_v815_records_inline_patch.py',
+            'desktop/license_v816_branding_security_patch.py',
+            'desktop/version_v001_mandatory_updater_patch.py',
+            'desktop/version_v002_update_repair_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          node --check web/records.js
+          node --check web/auth.js
+          node --check web/update-v001.js
+
+      - name: V.02 update and lock guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $updater=Get-Content -Raw updater.go
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $index=Get-Content -Raw web/index.html
+          $updateJs=Get-Content -Raw web/update-v001.js
+          foreach($m in @('mhPublicVersionV001 = "V.02"','mh-analysis-update-channel/update.json','mhSpawnReplaceHelperV001','sha256.New()')){if(-not $updater.Contains($m)){throw "updater guard failed: $m"}}
+          foreach($m in @('MH_MANDATORY_UPDATE_V002','chWMUpdateLockV002','chMandatoryUpdateV001 = true')){if(-not $hostSrc.Contains($m)){throw "native lock guard failed: $m"}}
+          foreach($m in @('V.02 AUTO CYCLE','mhUpdateVersionV001')){if(-not $index.Contains($m)){throw "update UI guard failed: $m"}}
+          foreach($m in @('already_current','Downloading Update','Installing Update')){if(-not $updateJs.Contains($m)){throw "update JS guard failed: $m"}}
+          Write-Host 'PASS V.02 mandatory update guards'
+
+      - name: Build MH Analysis V.02 app
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
+          mkdir -p 'dist/app' 'dist/installer'
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/app/MH Analysis.exe' .
+          sha256sum 'dist/app/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.02",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.02"
+          }
+          EOF
+          printf 'V.02\n' > dist/VERSION
+
+      - name: Build installer named MH Analysis
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not (Test-Path $iscc)){ choco install innosetup --no-progress -y }
+          if(-not (Test-Path $iscc)){throw 'Inno Setup compiler unavailable'}
+          & $iscc 'installer\MH-Analysis-V002.iss'
+          if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+          if(-not (Test-Path 'dist\installer\MH Analysis.exe')){throw 'MH Analysis installer missing'}
+
+      - name: Silent upgrade verification
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $target=Join-Path $env:RUNNER_TEMP 'MHAnalysisInstalled'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Set-Content -Path (Join-Path $target 'preserve-test.dat') -Value 'KEEP'
+          $setup=Join-Path $PWD 'dist\installer\MH Analysis.exe'
+          $p=Start-Process $setup -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0){throw "Setup exit code $($p.ExitCode)"}
+          if(-not (Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Installed app missing'}
+          if(-not (Test-Path (Join-Path $target 'preserve-test.dat'))){throw 'Upgrade deleted unrelated existing data'}
+          Write-Host 'PASS installer upgrades in place and preserves existing files'
+
+      - name: Upload MH Analysis V.02 installer and app
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.02
+          path: |
+            dist/installer/MH Analysis.exe
+            dist/app/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V.02 update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/release/Installer"
+          cp 'dist/app/MH Analysis.exe' "$RUNNER_TEMP/release/MH Analysis.exe"
+          cp 'dist/installer/MH Analysis.exe' "$RUNNER_TEMP/release/Installer/MH Analysis.exe"
+          cp 'dist/SHA256SUMS.txt' "$RUNNER_TEMP/release/SHA256SUMS.txt"
+          cp 'dist/update.json' "$RUNNER_TEMP/release/update.json"
+          cp 'dist/VERSION' "$RUNNER_TEMP/release/VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v002_release
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -r "$RUNNER_TEMP/release/." .
+          git add .
+          git commit -m 'MH Analysis V.02 stable installer and mandatory update release'
+          git push --force origin HEAD:mh-analysis-update-channel
+          git push --force origin HEAD:final-current-v796
