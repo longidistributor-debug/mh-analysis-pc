@@ -57,7 +57,7 @@ jobs:
             'desktop/license_v814_records_view_recovery_patch.py',
             'desktop/license_v815_records_inline_patch.py',
             'desktop/license_v816_branding_security_patch.py',
-            'desktop/license_v817_responsive_whatsapp_installer_patch.py'
+            'desktop/license_v817_fixed_patch.py'
           )){ Patch $p }
           if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
           node --check web/app.js
@@ -148,9 +148,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
-          if(-not (Test-Path $iscc)){
-            choco install innosetup --no-progress -y
-          }
+          if(-not (Test-Path $iscc)){ choco install innosetup --no-progress -y }
           if(-not (Test-Path $iscc)){throw 'Inno Setup compiler unavailable'}
           & $iscc 'installer\MH-Analysis-V81.7.iss'
           if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
