@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 MARK='MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'
 
@@ -7,24 +8,19 @@ MARK='MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'
 p=Path('web/auth.js')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
-    # Successful login must unlock the already-loaded UI without reloading into an
-    # automatic session check that skips the login screen.
     s=s.replace('''      hide(j);
       location.reload();''','''      hide(j);
       // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: remain in this loaded UI; no login bypass reload.''')
-    # Final pre-login bootstrap: verified-current => SHOW login and wait for user.
     s=s.replace('''    build();
     show("login_required");
     status(false);''','''    build();
     show("login_required");
     // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX: never auto-authorize a previous session at startup.''')
-    # Do not let the periodic license status hide a login form the user has not submitted.
     s=s.replace('''    if(v.verified && !v.required && overlay && overlay.classList.contains("show")) status(false);''','''    // Login overlay is intentionally user-driven on every fresh launch.''')
     s='// '+MARK+'\n'+s
 p.write_text(s,encoding='utf-8')
 
-# Hidden update overlay must be physically non-interactive so it cannot swallow
-# KEYS / EXIT / Get Signal or any normal application click.
+# Hidden update overlay must never swallow KEYS / EXIT / Get Signal clicks.
 p=Path('web/update-v001.css')
 s=p.read_text(encoding='utf-8')
 if MARK not in s:
@@ -34,17 +30,16 @@ if MARK not in s:
 '''
 p.write_text(s,encoding='utf-8')
 
-# Update lock is exact and reversible: current version explicitly unlocks the native
-# four-tab bar; only a positively verified newer mandatory release hides it.
+# Update lock must be reversible. Older patches may format this block differently,
+# so normalize the first required-calculation block instead of depending on one stale anchor.
 p=Path('updater.go')
 s=p.read_text(encoding='utf-8')
-old='''    required := m.Mandatory && mhNewerVersionV001(m.Version, mhPublicVersionV001)
-    if required { go chSetMandatoryUpdateLockV001(true) }'''
-new='''    required := m.Mandatory && mhNewerVersionV001(m.Version, mhPublicVersionV001)
-    go chSetMandatoryUpdateLockV001(required) // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'''
-if old not in s:
-    raise SystemExit('update lock anchor missing')
-s=s.replace(old,new,1)
+required_pat=r'(required\s*:=\s*m\.Mandatory\s*&&\s*mhNewerVersionV001\(m\.Version,\s*mhPublicVersionV001\)\s*\n)(?:\s*if\s+required\s*\{\s*go\s+chSetMandatoryUpdateLockV001\(true\)\s*\}|\s*go\s+chSetMandatoryUpdateLockV001\([^\n]+\))?'
+m=re.search(required_pat,s)
+if not m:
+    raise SystemExit('required-version calculation missing')
+replacement=m.group(1)+'    go chSetMandatoryUpdateLockV001(required) // MH_V001_LOGIN_CONTROLS_REGRESSION_FIX'
+s=s[:m.start()]+replacement+s[m.end():]
 p.write_text(s,encoding='utf-8')
 
 print(MARK+': mandatory visible login restored; hidden update overlay non-interactive; native tab lock reversible')
