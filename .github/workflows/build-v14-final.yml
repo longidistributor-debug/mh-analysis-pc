@@ -1,0 +1,98 @@
+name: Build MH Analysis V.14 Final
+on:
+  push:
+    branches: [v14-fixes]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v14-final
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Validate V.14 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.14'){throw 'VERSION is not V.14'}
+          $a=Get-Content -Raw license_auth.go
+          $i=Get-Content -Raw web/index.html
+          $r=Get-Content -Raw web/records.html
+          $j=Get-Content -Raw web/auth.js
+          if($a -notmatch 'const licAppVersion = "V.14"'){throw 'license client version missing'}
+          if($i -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'main V.14 label missing'}
+          if($r -notmatch 'V\.14 \(CH Shaukat Ali\)'){throw 'records V.14 label missing'}
+          if($j -notmatch 'sessionStorage'){throw 'navigation session fix missing'}
+          if($j -notmatch 'mhLicenseStage'){throw 'login layout fix missing'}
+      - name: Format and compile
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          gofmt -w license_auth.go updater.go chrome_host.go webview2_host.go native_settings.go main.go
+          New-Item -ItemType Directory -Force dist | Out-Null
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+      - name: Runtime smoke test
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
+          Start-Sleep 12
+          if($p.HasExited){throw "V.14 exited early: $($p.ExitCode)"}
+          Stop-Process -Id $p.Id -Force
+      - name: Build V.14 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          $src=Get-Content -Raw 'installer/MHAnalysis-V04.iss'
+          $src=$src.Replace('V.04','V.14').Replace('MH Analysis V.04.exe','MH Analysis V.14.exe')
+          Set-Content -Encoding UTF8 'installer/MHAnalysis-V14.iss' $src
+          & $iscc 'installer/MHAnalysis-V14.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer failed'}
+          $x=Get-ChildItem -Recurse -Filter 'MH Analysis V.14.exe' | Select-Object -First 1
+          if(-not $x){throw 'installer output missing'}
+          Copy-Item $x.FullName 'dist/MH-Analysis-V14-Installer.exe' -Force
+      - name: Publish mandatory V.14 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          git fetch origin mh-analysis-update-channel
+          git worktree add update-channel origin/mh-analysis-update-channel
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V14.exe' -Force
+          $manifest=[ordered]@{
+            version='V.14'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V14.exe'
+            sha256=$sha
+            notes='V.14 fixes same-session navigation login, same-device access flow, WhatsApp signal-link setup, login/credits overlap, main footer visibility, and V.14 branding.'
+          }
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),($manifest|ConvertTo-Json),(New-Object Text.UTF8Encoding($false)))
+          Push-Location update-channel
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add MH-Analysis-V14.exe update.json
+          if((git status --porcelain).Length -gt 0){
+            git commit -m 'Publish mandatory MH Analysis V.14'
+            git pull --rebase origin mh-analysis-update-channel
+            git push origin HEAD:mh-analysis-update-channel
+          }
+          Pop-Location
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V14-Final
+          path: |
+            dist/MH-Analysis-V14-Installer.exe
+            dist/MH Analysis.exe
+          retention-days: 90
