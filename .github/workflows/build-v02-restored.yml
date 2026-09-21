@@ -94,3 +94,4 @@ jobs:
             dist/MH-Analysis-V07-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
+# clean V.07 build trigger
