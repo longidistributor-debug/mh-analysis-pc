@@ -1,10 +1,10 @@
-name: Build MH Analysis V.02 Restored
+name: Build and Publish MH Analysis V.03
 on:
   workflow_dispatch:
   push:
     branches: [v02-restored-working-base]
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -15,63 +15,50 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Restore proven Records and MT5 runtime
+      - name: Restore proven runtime then apply only requested V.03 changes
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           python desktop/records_feature_patch.py
           python desktop/records_mt5_local_patch.py
-          # Keep native command IDs unique: Signal Link=1003, Records=1103, MT5=1104.
           $mt5=Get-Content -Raw desktop/native_mt5_terminal_patch.py
           $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n)'")
           $mt5=$mt5.Replace("'\tidRecords       = 1003 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1004 // '+MARK+'\n)'", "'\tidRecords       = 1103 // MH_RECORDS_V796_PATCH\n\tidMT5           = 1104 // '+MARK+'\n)'")
           Set-Content -Encoding UTF8 desktop/native_mt5_terminal_patch.py $mt5
           python desktop/native_mt5_terminal_patch.py
           python desktop/native_mt5_prefill_patch.py
-          $c=Get-Content -Raw chrome_host.go
-          $l=Get-Content -Raw license_auth.go
-          $i=Get-Content -Raw web/index.html
-          $u=Get-Content -Raw web/update-v001.js
-          if($c -notmatch 'chRecordsWnd'){throw 'Records runtime restore failed'}
-          if($c -notmatch 'chMT5Wnd'){throw 'MT5 runtime restore failed'}
-          if($c -notmatch 'btnMT5'){throw 'MT5 button restore failed'}
-          if($c -notmatch 'idRecords\s*=\s*1103'){throw 'Records command ID is not unique'}
-          if($c -notmatch 'idMT5\s*=\s*1104'){throw 'MT5 command ID is not unique'}
-          Write-Host 'PASS original Records + MT5 host restored with unique command IDs'
-      - name: Contract checks
+          python desktop/v03_exact_changes_patch.py
+          python desktop/v03_wiring_patch.py
+      - name: Exact V.03 contract checks
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $a=Get-Content -Raw web/auth.js
-          $m=Get-Content -Raw main.go
           $c=Get-Content -Raw chrome_host.go
-          $l=Get-Content -Raw license_auth.go
+          $r=Get-Content -Raw web/records.js
+          $rh=Get-Content -Raw web/records.html
           $i=Get-Content -Raw web/index.html
-          $u=Get-Content -Raw web/update-v001.js
-          if($m -notmatch 'runChromeHost\(\)'){throw 'working Chrome host missing'}
-          if($a -notmatch 'manualLoginThisProcess = false'){throw 'manual-login gate missing'}
-          if($a -match 'show\("login_required"\);\s*status\(false\)'){throw 'startup login bypass detected'}
-          if($a -notmatch 'if\(!manualLoginThisProcess\)'){throw 'status login guard missing'}
-          if($l -notmatch 'Login authorization is intentionally process-only'){throw 'process-only backend login session missing'}
-          if($l -match 'licReadProtected\(licSessionPath\(\)'){throw 'saved login session can still be loaded'}
-          if($l -notmatch 'strings.HasPrefix\(p, "/api/update/"\)'){throw 'pre-login update endpoints are blocked'}
-          if($m -notmatch '/api/update/status'){throw 'update status route missing'}
-          if($m -notmatch '/api/update/start'){throw 'update start route missing'}
-          if($i -notmatch 'mhMandatoryUpdateV001'){throw 'update UI missing'}
-          if($i -notmatch '/auth.js'){throw 'login UI not wired'}
-          if($i -notmatch '/update-v001.js'){throw 'update UI script not wired'}
-          if($u -notmatch 'mhUpdateRequiredV001'){throw 'confirmed-newer-version update gate missing'}
-          if((Get-Content -Raw VERSION).Trim() -ne 'V.02'){throw 'VERSION is not V.02'}
-          if($c -notmatch 'Records'){throw 'Records missing'}
-          if($c -notmatch 'MT5 System'){throw 'MT5 System missing'}
-          if($c -notmatch 'Signal Link'){throw 'Signal Link missing'}
-          Write-Host 'PASS V.02 mandatory login + restored UI contract'
+          $u=Get-Content -Raw updater.go
+          $m=Get-Content -Raw main.go
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.03'){throw 'VERSION is not V.03'}
+          if($u -notmatch 'mhPublicVersionV001 = "V.03"'){throw 'updater current version is not V.03'}
+          if($c -notmatch 'chEXToolWindow'){throw 'embedded browser taskbar suppression missing'}
+          if($c -notmatch 'chSetFocus'){throw 'embedded browser keyboard focus fix missing'}
+          if($c -notmatch '!licAuthorized'){throw 'pre-login native navigation guard missing'}
+          if($m -notmatch 'licNavNoticeHandler'){throw 'login-required notice route missing'}
+          if($r -notmatch 'mhRecordsConfirm'){throw 'themed records clear confirmation missing'}
+          if($rh -notmatch 'MH ANALYSIS by Muhammad Hammad Shaukat — © 2026. All Rights Reserved.'){throw 'records footer incorrect'}
+          if($i -notmatch 'mhMainCopyright'){throw 'main footer missing'}
+          if($i -notmatch '/v03.js'){throw 'V.03 login notice UI missing'}
+          if($c -notmatch 'idRecords\s*=\s*1103'){throw 'Records command ID incorrect'}
+          if($c -notmatch 'idMT5\s*=\s*1104'){throw 'MT5 command ID incorrect'}
+          Write-Host 'PASS exact V.03 requested contract'
       - name: Syntax and compile
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           node --check web/auth.js
-          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
           New-Item -ItemType Directory -Force dist | Out-Null
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           if(-not(Test-Path 'dist/MH Analysis.exe')){throw 'EXE missing'}
@@ -84,30 +71,38 @@ jobs:
           Start-Sleep -Seconds 10
           if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-          Write-Host 'PASS application remains alive through startup'
-      - name: Build installer
+      - name: Build V.03 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $iss=Get-Content -Raw 'installer/MHAnalysis-V02.iss'
-          $iss=$iss -replace 'Source: "[^\r\n]*MH Analysis\.exe"','Source: "..\dist\MH Analysis.exe"'
-          Set-Content -Encoding UTF8 'installer/MHAnalysis-V02.iss' $iss
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
-          & $iscc 'installer/MHAnalysis-V02.iss'
+          & $iscc 'installer/MHAnalysis-V03.iss'
           if($LASTEXITCODE -ne 0){throw 'installer build failed'}
-      - name: Collect installer
+          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.03.exe' | Select-Object -First 1
+          if(-not $installer){throw 'V.03 installer output not found'}
+          Copy-Item $installer.FullName 'dist/MH-Analysis-V03-Installer.exe' -Force
+      - name: Publish mandatory V.03 update channel for existing V.02 users
         shell: powershell
         run: |
-          $candidates=Get-ChildItem -Recurse -Filter '*.exe' | Where-Object {$_.FullName -notlike '*dist\MH Analysis.exe'} | Sort-Object LastWriteTime -Descending
-          $installer=$candidates | Where-Object {$_.DirectoryName -match 'installer|Output'} | Select-Object -First 1
-          if(-not $installer){throw 'installer output not found'}
-          Copy-Item $installer.FullName 'dist/MH-Analysis-V02-Installer.exe' -Force
-          Get-FileHash 'dist/MH-Analysis-V02-Installer.exe' -Algorithm SHA256 | Format-List
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          git worktree add update-channel origin/mh-analysis-update-channel
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V03.exe' -Force
+          $manifest=[ordered]@{version='V.03';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V03.exe';sha256=$sha;notes='MH Analysis V.03 required update.'}
+          $manifest | ConvertTo-Json | Set-Content -Encoding UTF8 'update-channel/update.json'
+          Push-Location update-channel
+          git add MH-Analysis-V03.exe update.json
+          git commit -m 'Publish mandatory MH Analysis V.03 update'
+          git push origin HEAD:mh-analysis-update-channel
+          Pop-Location
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V02-Restored
+          name: MH-Analysis-V03-Final
           path: |
-            dist/MH-Analysis-V02-Installer.exe
+            dist/MH-Analysis-V03-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
