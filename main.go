@@ -67,6 +67,7 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	registerLicenseRoutes(mux)
+	mux.HandleFunc("/api/license/nav-notice", licNavNoticeHandler)
 	mux.HandleFunc("/api/update/status", mhUpdateStatusHandlerV001)
 	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
 	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
@@ -100,6 +101,9 @@ func main() {
 		postMessage(hostHWND, chWMOpenWhatsAppSettings, 0, 0)
 		w.WriteHeader(204)
 	})
+	registerRecordsRoutes(mux) // MH_RECORDS_V796_PATCH
+	registerMT5PrefillRoutes(mux) // MH_NATIVE_MT5_PREFILL_V796
+	registerRecordsV2Routes(mux) // MH_RECORDS_MT5_LOCAL_V797
 	mux.HandleFunc("/api/send-whatsapp", sendWhatsappHandler)
 	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)

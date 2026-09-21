@@ -48,6 +48,11 @@ var (
 	chSetWindowLongPtr      = chUser32.NewProc("SetWindowLongPtrW")
 	chSetWindowPos          = chUser32.NewProc("SetWindowPos")
 	chSetForegroundWindow   = chUser32.NewProc("SetForegroundWindow")
+	chGetForegroundWindow   = chUser32.NewProc("GetForegroundWindow")
+	chBringWindowToTop      = chUser32.NewProc("BringWindowToTop")
+	chSetFocus              = chUser32.NewProc("SetFocus")
+	chAttachThreadInput     = chUser32.NewProc("AttachThreadInput")
+	chGetCurrentThreadId    = chKernel32.NewProc("GetCurrentThreadId")
 	chLoadIcon              = chUser32.NewProc("LoadIconW")
 	chLoadCursor            = chUser32.NewProc("LoadCursorW")
 	chGetModuleHandle       = chKernel32.NewProc("GetModuleHandleW")
@@ -77,6 +82,7 @@ const (
 	chEXClientEdge  = 0x00000200
 	chEXStaticEdge  = 0x00020000
 	chEXAppWindow   = 0x00040000
+	chEXToolWindow  = 0x00000080
 	chSWHide        = 0
 	chSWShow        = 5
 	chSWMaximize    = 3
@@ -85,6 +91,8 @@ const (
 	chSWPNoActivate = 0x0010
 	chSWPAsync      = 0x4000
 	chIDCArrow      = 32512
+	idRecords       = 1103 // MH_RECORDS_V796_PATCH
+	idMT5           = 1104 // MH_NATIVE_MT5_TERMINAL_V796
 )
 
 type chWndClassEx struct {
@@ -115,8 +123,14 @@ type chRect struct{ L, T, R, B int32 }
 var (
 	chAnalysisWnd uintptr
 	chWhatsappWnd uintptr
+	chRecordsWnd  uintptr
+	chMT5Wnd      uintptr // MH_NATIVE_MT5_TERMINAL_V796
 	chAnalysisCmd *exec.Cmd
 	chWhatsappCmd *exec.Cmd
+	chRecordsCmd  *exec.Cmd
+	chMT5Cmd      *exec.Cmd
+	btnRecords    uintptr
+	btnMT5        uintptr
 	chBrowserPath string
 	chMu          sync.Mutex
 	chCDPMu       sync.Mutex
@@ -258,9 +272,31 @@ func chAttachBrowser(hwnd uintptr) {
 	chSetWindowLongPtr.Call(hwnd, ^uintptr(15), style)
 	exStyle, _, _ := chGetWindowLongPtr.Call(hwnd, ^uintptr(19))
 	exStyle &^= chEXDlgModal | chEXWindowEdge | chEXClientEdge | chEXStaticEdge | chEXAppWindow
+	exStyle |= chEXToolWindow
 	chSetWindowLongPtr.Call(hwnd, ^uintptr(19), exStyle)
 	chSetParent.Call(hwnd, hostHWND)
+	chFocusEmbeddedBrowser(hwnd)
 	chSetWindowPos.Call(hwnd, 0, 0, uintptr(barH), 1, 1, chSWPNoZOrder|chSWPNoActivate|chSWPFrame|chSWPAsync)
+}
+
+
+func chFocusEmbeddedBrowser(hwnd uintptr) {
+	if hwnd == 0 || hostHWND == 0 { return }
+	// The browser is a separate process/thread. Windows keyboard focus must be
+	// transferred while the host and browser input queues are temporarily attached.
+	var browserPID uint32
+	browserThread, _, _ := chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&browserPID)))
+	hostThread, _, _ := chGetWindowThreadPID.Call(hostHWND, 0)
+	fg, _, _ := chGetForegroundWindow.Call()
+	fgThread := uintptr(0)
+	if fg != 0 { fgThread, _, _ = chGetWindowThreadPID.Call(fg, 0) }
+	if hostThread != 0 && browserThread != 0 && hostThread != browserThread { chAttachThreadInput.Call(hostThread, browserThread, 1) }
+	if fgThread != 0 && browserThread != 0 && fgThread != browserThread { chAttachThreadInput.Call(fgThread, browserThread, 1) }
+	chSetForegroundWindow.Call(hostHWND)
+	chBringWindowToTop.Call(hostHWND)
+	chSetFocus.Call(hwnd)
+	if fgThread != 0 && browserThread != 0 && fgThread != browserThread { chAttachThreadInput.Call(fgThread, browserThread, 0) }
+	if hostThread != 0 && browserThread != 0 && hostThread != browserThread { chAttachThreadInput.Call(hostThread, browserThread, 0) }
 }
 
 func chResizeChildren() {
@@ -280,14 +316,26 @@ func chResizeChildren() {
 	if chWhatsappWnd != 0 {
 		chSetWindowPos.Call(chWhatsappWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)
 	}
+	if chRecordsWnd != 0 {
+		chSetWindowPos.Call(chRecordsWnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)
+	}
+	if chMT5Wnd != 0 {
+		chSetWindowPos.Call(chMT5Wnd, 0, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoZOrder|chSWPNoActivate|chSWPAsync)
+	}
 	if btnAnalysis != 0 {
 		chMoveWindow.Call(btnAnalysis, 8, 7, 140, 30, 1)
 	}
 	if btnWhatsapp != 0 {
 		chMoveWindow.Call(btnWhatsapp, 156, 7, 140, 30, 1)
 	}
+	if btnRecords != 0 {
+		chMoveWindow.Call(btnRecords, 304, 7, 140, 30, 1)
+	}
+	if btnMT5 != 0 {
+		chMoveWindow.Call(btnMT5, 452, 7, 140, 30, 1)
+	}
 	if chSignalLinkBtn != 0 {
-		chMoveWindow.Call(chSignalLinkBtn, 304, 7, 145, 30, 1)
+		chMoveWindow.Call(chSignalLinkBtn, 600, 7, 145, 30, 1)
 	}
 }
 
@@ -295,6 +343,8 @@ func chApplyDesiredBrowserView() {
 	chMu.Lock()
 	analysis := chAnalysisWnd
 	whatsapp := chWhatsappWnd
+	records := chRecordsWnd
+	mt5 := chMT5Wnd
 	chMu.Unlock()
 
 	chViewMu.Lock()
@@ -302,20 +352,30 @@ func chApplyDesiredBrowserView() {
 	chViewMu.Unlock()
 
 	if which == 2 {
-		if analysis != 0 {
-			chShowWindowAsync.Call(analysis, chSWHide)
-		}
-		if whatsapp != 0 {
-			chShowWindowAsync.Call(whatsapp, chSWShow)
-		}
+		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
+		if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
+		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
+		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWShow) }
 		return
 	}
-	if whatsapp != 0 {
-		chShowWindowAsync.Call(whatsapp, chSWHide)
+	if which == 3 {
+		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
+		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
+		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
+		if records != 0 { chShowWindowAsync.Call(records, chSWShow) }
+		return
 	}
-	if analysis != 0 {
-		chShowWindowAsync.Call(analysis, chSWShow)
+	if which == 4 {
+		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
+		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
+		if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
+		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWShow) }
+		return
 	}
+	if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
+	if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
+	if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
+	if analysis != 0 { chShowWindowAsync.Call(analysis, chSWShow) }
 }
 
 func chSwitchView(which int) {
@@ -353,11 +413,34 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case chWMCommand:
 		id := int(wParam & 0xffff)
+		if !licAuthorized {
+			section := "MH Analysis"
+			switch id {
+			case idWhatsapp: section = "WhatsApp"
+			case idRecords: section = "Records"
+			case idMT5: section = "MT5 System"
+			case chIDSignalLink: section = "Signal Link"
+			}
+			if id == idAnalysis || id == idWhatsapp || id == idRecords || id == idMT5 || id == chIDSignalLink {
+				licSetNavNotice(section)
+				chSwitchView(1)
+				return 0
+			}
+		}
 		switch id {
 		case idAnalysis:
 			chSwitchView(1)
 		case idWhatsapp:
 			chSwitchView(2)
+		case idRecords:
+			chSwitchView(3)
+		case idMT5:
+			chSwitchView(4)
+			go func() {
+				if err := chEnsureMT5Terminal(); err != nil {
+					messageBox(hostHWND, err.Error(), "MT5 System", 0x10)
+				}
+			}()
 		case chIDSignalLink:
 			chShowNativeSettingsDialog(2)
 		}
@@ -392,6 +475,112 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	}
 	r, _, _ := chDefWindowProc.Call(hwnd, uintptr(msg), wParam, lParam)
 	return r
+}
+
+
+// MH_NATIVE_MT5_TERMINAL_V796
+func chMT5Executable() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("MH_MT5_PATH")); p != "" {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() { return p, nil }
+		return "", fmt.Errorf("MH_MT5_PATH does not point to a valid terminal executable: %s", p)
+	}
+	var roots []string
+	for _, e := range []string{"PROGRAMFILES", "PROGRAMFILES(X86)"} {
+		if p := strings.TrimSpace(os.Getenv(e)); p != "" { roots = append(roots, p) }
+	}
+	if p := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); p != "" { roots = append(roots, filepath.Join(p, "Programs")) }
+	candidates := []string{}
+	seen := map[string]bool{}
+	add := func(p string) {
+		key := strings.ToLower(filepath.Clean(p)); if seen[key] { return }; seen[key] = true; candidates = append(candidates, p)
+	}
+	for _, root := range roots {
+		add(filepath.Join(root, "MetaTrader 5", "terminal64.exe"))
+		add(filepath.Join(root, "MetaTrader 5", "terminal.exe"))
+		entries, _ := os.ReadDir(root)
+		for _, e := range entries {
+			if !e.IsDir() { continue }
+			d1 := filepath.Join(root, e.Name())
+			add(filepath.Join(d1, "terminal64.exe")); add(filepath.Join(d1, "terminal.exe"))
+			subs, _ := os.ReadDir(d1)
+			for _, se := range subs {
+				if !se.IsDir() { continue }
+				d2 := filepath.Join(d1, se.Name())
+				add(filepath.Join(d2, "terminal64.exe")); add(filepath.Join(d2, "terminal.exe"))
+			}
+		}
+	}
+	if p, err := exec.LookPath("terminal64.exe"); err == nil { add(p) }
+	if p, err := exec.LookPath("terminal.exe"); err == nil { add(p) }
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() { return p, nil }
+	}
+	return "", errors.New("MetaTrader 5 terminal64.exe was not found. Install your broker's MT5 terminal, then reopen MH Analysis. If you have more than one MT5 installation, set MH_MT5_PATH to the terminal64.exe you want to use.")
+}
+
+func chFindProcessWindow(pid uint32) uintptr {
+	var found uintptr
+	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
+		var wp uint32
+		chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&wp)))
+		if wp != pid { return 1 }
+		vis, _, _ := chIsWindowVisible.Call(hwnd)
+		if vis == 0 { return 1 }
+		found = hwnd
+		return 0
+	})
+	chEnumWindows.Call(cb, 0)
+	return found
+}
+
+func chWaitForProcessWindow(pid uint32, timeout time.Duration) uintptr {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if h := chFindProcessWindow(pid); h != 0 { return h }
+		time.Sleep(120 * time.Millisecond)
+	}
+	return 0
+}
+
+func chEnsureMT5Terminal() error {
+	chMu.Lock()
+	if chMT5Wnd != 0 {
+		chMu.Unlock(); chApplyDesiredBrowserView(); go mt5ApplyLatestQueued(); return nil // MH_NATIVE_MT5_PREFILL_V796
+	}
+	if chMT5Cmd != nil {
+		chMu.Unlock(); return nil
+	}
+	chMu.Unlock()
+
+	path, err := chMT5Executable()
+	if err != nil { return err }
+	cmd := exec.Command(path)
+	if err := cmd.Start(); err != nil { return fmt.Errorf("Could not start MT5: %w", err) }
+
+	chMu.Lock()
+	if chStopping {
+		chMu.Unlock(); _ = cmd.Process.Kill(); return errors.New("MH Analysis is closing")
+	}
+	chMT5Cmd = cmd
+	chMu.Unlock()
+
+	wnd := chWaitForProcessWindow(uint32(cmd.Process.Pid), 35*time.Second)
+	if wnd == 0 {
+		chMu.Lock(); if chMT5Cmd == cmd { chMT5Cmd = nil }; chMu.Unlock()
+		return errors.New("MT5 started but its main window could not be embedded. Close any separately running MT5 instance and try again.")
+	}
+	chShowWindow.Call(wnd, chSWHide)
+	chAttachBrowser(wnd)
+	chMu.Lock()
+	if chStopping {
+		chMu.Unlock(); _ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run(); return errors.New("MH Analysis is closing")
+	}
+	chMT5Wnd = wnd
+	chMu.Unlock()
+	chResizeChildren()
+	chApplyDesiredBrowserView()
+	go mt5ApplyLatestQueued() // MH_NATIVE_MT5_PREFILL_V796
+	return nil
 }
 
 func runChromeHost() {
@@ -439,9 +628,17 @@ func runChromeHost() {
 		0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("WhatsApp"))),
 		chWSChild|chWSVisible, 156, 7, 140, 30, hostHWND, idWhatsapp, inst, 0,
 	)
+	btnRecords, _, _ = chCreateWindowEx.Call(
+		0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("Records"))),
+		chWSChild|chWSVisible, 304, 7, 140, 30, hostHWND, idRecords, inst, 0,
+	)
+	btnMT5, _, _ = chCreateWindowEx.Call(
+		0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("MT5 System"))),
+		chWSChild|chWSVisible, 452, 7, 140, 30, hostHWND, idMT5, inst, 0,
+	)
 	chSignalLinkBtn, _, _ = chCreateWindowEx.Call(
 		0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("Signal Link"))),
-		chWSChild, 304, 7, 145, 30, hostHWND, chIDSignalLink, inst, 0,
+		chWSChild, 600, 7, 145, 30, hostHWND, chIDSignalLink, inst, 0,
 	)
 	dark := int32(1)
 	if chDwmSetWindowAttribute.Find() == nil {
@@ -451,6 +648,8 @@ func runChromeHost() {
 		darkTheme := chWstr("DarkMode_Explorer")
 		chSetWindowTheme.Call(btnAnalysis, uintptr(unsafe.Pointer(darkTheme)), 0)
 		chSetWindowTheme.Call(btnWhatsapp, uintptr(unsafe.Pointer(darkTheme)), 0)
+		chSetWindowTheme.Call(btnRecords, uintptr(unsafe.Pointer(darkTheme)), 0)
+		chSetWindowTheme.Call(btnMT5, uintptr(unsafe.Pointer(darkTheme)), 0)
 		chSetWindowTheme.Call(chSignalLinkBtn, uintptr(unsafe.Pointer(darkTheme)), 0)
 	}
 	chShowWindow.Call(hostHWND, chSWMaximize)
@@ -477,7 +676,7 @@ func runChromeHost() {
 		chAttachBrowser(chAnalysisWnd)
 		chMu.Unlock()
 		chResizeChildren()
-		chShowWindowAsync.Call(chAnalysisWnd, chSWShow)
+		chApplyDesiredBrowserView()
 	}()
 
 	go func() {
@@ -497,6 +696,27 @@ func runChromeHost() {
 		chShowWindowAsync.Call(chWhatsappWnd, chSWHide)
 		chMu.Unlock()
 		chResizeChildren()
+		chApplyDesiredBrowserView()
+	}()
+
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		recordsDebugPort := 0
+		if os.Getenv("MH_SMOKE_TEST") == "1" { recordsDebugPort = 17881 }
+		cmd, wnd, err := chLaunchBrowser("RecordsProfile", serverURL+"records.html", recordsDebugPort)
+		if err != nil { return }
+		chMu.Lock()
+		if chStopping {
+			chMu.Unlock()
+			_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
+			return
+		}
+		chRecordsCmd, chRecordsWnd = cmd, wnd
+		chAttachBrowser(chRecordsWnd)
+		chShowWindowAsync.Call(chRecordsWnd, chSWHide)
+		chMu.Unlock()
+		chResizeChildren()
+		chApplyDesiredBrowserView()
 	}()
 
 	var m chMsg
@@ -514,9 +734,9 @@ func chStopBrowsers() {
 	// Mark shutdown first so browser goroutines that finish late cannot escape cleanup.
 	chMu.Lock()
 	chStopping = true
-	cmds := []*exec.Cmd{chAnalysisCmd, chWhatsappCmd}
-	chAnalysisCmd, chWhatsappCmd = nil, nil
-	chAnalysisWnd, chWhatsappWnd = 0, 0
+	cmds := []*exec.Cmd{chAnalysisCmd, chWhatsappCmd, chRecordsCmd, chMT5Cmd}
+	chAnalysisCmd, chWhatsappCmd, chRecordsCmd, chMT5Cmd = nil, nil, nil, nil
+	chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd = 0, 0, 0, 0
 	chMu.Unlock()
 
 	// Never hold the UI mutex while waiting for taskkill.

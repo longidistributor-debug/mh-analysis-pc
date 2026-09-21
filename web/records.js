@@ -171,11 +171,22 @@ function resetFilters(){
   filterFrom='';filterTo='';filterTF='all';$('#fromDate').value='';$('#toDate').value='';$('#tfFilter').value='all';
   const n=new Date();monthCursor=new Date(n.getFullYear(),n.getMonth(),1);selectedDate=todayKey();renderAll();
 }
+
+function mhRecordsConfirm(title,detail){
+  return new Promise(resolve=>{
+    const old=document.getElementById('mhRecordsConfirm');if(old)old.remove();
+    const wrap=document.createElement('div');wrap.id='mhRecordsConfirm';wrap.className='mhRecordsConfirm';
+    wrap.innerHTML=`<div class="mhRecordsConfirmCard" role="dialog" aria-modal="true"><div class="mhRecordsConfirmTag">MH ANALYSIS • RECORDS</div><h3>${esc(title)}</h3><p>${esc(detail)}</p><div class="mhRecordsConfirmActions"><button class="clear" type="button">CLEAR</button><button class="cancel" type="button">CANCEL</button></div></div>`;
+    document.body.appendChild(wrap);const done=v=>{wrap.remove();resolve(v)};
+    wrap.querySelector('.clear').onclick=()=>done(true);wrap.querySelector('.cancel').onclick=()=>done(false);
+  });
+}
+
 async function resetSelectedRecords(){
   let payload,label;
   if(filterFrom||filterTo){payload={from:filterFrom,to:filterTo,timeframe:filterTF};label=`${filterFrom||'START'} → ${filterTo||todayKey()}${filterTF!=='all'?` • ${filterTF.toUpperCase()}`:''}`}
   else{payload={date:selectedDate,timeframe:filterTF};label=`${selectedDate}${filterTF!=='all'?` • ${filterTF.toUpperCase()}`:''}`}
-  if(!confirm(`Delete saved Records for ${label}?\n\nThis resets MH Analysis records only. It does not delete MT5 account history.`))return;
+  if(!(await mhRecordsConfirm(`Delete saved Records for ${label}?`, 'This resets MH Analysis records only. It does not delete MT5 account history.')))return;
   const b=$('#resetRecords');b.disabled=true;
   try{
     const r=await fetch('/api/records-v2/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}),j=await r.json();
