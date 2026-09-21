@@ -1,0 +1,194 @@
+name: Build V.01 Mandatory Auto Update
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v001']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v001-mandatory-updater
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained systems plus V.01 mandatory updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          function Patch([string]$p){ python $p; if($LASTEXITCODE -ne 0){ throw "Patch failed: $p" } }
+          foreach($p in @(
+            'desktop/branding_text_patch.py',
+            'desktop/header_center_layout_patch.py',
+            'desktop/records_feature_patch.py',
+            'desktop/chart_reset_only_patch.py',
+            'desktop/native_mt5_terminal_patch.py',
+            'desktop/native_button_id_fix_patch.py',
+            'desktop/ea_signal_reader_bridge_patch.py',
+            'desktop/records_mt5_local_patch.py',
+            'desktop/signal_duplicate_guard_patch.py',
+            'desktop/license_auth_patch.py',
+            'desktop/window_flicker_fix_patch.py',
+            'desktop/license_login_focus_patch.py',
+            'desktop/license_v803_patch.py',
+            'desktop/license_v804_patch.py',
+            'desktop/license_v806_runtime_fix_patch.py',
+            'vercel-auth/license_v807_auth_loader_patch.py',
+            'desktop/license_v808_device_identity_patch.py',
+            'desktop/license_v809_preserve_original_ui_patch.py',
+            'desktop/license_v810_single_frame_patch.py',
+            'desktop/license_v811_chrome_frame_hard_fix_patch.py',
+            'desktop/license_v812_password_responsive_fix_patch.py',
+            'desktop/license_v813_single_exe_crop_patch.py',
+            'desktop/license_v814_records_view_recovery_patch.py',
+            'desktop/license_v815_records_inline_patch.py',
+            'desktop/license_v816_branding_security_patch.py',
+            'desktop/version_v001_mandatory_updater_patch.py'
+          )){ Patch $p }
+          if(Test-Path 'exness_bridge.go'){ Remove-Item 'exness_bridge.go' -Force }
+          node --check web/app.js
+          node --check web/records.js
+          node --check web/auth.js
+          node --check web/update-v001.js
+
+      - name: V.01 exact source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $main=Get-Content -Raw main.go
+          $hostSrc=Get-Content -Raw chrome_host.go
+          $updater=Get-Content -Raw updater.go
+          $index=Get-Content -Raw web/index.html
+          $updateJs=Get-Content -Raw web/update-v001.js
+          $records=Get-Content -Raw web/records.html
+          $copy='MH ANALYSIS BY: Muhammad Hammad Shaukat - © 2026. All Rights Reserved.'
+          foreach($m in @('/api/update/status','/api/update/start','/api/update/progress','MH_MANDATORY_UPDATE_V001')){if(-not $main.Contains($m)){throw "V.01 route regression $m"}}
+          foreach($m in @('mhPublicVersionV001 = "V.01"','final-current-v796/update.json','mhSpawnReplaceHelperV001','sha256.New()')){if(-not $updater.Contains($m)){throw "V.01 updater regression $m"}}
+          foreach($m in @('chMandatoryUpdateV001','chSetMandatoryUpdateLockV001','chEnableWindowV001')){if(-not $hostSrc.Contains($m)){throw "V.01 native lock regression $m"}}
+          foreach($m in @('mhMandatoryUpdateV001','Update Now - To Access','V.01 AUTO CYCLE')){if(-not $index.Contains($m)){throw "V.01 update UI regression $m"}}
+          foreach($m in @('Downloading Update','Installing Update','setInterval(()=>checkVersion(false),60000)')){if(-not $updateJs.Contains($m)){throw "V.01 progress regression $m"}}
+          if(-not $records.Contains($copy)){throw 'V81.6 Records copyright missing'}
+          if(-not $index.Contains($copy)){throw 'V81.6 MH footer missing'}
+          if(-not $hostSrc.Contains('chWDAExcludeFromCaptureV816')){throw 'capture protection regression'}
+          Write-Host 'PASS V.01 mandatory updater source guards'
+
+      - name: V.01 updater version regression
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import "testing"
+          func TestV001VersionCompare(t *testing.T){
+            if mhPublicVersionV001!="V.01"{t.Fatalf("current=%s",mhPublicVersionV001)}
+            if !mhNewerVersionV001("V.02","V.01"){t.Fatal("V.02 must update V.01")}
+            if !mhNewerVersionV001("V.10","V.09"){t.Fatal("V.10 must update V.09")}
+            if mhNewerVersionV001("V.01","V.01"){t.Fatal("same version must not update")}
+            if mhNewerVersionV001("V.01","V.02"){t.Fatal("older version must not update")}
+          }
+          '@ | Set-Content -Encoding UTF8 updater_v001_windows_test.go
+          go test -run TestV001VersionCompare -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'V.01 updater version regression failed'}
+          Remove-Item updater_v001_windows_test.go -Force
+
+      - name: Records and same-device regressions
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          //go:build windows
+          package main
+          import("encoding/json";"net/http/httptest";"os";"testing")
+          func TestV001RetainedSystems(t *testing.T){
+            chViewMu.Lock(); old:=chDesiredView; chDesiredView=3; chViewMu.Unlock()
+            rr:=httptest.NewRecorder(); req:=httptest.NewRequest("GET","/api/native-view",nil);nativeViewHandlerV815(rr,req)
+            var v map[string]int;if err:=json.Unmarshal(rr.Body.Bytes(),&v);err!=nil||v["view"]!=3{t.Fatalf("Records bridge failed: %v %#v",err,v)}
+            chViewMu.Lock();chDesiredView=old;chViewMu.Unlock()
+            root:=t.TempDir();t.Setenv("LOCALAPPDATA",root+"\\local");licDeviceMem=nil
+            d1,e:=licEnsureDevice();if e!=nil{t.Fatal(e)}
+            for i:=0;i<50;i++{d,e:=licEnsureDevice();if e!=nil||d.ID!=d1.ID{t.Fatalf("same device changed %d: %v",i,e)}}
+            licDeviceMem=nil;_=os.Remove(licDevicePath());d2,e:=licEnsureDevice();if e!=nil||d2.ID!=d1.ID{t.Fatalf("restart changed identity: %v",e)}
+          }
+          '@ | Set-Content -Encoding UTF8 v001_retained_windows_test.go
+          go test -run TestV001RetainedSystems -count=1 .
+          if($LASTEXITCODE -ne 0){throw 'V.01 retained systems regression failed'}
+          Remove-Item v001_retained_windows_test.go -Force
+
+      - name: Build Windows x64 V.01 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.01",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/final-current-v796/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.01"
+          }
+          EOF
+          printf 'V.01\n' > dist/VERSION
+          powershell -NoProfile -Command "Compress-Archive -Path 'dist/MH Analysis.exe','dist/SHA256SUMS.txt','dist/update.json','dist/VERSION' -DestinationPath 'dist/MH-Analysis-V.01.zip' -Force"
+
+      - name: Runtime startup resize restart EXIT regression
+        shell: powershell
+        run: desktop/runtime_v815_records_inline_test.ps1
+
+      - name: Capture protection and native branding regression
+        shell: powershell
+        run: desktop/runtime_v816_branding_security_test.ps1
+
+      - name: Upload verified V.01
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.01
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.01.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V.01 update channel atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          cp 'dist/SHA256SUMS.txt' "$RUNNER_TEMP/SHA256SUMS.txt"
+          cp 'dist/update.json' "$RUNNER_TEMP/update.json"
+          cp 'dist/VERSION' "$RUNNER_TEMP/VERSION"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v001_final
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" './SHA256SUMS.txt'
+          cp "$RUNNER_TEMP/update.json" './update.json'
+          cp "$RUNNER_TEMP/VERSION" './VERSION'
+          git add 'MH Analysis.exe' SHA256SUMS.txt update.json VERSION
+          git commit -m 'MH Analysis V.01 mandatory auto-update release'
+          git push --force origin HEAD:records-mt5-local-final-exe
+          git push --force origin HEAD:final-current-v796
