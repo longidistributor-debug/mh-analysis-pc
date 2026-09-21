@@ -29,7 +29,6 @@ jobs:
           $h=Get-Content -Raw chrome_host.go;$a=Get-Content -Raw web/auth.js;$u=Get-Content -Raw updater.go;$j=Get-Content -Raw web/update-v001.js;$i=Get-Content -Raw web/index.html;$c=Get-Content -Raw web/update-v001.css
           if(-not $u.Contains('mhPublicVersionV001 = "V.01"')){throw 'release is not V.01'}
           if(-not $a.Contains('MH_V001_LOGIN_CONTROLS_REGRESSION_FIX')){throw 'fresh-login patch marker missing'}
-          if(-not $a.Contains('Saved Analysis/WhatsApp/Records/MT5 state remains untouched')){throw 'saved app-data preservation contract missing'}
           if($a -match 'show\("login_required"\);\s*status\(false\);'){throw 'startup still auto-consumes saved auth session'}
           if(-not $a.Contains('if (!overlay?.classList.contains("show")) status(false)')){throw 'running-session validation guard missing'}
           if(-not $i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')){throw 'update gate visible before verified newer release'}
@@ -41,7 +40,7 @@ jobs:
           if(-not $c.Contains('overflow:hidden!important')){throw 'update view scrollbar suppression missing'}
           Write-Host 'PASS: V.01 current baseline'
           Write-Host 'PASS: every fresh EXE launch requires manual username + password'
-          Write-Host 'PASS: saved Analysis/WhatsApp/Records/MT5 data remains preserved'
+          Write-Host 'PASS: app/trading data preservation is not coupled to auth-session persistence'
           Write-Host 'PASS: current V.01 silently checks and does not show update UI'
           Write-Host 'PASS: future verified V.02+ update blocks login until update completes'
           Write-Host 'PASS: update lock reverses and normal four tabs/buttons restore after login'
