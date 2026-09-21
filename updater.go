@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const mhPublicVersionV001 = "V.14"
+var mhPublicVersionV001 = "DEV"
 const mhUpdateManifestURLV001 = "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json"
 
 type mhUpdateManifestV001 struct { Version string `json:"version"`; Mandatory bool `json:"mandatory"`; DownloadURL string `json:"download_url"`; SHA256 string `json:"sha256"`; Notes string `json:"notes,omitempty"` }
@@ -33,6 +33,7 @@ func mhVersionNumberV001(v string) int { v=strings.TrimSpace(strings.ToUpper(v))
 func mhNewerVersionV001(latest,current string) bool{return mhVersionNumberV001(latest)>mhVersionNumberV001(current)}
 func mhFetchManifestV001()(mhUpdateManifestV001,error){var m mhUpdateManifestV001;u:=mhUpdateManifestURLResolvedV001();sep:="?";if strings.Contains(u,"?"){sep="&"};req,err:=http.NewRequest(http.MethodGet,u+sep+"mh="+strconv.FormatInt(time.Now().UnixNano(),10),nil);if err!=nil{return m,err};req.Header.Set("Cache-Control","no-cache");req.Header.Set("Pragma","no-cache");req.Header.Set("User-Agent","MH-Analysis-"+mhPublicVersionV001);resp,err:=(&http.Client{Timeout:15*time.Second}).Do(req);if err!=nil{return m,err};defer resp.Body.Close();if resp.StatusCode!=http.StatusOK{return m,fmt.Errorf("update service returned %d",resp.StatusCode)};raw,err:=io.ReadAll(io.LimitReader(resp.Body,64<<10));if err!=nil{return m,err};raw=bytes.TrimPrefix(raw,[]byte{0xEF,0xBB,0xBF});raw=bytes.TrimSpace(raw);if err:=json.Unmarshal(raw,&m);err!=nil{return m,fmt.Errorf("invalid update manifest json: %w",err)};m.Version=strings.TrimSpace(m.Version);m.DownloadURL=strings.TrimSpace(m.DownloadURL);m.SHA256=strings.ToLower(strings.TrimSpace(m.SHA256));if m.Version==""||m.DownloadURL==""||len(m.SHA256)!=64{return m,errors.New("invalid update manifest")};if !strings.HasPrefix(strings.ToLower(m.DownloadURL),"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/"){return m,errors.New("untrusted update source")};return m,nil}
 func mhWriteJSONV001(w http.ResponseWriter,v any){w.Header().Set("Content-Type","application/json");w.Header().Set("Cache-Control","no-store");_=json.NewEncoder(w).Encode(v)}
+func mhRuntimeVersionHandlerV001(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{http.Error(w,"method",http.StatusMethodNotAllowed);return};mhWriteJSONV001(w,map[string]any{"ok":true,"current":mhPublicVersionV001})}
 func mhUpdateStatusHandlerV001(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{http.Error(w,"method",http.StatusMethodNotAllowed);return};m,err:=mhFetchManifestV001();if err!=nil{mhWriteJSONV001(w,map[string]any{"ok":false,"verified":false,"required":false,"current":mhPublicVersionV001,"error":err.Error()});return};required:=m.Mandatory&&mhNewerVersionV001(m.Version,mhPublicVersionV001);mhWriteJSONV001(w,map[string]any{"ok":true,"verified":true,"required":required,"mandatory":m.Mandatory,"current":mhPublicVersionV001,"latest":m.Version,"notes":m.Notes})}
 func mhUpdateProgressHandlerV001(w http.ResponseWriter,r *http.Request){if r.Method!=http.MethodGet{http.Error(w,"method",http.StatusMethodNotAllowed);return};mhUpdateMuV001.Lock();st:=mhUpdateStateCurrentV001;mhUpdateMuV001.Unlock();mhWriteJSONV001(w,st)}
 func mhSetUpdateStateV001(st mhUpdateStateV001){mhUpdateMuV001.Lock();mhUpdateStateCurrentV001=st;mhUpdateMuV001.Unlock()}
