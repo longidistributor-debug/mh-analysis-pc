@@ -1,3 +1,4 @@
+// MH Analysis canonical production login route — same bound device may re-login; other devices remain blocked.
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { MongoClient } from 'mongodb';
@@ -28,21 +29,15 @@ export default async function handler(req,res){
   let key,fingerprint;try{key=parseKey(pub);fingerprint=fp(key);}catch(e){await log(d,u,'LOGIN_FAILED',ip,deviceId,{reason:'device_key'});return out(res,401,{ok:false,error:'INVALID_DEVICE_KEY'});}
   const signature=Buffer.from(sig.replace(/\s+/g,''),'base64');if(!signature.length||!crypto.verify(null,Buffer.from(ch.challenge,'utf8'),key,signature)){await log(d,u,'LOGIN_FAILED',ip,deviceId,{reason:'device_signature'});return out(res,401,{ok:false,error:'INVALID_DEVICE_SIGNATURE'});}
   const consumed=await d.collection('challenges').updateOne({_id:cid,used:false},{$set:{used:true}});if(consumed.modifiedCount!==1)return out(res,401,{ok:false,error:'INVALID_CHALLENGE'});
-
   const machineIdHash=hash(deviceId),storedMachineIdHash=user.device?.machineIdHash||'',storedFingerprint=user.device?.publicKeyFingerprint||'';
   const sameMachineId=Boolean(storedMachineIdHash&&storedMachineIdHash===machineIdHash);
   const sameBoundKey=Boolean(storedFingerprint&&storedFingerprint===fingerprint);
   const oldInfo=user.device?.info||{};
   const incomingName=norm(info.device_name||info.machine_name),storedName=norm(oldInfo.device_name||oldInfo.machine_name);
   const incomingArch=norm(info.arch),storedArch=norm(oldInfo.arch);
-  // One-time legacy repair for accounts bound by the broken pre-V21 identity builds.
-  // It requires valid credentials + challenge signature + the same recorded Windows machine name
-  // (and architecture when previously recorded). Once accepted, the record is rewritten to the
-  // stable MachineGuid identity and future logins require that exact device identity.
   const legacySamePC=Boolean(!sameMachineId&&!sameBoundKey&&storedName&&incomingName===storedName&&(!storedArch||!incomingArch||storedArch===incomingArch));
   if(storedMachineIdHash&&!sameMachineId&&!sameBoundKey&&!legacySamePC){await log(d,u,'UNAUTHORIZED_DEVICE',ip,deviceId,{reason:'machine_mismatch'});return out(res,403,{ok:false,error:'DEVICE_NOT_AUTHORIZED',message:'This account is already activated on another device. Contact administrator.'});}
   if(!storedMachineIdHash&&storedFingerprint&&!sameBoundKey&&!legacySamePC){await log(d,u,'UNAUTHORIZED_DEVICE',ip,deviceId,{reason:'legacy_key_mismatch'});return out(res,403,{ok:false,error:'DEVICE_NOT_AUTHORIZED',message:'This account is already activated on another device. Contact administrator.'});}
-
   const now=new Date(),first=!storedFingerprint,clean={device_name:String(info.device_name||info.machine_name||'').slice(0,120),os_version:String(info.os_version||info.os||'').slice(0,120),arch:String(info.arch||'').slice(0,40),app_version:String(info.app_version||'').slice(0,40)};
   const device=first?{deviceId,machineIdHash,publicKeyFingerprint:fingerprint,publicKey:pub,info:clean,boundAt:now,lastSeenAt:now,firstIpHash:hash(ip),lastIpHash:hash(ip),identityVersion:2}:{...user.device,deviceId,machineIdHash,publicKeyFingerprint:fingerprint,publicKey:pub,info:{...oldInfo,...clean},lastSeenAt:now,lastIpHash:hash(ip),identityVersion:2,legacyMigratedAt:legacySamePC?now:user.device?.legacyMigratedAt};
   await users.updateOne({_id:user._id},{$set:{device,lastLoginAt:now,updatedAt:now}});
