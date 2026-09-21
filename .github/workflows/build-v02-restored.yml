@@ -1,4 +1,4 @@
-name: Build and Publish MH Analysis V.05
+name: Build and Publish MH Analysis V.06
 on:
   workflow_dispatch:
   push:
@@ -15,7 +15,7 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Restore proven runtime and apply V.05 changes
+      - name: Restore proven runtime and apply V.06 changes
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -31,23 +31,24 @@ jobs:
           python desktop/v03_wiring_patch.py
           python desktop/v04_keyboard_version_patch.py
           python desktop/v05_password_version_patch.py
-      - name: Exact V.05 contract checks
+          python desktop/v06_native_keyboard_patch.py
+      - name: Exact V.06 contract checks
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $c=Get-Content -Raw chrome_host.go
           $a=Get-Content -Raw web/auth.js
-          $ac=Get-Content -Raw web/auth.css
           $u=Get-Content -Raw updater.go
           $i=Get-Content -Raw web/index.html
-          if((Get-Content -Raw VERSION).Trim() -ne 'V.05'){throw 'VERSION is not V.05'}
-          if($u -notmatch 'mhPublicVersionV001 = "V.05"'){throw 'updater current version is not V.05'}
-          if($i -notmatch 'id="mhUpdateVersionV001">V.05<'){throw 'V.05 update UI identity missing'}
-          if($a -notmatch 'id="mhLicensePass" type="text" class="mhSecurePasswordInput"'){throw 'V.05 password input fix missing'}
-          if($ac -notmatch 'webkit-text-security:disc'){throw 'password masking missing'}
-          if($c -notmatch 'chAttachThreadInput'){throw 'V.04 keyboard input fix missing'}
-          if($c -notmatch 'chEXToolWindow'){throw 'taskbar suppression missing'}
-          Write-Host 'PASS exact V.05 requested contract'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.06'){throw 'VERSION is not V.06'}
+          if($u -notmatch 'mhPublicVersionV001 = "V.06"'){throw 'updater current version is not V.06'}
+          if($i -notmatch 'id="mhUpdateVersionV001">V.06<'){throw 'V.06 update UI identity missing'}
+          if($a -notmatch 'id="mhLicenseUser" type="text"'){throw 'username input missing'}
+          if($a -notmatch 'id="mhLicensePass" type="text" class="mhSecurePasswordInput"'){throw 'password input missing'}
+          if($c -notmatch 'func chFocusEmbeddedBrowser'){throw 'V.06 native focus helper missing'}
+          if($c -notmatch 'chAttachThreadInput.Call\(hostThread, browserThread, 0\)'){throw 'V.06 input queues are not detached'}
+          if($c -notmatch 'chSetFocus.Call\(hwnd\)'){throw 'V.06 browser SetFocus missing'}
+          Write-Host 'PASS exact V.06 native keyboard contract'
       - name: Syntax and compile
         shell: powershell
         run: |
@@ -67,21 +68,21 @@ jobs:
           Start-Sleep -Seconds 10
           if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-      - name: Build V.05 installer
+      - name: Build V.06 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
           $iss=Get-Content -Raw 'installer/MHAnalysis-V04.iss'
-          $iss=$iss.Replace('V.04','V.05').Replace('MH Analysis V.04.exe','MH Analysis V.05.exe')
-          Set-Content -Encoding UTF8 'installer/MHAnalysis-V05.iss' $iss
-          & $iscc 'installer/MHAnalysis-V05.iss'
+          $iss=$iss.Replace('V.04','V.06').Replace('MH Analysis V.04.exe','MH Analysis V.06.exe')
+          Set-Content -Encoding UTF8 'installer/MHAnalysis-V06.iss' $iss
+          & $iscc 'installer/MHAnalysis-V06.iss'
           if($LASTEXITCODE -ne 0){throw 'installer build failed'}
-          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.05.exe' | Select-Object -First 1
-          if(-not $installer){throw 'V.05 installer output not found'}
-          Copy-Item $installer.FullName 'dist/MH-Analysis-V05-Installer.exe' -Force
-      - name: Publish mandatory V.05 update channel for existing V.04 users
+          $installer=Get-ChildItem -Recurse -Filter 'MH Analysis V.06.exe' | Select-Object -First 1
+          if(-not $installer){throw 'V.06 installer output not found'}
+          Copy-Item $installer.FullName 'dist/MH-Analysis-V06-Installer.exe' -Force
+      - name: Publish mandatory V.06 update channel for existing V.05 users
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -90,19 +91,19 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git fetch origin mh-analysis-update-channel
           git worktree add update-channel origin/mh-analysis-update-channel
-          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V05.exe' -Force
-          $manifest=[ordered]@{version='V.05';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V05.exe';sha256=$sha;notes='MH Analysis V.05 password input fix.'}
+          Copy-Item 'dist/MH Analysis.exe' 'update-channel/MH-Analysis-V06.exe' -Force
+          $manifest=[ordered]@{version='V.06';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH-Analysis-V06.exe';sha256=$sha;notes='MH Analysis V.06 native login keyboard focus fix.'}
           $json=$manifest | ConvertTo-Json
           [System.IO.File]::WriteAllText((Join-Path (Get-Location) 'update-channel/update.json'),$json,(New-Object System.Text.UTF8Encoding($false)))
           Push-Location update-channel
-          git add MH-Analysis-V05.exe update.json
-          git commit -m 'Publish mandatory MH Analysis V.05 update'
+          git add MH-Analysis-V06.exe update.json
+          git commit -m 'Publish mandatory MH Analysis V.06 update'
           git push origin HEAD:mh-analysis-update-channel
           Pop-Location
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V05-Final
+          name: MH-Analysis-V06-Final
           path: |
-            dist/MH-Analysis-V05-Installer.exe
+            dist/MH-Analysis-V06-Installer.exe
             dist/MH Analysis.exe
           retention-days: 90
