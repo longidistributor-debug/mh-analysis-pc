@@ -3,6 +3,7 @@
   const rawFetch = window.fetch.bind(window);
   let overlay, message, form, userInput, passInput, button, meta;
   let checking = false;
+  let manualLoginThisProcess = false;
   let lastField = "username";
 
   const normCode = (v) => String(v || "").trim().toLowerCase();
@@ -139,6 +140,8 @@
   }
 
   async function status(reloadAfter = false) {
+    // CLEAN_RUNTIME_V02: never let a previous session authorize a fresh EXE.
+    if (!manualLoginThisProcess) { show("login_required"); return; }
     if (checking) return;
     checking = true;
     try {
@@ -182,8 +185,10 @@
         return;
       }
       passInput.value = "";
+      manualLoginThisProcess = true;
       hide(j);
-      location.reload();
+      document.documentElement.dataset.mhLicenseAuthorized = "1";
+      window.dispatchEvent(new CustomEvent("mh-license-authorized", { detail: j }));
     } catch {
       show("internet_required");
     } finally {
@@ -213,7 +218,8 @@
   };
 
   build();
+  // Update gate (when present) stays above this overlay. If the app is current,
+  // Account Login is the first usable screen on every EXE start.
   show("login_required");
-  status(false);
-  setInterval(() => status(false), 4 * 60 * 1000);
+  setInterval(() => { if (manualLoginThisProcess) status(false); }, 4 * 60 * 1000);
 })();
