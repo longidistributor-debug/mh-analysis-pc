@@ -225,22 +225,15 @@ func licEnsureDevice() (*licDevice, error) {
 }
 
 func licLoadSession() *licSession {
-	if licSessionMem != nil {
-		return licSessionMem
-	}
-	var s licSession
-	if err := licReadProtected(licSessionPath(), &s); err != nil || s.Username == "" || s.AccessToken == "" {
-		return nil
-	}
-	licSessionMem = &s
+	// CLEAN_RUNTIME_V02: login authorization is intentionally process-only.
+	// Device binding is persisted by licEnsureDevice(), but an old login token
+	// must never authorize a new EXE process.
 	return licSessionMem
 }
 
 func licSaveSession(s *licSession) error {
+	// CLEAN_RUNTIME_V02: keep only in memory for this running EXE.
 	s.SavedAt = time.Now()
-	if err := licWriteProtected(licSessionPath(), s); err != nil {
-		return err
-	}
 	licSessionMem = s
 	return nil
 }
@@ -249,7 +242,9 @@ func licClearSession() {
 	licSessionMem = nil
 	licAuthorized = false
 	licLastCheck = time.Time{}
+	// Remove any legacy persisted authorization token from older builds.
 	_ = os.Remove(licSessionPath())
+	chNotifyAuthChanged()
 }
 
 func licPost(path string, body any, bearerToken string) (int, licRemoteEnvelope, error) {
@@ -449,6 +444,7 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 		licLastMessage = ""
 	}
 	licMu.Unlock()
+	if err == nil { chNotifyAuthChanged() }
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "local_secure_storage_failed", "message": "Login succeeded but the secure Windows session could not be saved."})
