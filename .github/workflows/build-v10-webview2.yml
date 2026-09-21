@@ -1,8 +1,6 @@
 name: Build MH Analysis V.10 Corrected WebView2
 on:
   workflow_dispatch:
-  push:
-    branches: [v02-restored-working-base]
 permissions:
   contents: write
 concurrency:
