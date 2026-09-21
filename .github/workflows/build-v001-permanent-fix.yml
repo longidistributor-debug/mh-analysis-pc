@@ -31,7 +31,7 @@ jobs:
           $errors=@()
           function Need([bool]$ok,[string]$msg){if(-not $ok){$script:errors += $msg}else{Write-Host "PASS: $msg"}}
           Need ($u.Contains('mhPublicVersionV001 = "V.01"')) 'version exactly V.01'
-          Need ($a.Contains('MH_V001_LOGIN_CONTROLS_REGRESSION_FIX')) 'fresh-login implementation present'
+          Need ($a.Contains('MH_V001_RUNTIME_ACCEPTANCE_FIX')) 'latest runtime login implementation present'
           Need (-not ($a -match 'show\("login_required"\);\s*status\(false\);')) 'fresh launch cannot auto-consume saved auth session'
           Need ($a.Contains('show("login_required")')) 'Account Login remains present'
           Need ($i.Contains('mhUpdateGateV001 mhUpdateHiddenV001')) 'update gate hidden by default'
