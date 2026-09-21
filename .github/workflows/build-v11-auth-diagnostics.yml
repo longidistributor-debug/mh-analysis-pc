@@ -26,18 +26,14 @@ jobs:
           Set-Content -Encoding UTF8 VERSION 'V.11'
           (Get-Content -Raw web/index.html) -replace 'id="mhUpdateVersionV001">V\.\d+<','id="mhUpdateVersionV001">V.11<' | Set-Content -Encoding UTF8 web/index.html
           $p='license_auth.go'; $s=Get-Content -Raw $p
-          $s=$s.Replace('const licAppVersion = "80.2"','const licAppVersion = "V.11"')
-          $old='if env.Code == "" {`n`t`tenv.Code = env.Error`n`t}`n`treturn resp.StatusCode, env, nil'
-          $new='if env.Code == "" {`n`t`tenv.Code = env.Error`n`t}`n`tif strings.TrimSpace(env.Message) == "" && resp.StatusCode >= 400 {`n`t`tenv.Message = strings.TrimSpace(string(b))`n`t}`n`treturn resp.StatusCode, env, nil'
-          $s=$s.Replace($old,$new)
+          $s=$s -replace 'const licAppVersion = "[^"]+"','const licAppVersion = "V.11"'
           $s=$s.Replace('map[string]any{"username": q.Username, "device_id": d.ID}', 'map[string]any{"username": q.Username, "device_id": d.ID, "device_info": licMachineInfo()}')
           Set-Content -Encoding UTF8 $p $s
           gofmt -w license_auth.go updater.go main.go webview2_host.go
       - name: Compile and auth contract checks
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'
-          $a=Get-Content -Raw license_auth.go; $h=Get-Content -Raw webview2_host.go; $m=Get-Content -Raw main.go
+          $ErrorActionPreference='Stop'; $a=Get-Content -Raw license_auth.go; $h=Get-Content -Raw webview2_host.go; $m=Get-Content -Raw main.go
           if($a -notmatch 'const licAppVersion = "V.11"'){throw 'V.11 auth client version missing'}
           if($a -notmatch 'auth/challenge'){throw 'challenge endpoint missing'}
           if($a -notmatch 'auth/login'){throw 'login endpoint missing'}
@@ -55,11 +51,17 @@ jobs:
           $ErrorActionPreference='Stop'; $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
           $iss=Get-Content -Raw 'installer/MHAnalysis-V04.iss'; $iss=$iss.Replace('V.04','V.11').Replace('MH Analysis V.04.exe','MH Analysis V.11.exe'); Set-Content -Encoding UTF8 'installer/MHAnalysis-V11.iss' $iss; & $iscc 'installer/MHAnalysis-V11.iss'; if($LASTEXITCODE -ne 0){throw 'installer failed'}
           $x=Get-ChildItem -Recurse -Filter 'MH Analysis V.11.exe'|Select-Object -First 1; if(-not$x){throw 'installer missing'}; Copy-Item $x.FullName 'dist/MH-Analysis-V11-Installer.exe'
-      - name: Commit corrected V.11 source
+      - name: Commit corrected V.11 source safely
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git add license_auth.go updater.go VERSION web/index.html
-          if((git status --porcelain).Length -gt 0){git commit -m 'Promote V.11 auth correction [skip ci]'; git fetch origin v02-restored-working-base; git rebase origin/v02-restored-working-base; git push origin HEAD:v02-restored-working-base}
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add license_auth.go updater.go VERSION web/index.html
+          if((git diff --cached --quiet) -eq $false){git commit -m 'Promote V.11 auth correction [skip ci]'}
+          git reset --hard HEAD
+          git clean -fd -e dist/ -e dist-installer/
+          git fetch origin v02-restored-working-base
+          git rebase origin/v02-restored-working-base
+          git push origin HEAD:v02-restored-working-base
       - name: Publish V.11 update channel
         shell: powershell
         run: |
