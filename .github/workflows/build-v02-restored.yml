@@ -15,18 +15,35 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
+      - name: Restore proven Records and MT5 runtime
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/records_feature_patch.py
+          python desktop/records_mt5_local_patch.py
+          python desktop/native_mt5_terminal_patch.py
+          python desktop/native_mt5_prefill_patch.py
+          $c=Get-Content -Raw chrome_host.go
+          if($c -notmatch 'chRecordsWnd'){throw 'Records runtime restore failed'}
+          if($c -notmatch 'chMT5Wnd'){throw 'MT5 runtime restore failed'}
+          if($c -notmatch 'btnMT5'){throw 'MT5 button restore failed'}
+          Write-Host 'PASS original Records + MT5 host restored'
       - name: Contract checks
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $a=Get-Content -Raw web/auth.js
           $m=Get-Content -Raw main.go
+          $c=Get-Content -Raw chrome_host.go
           if($m -notmatch 'runChromeHost\(\)'){throw 'working Chrome host missing'}
           if($a -notmatch 'manualLoginThisProcess = false'){throw 'manual-login gate missing'}
           if($a -match 'show\("login_required"\);\s*status\(false\)'){throw 'startup login bypass detected'}
           if($a -notmatch 'if\(!manualLoginThisProcess\)'){throw 'status login guard missing'}
           if((Get-Content -Raw VERSION).Trim() -ne 'V.02'){throw 'VERSION is not V.02'}
-          Write-Host 'PASS restored runtime + mandatory manual login V.02 contract'
+          if($c -notmatch 'Records'){throw 'Records missing'}
+          if($c -notmatch 'MT5 System'){throw 'MT5 System missing'}
+          if($c -notmatch 'Signal Link'){throw 'Signal Link missing'}
+          Write-Host 'PASS V.02 mandatory login + restored UI contract'
       - name: Syntax and compile
         shell: powershell
         run: |
@@ -40,8 +57,9 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          $env:MH_SMOKE_TEST='1'
           $p=Start-Process -FilePath (Resolve-Path 'dist/MH Analysis.exe') -PassThru
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 10
           if($p.HasExited){throw "Application exited during startup with code $($p.ExitCode)"}
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           Write-Host 'PASS application remains alive through startup'
