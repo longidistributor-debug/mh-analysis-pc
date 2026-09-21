@@ -6,6 +6,8 @@ s=s.replace('chSetForegroundWindow   = chUser32.NewProc("SetForegroundWindow")',
 s=s.replace('chEXAppWindow   = 0x00040000', 'chEXAppWindow   = 0x00040000\n\tchEXToolWindow  = 0x00000080')
 s=s.replace('exStyle &^= chEXDlgModal | chEXWindowEdge | chEXClientEdge | chEXStaticEdge | chEXAppWindow', 'exStyle &^= chEXDlgModal | chEXWindowEdge | chEXClientEdge | chEXStaticEdge | chEXAppWindow\n\texStyle |= chEXToolWindow')
 s=s.replace('chSetParent.Call(hwnd, hostHWND)', 'chSetParent.Call(hwnd, hostHWND)\n\tchSetFocus.Call(hwnd)', 1)
+# Verify embedded Chrome/Edge child is explicitly a tool window and not an app/taskbar window.
+if 'exStyle |= chEXToolWindow' not in s: raise SystemExit('embedded browser taskbar suppression missing')
 needle='''\t\tid := int(wParam & 0xffff)\n\t\tswitch id {'''
 replacement='''\t\tid := int(wParam & 0xffff)\n\t\tif !licAuthorized {\n\t\t\tsection := "MH Analysis"\n\t\t\tswitch id {\n\t\t\tcase idWhatsapp: section = "WhatsApp"\n\t\t\tcase idRecords: section = "Records"\n\t\t\tcase idMT5: section = "MT5 System"\n\t\t\tcase chIDSignalLink: section = "Signal Link"\n\t\t\t}\n\t\t\tif id == idAnalysis || id == idWhatsapp || id == idRecords || id == idMT5 || id == chIDSignalLink {\n\t\t\t\tlicSetNavNotice(section)\n\t\t\t\tchSwitchView(1)\n\t\t\t\treturn 0\n\t\t\t}\n\t\t}\n\t\tswitch id {'''
 if needle not in s: raise SystemExit('native command anchor missing')
