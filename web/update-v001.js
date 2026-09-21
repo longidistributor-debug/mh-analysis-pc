@@ -10,70 +10,61 @@
   const fill=document.getElementById('mhUpdateFillV001');
   const pct=document.getElementById('mhUpdatePercentV001');
   const state=document.getElementById('mhUpdateStateV001');
-  let verifiedOnce=false, required=false, progressTimer=0, checking=false;
+  let progressTimer=0, checking=false, starting=false;
 
   function showGate(){document.body.classList.remove('mhUpdateCheckingV001');document.body.classList.add('mhUpdateRequiredV001');gate.classList.remove('mhUpdateHiddenV001')}
   function hideGate(){document.body.classList.remove('mhUpdateRequiredV001');gate.classList.add('mhUpdateHiddenV001')}
   function percent(v){const n=Math.max(0,Math.min(100,Number(v)||0));fill.style.width=n+'%';pct.textContent=Math.round(n)+'%'}
-  function checkError(msg){
-    required=true;showGate();
-    title.textContent='Update Check Required';
-    sub.textContent=msg||'Unable to verify the required MH Analysis version.';
-    btn.style.display='none';
-    retry.classList.add('show');
-    state.textContent='MH Analysis cannot continue to login until the update check succeeds.';
-  }
-
-  async function checkVersion(initial=false){
-    if(checking)return;checking=true;
-    if(initial){document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking required version…';sub.textContent='Please wait.';btn.style.display='none';retry.classList.remove('show');state.textContent='Checking for required MH Analysis updates before login…'}
-    try{
-      const r=await fetch('/api/update/status',{cache:'no-store'});
-      if(!r.ok)throw new Error('Update service returned '+r.status);
-      const j=await r.json();
-      if(!j.verified){checkError(j.error);return}
-      verifiedOnce=true;
-      if(j.required){
-        required=true;showGate();
-        title.textContent='Update Required';
-        sub.textContent=`${j.latest||'New version'} is required before MH Analysis can continue.`;
-        btn.style.display='inline-block';btn.disabled=false;btn.textContent='Update Now - To Access';
-        retry.classList.remove('show');state.textContent='Your login, Records, WhatsApp settings and saved data will remain unchanged.';
-      }else{
-        required=false;hideGate();document.body.classList.remove('mhUpdateCheckingV001');
-      }
-    }catch(e){checkError('Could not verify the required MH Analysis version. Check internet and retry.')}
-    finally{checking=false}
+  function noInternet(msg){
+    showGate();title.textContent='No Internet Connection';
+    sub.textContent=msg||'Connect to the internet to check for MH Analysis updates.';
+    btn.style.display='none';retry.classList.add('show');retry.textContent='Retry Check';
+    wrap.classList.remove('show');state.textContent='Internet is required before login so MH Analysis can verify the current version.';
   }
 
   async function pollProgress(){
     try{
       const r=await fetch('/api/update/progress',{cache:'no-store'});const j=await r.json();
       if(j.phase==='downloading'){
-        title.textContent='Downloading Update';wrap.classList.add('show');percent(j.percent);state.textContent=j.total>0?'Downloading securely…':'Downloading update…';
+        title.textContent='Downloading Update';wrap.classList.add('show');percent(j.percent);state.textContent='Downloading securely…';
       }else if(j.phase==='verifying'){
         title.textContent='Verifying Update';wrap.classList.add('show');percent(99);state.textContent='Checking update integrity…';
       }else if(j.phase==='installing'){
         title.textContent='Installing Update';wrap.classList.add('show');percent(100);state.textContent='MH Analysis will restart automatically with the new version.';
       }else if(j.phase==='error'){
-        clearInterval(progressTimer);progressTimer=0;title.textContent='Update Failed';sub.textContent=j.error||'Please retry.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';retry.classList.add('show');state.textContent='No saved MH Analysis data was removed.';
+        clearInterval(progressTimer);progressTimer=0;starting=false;title.textContent='Update Failed';sub.textContent=j.error||'Please retry.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';state.textContent='Your saved MH Analysis data remains unchanged.';
       }
-    }catch(_){/* keep current progress surface; process may be restarting */}
+    }catch(_){/* updater may be replacing/restarting the application */}
   }
 
   async function startUpdate(){
-    showGate();btn.disabled=true;btn.textContent='Starting…';retry.classList.remove('show');wrap.classList.add('show');percent(0);title.textContent='Preparing Update';sub.textContent='Keep MH Analysis open while the update downloads.';state.textContent='';
+    if(starting)return;starting=true;showGate();retry.classList.remove('show');btn.style.display='none';wrap.classList.add('show');percent(0);title.textContent='Preparing Update';sub.textContent='A newer MH Analysis version was found.';state.textContent='Starting automatic download and installation…';
     try{
       const r=await fetch('/api/update/start',{method:'POST',cache:'no-store'});
       if(!r.ok)throw new Error((await r.text())||'Update could not start.');
-      btn.style.display='none';
-      if(!progressTimer){progressTimer=setInterval(pollProgress,250)}
-      pollProgress();
-    }catch(e){title.textContent='Update Failed';sub.textContent=e?.message||'Update could not start.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';retry.classList.add('show')}
+      if(!progressTimer)progressTimer=setInterval(pollProgress,250);pollProgress();
+    }catch(e){starting=false;title.textContent='Update Failed';sub.textContent=e?.message||'Update could not start.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';state.textContent='Your saved MH Analysis data remains unchanged.';}
+  }
+
+  async function checkVersion(){
+    if(checking||starting)return;checking=true;
+    document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking for Updates';sub.textContent='Please wait…';btn.style.display='none';retry.classList.remove('show');wrap.classList.remove('show');state.textContent='Checking the MH Analysis update manifest before login…';
+    try{
+      const r=await fetch('/api/update/status',{cache:'no-store'});
+      if(!r.ok)throw new Error('Update service returned '+r.status);
+      const j=await r.json();
+      if(!j.verified){noInternet(j.error);return}
+      if(j.required){
+        showGate();title.textContent='Update Available';sub.textContent=`${j.latest||'A newer version'} is available. Updating MH Analysis now…`;state.textContent='Your login, Records, WhatsApp settings and saved data will remain unchanged.';
+        checking=false;await startUpdate();return;
+      }
+      // Internet/manifest verified and installed version is current: go straight to mandatory login.
+      hideGate();document.body.classList.remove('mhUpdateCheckingV001');
+    }catch(e){noInternet('Unable to reach the MH Analysis update service. Check your internet connection and retry.')}
+    finally{checking=false}
   }
 
   btn.addEventListener('click',startUpdate);
-  retry.addEventListener('click',()=>checkVersion(true));
-  checkVersion(true);
-  setInterval(()=>checkVersion(false),60000);
+  retry.addEventListener('click',checkVersion);
+  checkVersion();
 })();
