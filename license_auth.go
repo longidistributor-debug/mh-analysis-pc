@@ -225,23 +225,16 @@ func licEnsureDevice() (*licDevice, error) {
 }
 
 func licLoadSession() *licSession {
-	if licSessionMem != nil {
-		return licSessionMem
-	}
-	var s licSession
-	if err := licReadProtected(licSessionPath(), &s); err != nil || s.Username == "" || s.AccessToken == "" {
-		return nil
-	}
-	licSessionMem = &s
+	// Login authorization is intentionally process-only.
+	// Device binding and all non-auth application data remain persistent.
 	return licSessionMem
 }
 
 func licSaveSession(s *licSession) error {
 	s.SavedAt = time.Now()
-	if err := licWriteProtected(licSessionPath(), s); err != nil {
-		return err
-	}
 	licSessionMem = s
+	// Remove any session token left by older builds so reopening can never bypass login.
+	_ = os.Remove(licSessionPath())
 	return nil
 }
 
@@ -506,7 +499,7 @@ func registerLicenseRoutes(mux *http.ServeMux) {
 func licenseGate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
-		if strings.HasPrefix(p, "/api/license/") || p == "/api/shutdown" {
+		if strings.HasPrefix(p, "/api/license/") || strings.HasPrefix(p, "/api/update/") || p == "/api/shutdown" {
 			next.ServeHTTP(w, r)
 			return
 		}
