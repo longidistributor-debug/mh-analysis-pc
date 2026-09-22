@@ -28,7 +28,13 @@ jobs:
           if($wv -notmatch 'wv2Records \*edge\.Chromium'){throw 'embedded Records controller missing'}
           if($wv -notmatch 'wmWhatsAppSend'){throw 'WhatsApp queue event missing from active host'}
           if($wv -notmatch 'V36_WA_FANOUT'){throw 'embedded WhatsApp signal fanout missing'}
-          if($ch -notmatch 'V36_MT5_PROCESS_IMAGE'){throw 'native MT5 process embedding missing'}
+          # Verify the real internal MT5 route, not a nonexistent marker.
+          if($ch -notmatch 'func chFindInstalledMT5WindowV33\(\) uintptr'){throw 'MT5 installed-window detection missing'}
+          if($ch -notmatch 'func chEmbedMT5V33\(hwnd uintptr\) bool'){throw 'MT5 embed routine missing'}
+          if($ch -notmatch 'chSetParent\.Call\(hwnd, hostHWND\)'){throw 'MT5 SetParent embedding missing'}
+          if($ch -notmatch 'func chEnsureMT5Terminal\(\) error'){throw 'MT5 single entrypoint missing'}
+          if($ch -notmatch 'if existing := chFindInstalledMT5WindowV33\(\); existing != 0'){throw 'existing MT5 is not preferred before launch'}
+          if($ch -notmatch 'go mt5ApplyLatestQueued\(\)'){throw 'MT5 pending-signal apply hook missing'}
           if($app -notmatch 'V36_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
           if($app -match "Promise\.allSettled\(\[captureSignalRecordV30"){throw 'old racing fanout still active'}
           if($app -match "void captureSignalRecordV796\(d,state\)"){throw 'legacy record writer still active'}
