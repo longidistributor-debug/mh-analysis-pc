@@ -72,6 +72,23 @@ func v36EmbedMT5(hwnd uintptr) bool {
 // chEnsureMT5TerminalV36 first attaches an already-running installed MT5 and only launches
 // a terminal when none exists. A launched terminal is hidden until verified as embedded.
 func chEnsureMT5TerminalV36() error {
+    // V39_MT5_RESHOW: if MT5 is already embedded, re-show/re-parent/resize/focus the same HWND.
+    chMu.Lock()
+    existingEmbedded := chMT5Wnd
+    chMu.Unlock()
+    if existingEmbedded != 0 {
+        if v36EmbedMT5(existingEmbedded) {
+            chShowWindow.Call(existingEmbedded, chSWShow)
+            chResizeChildren()
+            chFocusEmbeddedBrowser(existingEmbedded)
+            go mt5ApplyLatestQueued()
+            return nil
+        }
+        chMu.Lock()
+        if chMT5Wnd == existingEmbedded { chMT5Wnd = 0 }
+        chMu.Unlock()
+    }
+
     chMu.Lock()
     if chMT5StartingV34 { chMu.Unlock(); return nil }
     chMT5StartingV34 = true
