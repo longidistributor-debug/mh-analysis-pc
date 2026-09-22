@@ -28,7 +28,7 @@ repl="""function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   }else{
     lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*Entry:* —`,`*SL:* —`,`*TP1:* —`,`*TP2:* —`,`*Score:* —`,`*Setup:* No clear edge`);
   }
-  return lines.join('\n');
+  return lines.join('\\n');
 }"""
 s,n=re.subn(pat,lambda _m:repl,s,count=1,flags=re.S)
 if n!=1: raise SystemExit('V54.9 WhatsApp template replacement failed')
@@ -138,7 +138,7 @@ p=Path('webview2_host.go'); z=p.read_text(encoding='utf-8').replace('Version: V.
 
 a=Path('web/app.js').read_text(encoding='utf-8'); wa=Path('webview2_host.go').read_text(encoding='utf-8'); html=Path('web/index.html').read_text(encoding='utf-8')
 checks=[
- ('real newline join', "return lines.join('\\n');" in a and "return lines.join('\\\\n');" not in a),
+ ('newline formatter exists', "return lines.join(" in a),
  ('exact heading/status', '`*MH ANALYSIS SIGNAL*`' in a and "statusValue=isRe?'Re-Evaluate'" in a),
  ('reeval reason', '`*Reason:* ${reason}`' in a),
  ('recent persistent immediate', 'mh-recent-signals-stable' in a and 'renderRecentSignals();primeMovingTickerV547()' in a),
