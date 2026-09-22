@@ -16,8 +16,7 @@ import (
 )
 
 // MH_NATIVE_MT5_PREFILL_V27
-// This bridge only prepares the native MT5 pending-order ticket. It deliberately
-// stops before the final Place/Submit action so the user reviews the order in MT5.
+// V30 queues and submits a validated native MT5 pending order automatically after exact symbol, pending type, Entry, SL and TP checks.
 type mt5OrderPrep struct {
 	Symbol      string  `json:"symbol"`
 	Timeframe   string  `json:"timeframe"`
@@ -81,7 +80,7 @@ func mt5PrepareHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	q.PendingType = deriveMT5PendingType(q.Direction, q.Entry, q.MarketPrice)
 	q.CreatedAt = time.Now().Format(time.RFC3339)
-	q.Status = "QUEUED FOR MT5 REVIEW"
+	q.Status = "QUEUED FOR MT5 AUTO PENDING"
 	q.Error = ""
 
 	mt5PrepMu.Lock()
@@ -89,9 +88,12 @@ func mt5PrepareHandler(w http.ResponseWriter, r *http.Request) {
 	mt5PrepQueued = true
 	mt5PrepMu.Unlock()
 
-	if mt5ReadyAndVisible() {
-		go mt5ApplyLatestQueued()
-	}
+	go func() {
+		if !mt5ReadyAndVisible() {
+			_ = chEnsureMT5Terminal()
+		}
+		mt5ApplyLatestQueued()
+	}()
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":           true,
@@ -119,10 +121,7 @@ func mt5ReadyAndVisible() bool {
 	wnd := chMT5Wnd
 	cmd := chMT5Cmd
 	chMu.Unlock()
-	chViewMu.Lock()
-	view := chDesiredView
-	chViewMu.Unlock()
-	return wnd != 0 && cmd != nil && cmd.Process != nil && view == 4
+	return wnd != 0 && cmd != nil && cmd.Process != nil
 }
 
 func mt5ApplyLatestQueued() {
@@ -297,7 +296,7 @@ if(-not ($okEntry -and $okSL -and $okTP)){
   Out-Result $false 'PARTIAL MT5 PREFILL' ("Entry="+$okEntry+", SL="+$okSL+", TP="+$okTP); exit 0
 }
 
-Out-Result $true 'READY FOR USER CONFIRMATION' ("$($p.pending_type) • Entry $($p.entry) • SL $($p.sl) • TP1 $($p.tp1)")
+Out-Result $true 'READY - EA HANDLES AUTO PENDING' ("$($p.pending_type) • Entry $($p.entry) • SL $($p.sl) • TP1 $($p.tp1)")
 `
 
 	enc := encodePowerShellCommand(ps)
@@ -338,7 +337,7 @@ Out-Result $true 'READY FOR USER CONFIRMATION' ("$($p.pending_type) • Entry $(
 		return res.Status, fmt.Errorf("%s", res.Status)
 	}
 	if res.Status == "" {
-		res.Status = "READY FOR USER CONFIRMATION"
+		res.Status = "READY - EA HANDLES AUTO PENDING"
 	}
 	return res.Status, nil
 }

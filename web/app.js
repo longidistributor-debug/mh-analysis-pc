@@ -299,6 +299,24 @@ function renderRecentSignals(){
   $('#recentSignals').className='recentList';
   $('#recentSignals').innerHTML=previous.length?previous.map(x=>`<div class="recentRow"><span>${x.time}</span><span class="recentTf">${x.timeframe||'—'}</span><b class="${x.label==='BUY'?'good':x.label==='SELL'?'bad':'warn'}">${x.label}</b><span>${x.score}/100</span></div>`).join(''):'No previous session signals yet.';
 }
+// MH_SAME_SIGNAL_GUARD_V30
+async function checkSameSignalV30(d){
+  const sig=d?.signal;if(!sig){d._sameActiveSignal=false;return null}
+  try{
+    const r=await fetch('/api/records-v2/duplicate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,timeframe,direction:sig.direction,entry:sig.entry,sl:sig.sl,tp1:sig.tp1,tp2:sig.tp2})});
+    const j=await r.json();d._sameActiveSignal=!!j.duplicate;d._sameSignalStatus=j.existing_status||'';return j;
+  }catch(_){d._sameActiveSignal=false;return null}
+}
+function sameSignalMessageV30(d){
+  const s=d?.signal;return s?`SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`:'NO NEW SIGNAL';
+}
+async function captureSignalRecordV30(d){
+  const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
+  const id=`MH${Date.now()}${Math.floor(Math.random()*900+100)}`;
+  const r=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:id,symbol,timeframe,direction:sig.direction,entry:sig.entry,sl:sig.sl,tp1:sig.tp1,tp2:sig.tp2,score:sig.score,setup:d.bestFamily||sig.setupReason||'',action:'NEW'})});
+  return r.json().catch(()=>null);
+}
+
 async function captureSignalRecordV796(d,state='NEW'){
   const sig=d?.signal;
   if(!sig||String(state).toUpperCase()!=='NEW')return;
@@ -310,6 +328,7 @@ async function captureSignalRecordV796(d,state='NEW'){
   }catch(e){}
 }
 function addRecent(d,state='NEW'){
+  if(d?._sameActiveSignal){renderRecentSignals();return}
   const sig=d.signal,now=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),label=d.newsRisk?.high?'NEWS RISK':(sig?sig.direction:'NO EDGE'),score=sig?.score??Math.max(d.buyScore||0,d.sellScore||0);
   const key=`${symbol}|${timeframe}|${label}|${score}|${state}`;
   if(recentSession[0]?.key!==key)recentSession.unshift({time:now,timeframe,label,score,state,key});
@@ -340,7 +359,7 @@ function renderDecision(d,reason,mode='NEW'){
     const newsBlocked=!!d.newsRisk?.high;
     b.className='signalBadge neutral';b.textContent=newsBlocked?'⚠ NEWS RISK • NO SIGNAL':'NO CLEAR EDGE';card.className='panel signalPanel neutralState';q.className='warn';q.textContent=newsBlocked?'HIGH IMPACT / VOLATILITY':`BUY ${d.buyScore} • SELL ${d.sellScore}`;plan.className='plan muted';plan.textContent=newsBlocked?d.explanation:'Fresh ranking found no statistically clear directional edge. The previous signal is not blindly reused.';
   }
-  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':'NEW ANALYSIS';
+  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');
   $('#explanation').className='detailText';$('#explanation').textContent=reason||d.explanation;
   $('#reasons').className='detailText';$('#reasons').textContent=[...d.reasons,...d.warnings].map(x=>`• ${x}`).join('\n')||'—';
   renderTopMap(d);renderTopSetups(d);if(mode!=='VIEW')addRecent(d,mode);updateSignalHeadline(d);
@@ -470,6 +489,7 @@ function scheduleFixedAfterDecision(d,action,triggerAt=autoActionStartedAt||Date
 async function autoSendAndSchedule(d,action,status=''){
   if(!autoSignalEnabled)return;
   const triggerAt=autoActionStartedAt||Date.now();
+  if(d?._sameActiveSignal){setAutoStatus('Same signal still active • no new signal sent','warn');scheduleFixedAfterDecision(d,action,triggerAt);return;}
   try{
     setAutoStatus(`${fixedPhaseInfo(triggerAt).label} • Sending ${action.toLowerCase()}…`,'warn');
     await sendDecisionWhatsApp(d,action,status);
@@ -514,6 +534,29 @@ async function runScheduledAutoAction(action){
     else await executeNewAnalysis(true);
   }finally{autoSignalRunning=false}
 }
+async function sendUniqueSignalToEAV30(d){
+  const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
+  const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
+  const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
+  const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
+  try{
+    const r=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0})});
+    let j={};try{j=await r.json()}catch(_){ }
+    if(!r.ok)throw new Error(j.error||`EA bridge HTTP ${r.status}`);
+    setAutoStatus(`MT5 pending sent to EA • ${pending}`,'good');
+    return j;
+  }catch(e){
+    console.warn('MT5 EA pending bridge failed',e);
+    setAutoStatus(`MT5 pending failed • ${e.message||e}`,'bad');
+    return null;
+  }
+}
+function derivePendingTypeV30(direction,entry,market){
+  direction=String(direction||'').toUpperCase();
+  if(direction==='BUY')return entry<=market?'BUY_LIMIT':'BUY_STOP';
+  return entry>=market?'SELL_LIMIT':'SELL_STOP';
+}
+
 async function prepareMT5SignalV796(d,state='NEW'){
   const sig=d?.signal;
   if(!sig||String(state).toUpperCase()!=='NEW')return;
@@ -534,19 +577,21 @@ async function executeNewAnalysis(fromAuto=false){
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
     const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
     applyNewsRisk(d,newsRisk);
-    d._ranked=buildRankedForUi(c,d);const reason=refreshReason(prev,d);
+    d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
+    if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
     if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');
-    if(d.signal)void prepareMT5SignalV796(d,'NEW'); // MH_NATIVE_MT5_PREFILL_V796
+    if(d.signal&&!d._sameActiveSignal){Promise.allSettled([captureSignalRecordV30(d),sendUniqueSignalToEAV30(d),prepareMT5SignalV796(d,'NEW')]).then(()=>{});} // V34_CANONICAL_SIGNAL_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
     else{
       try{
         await refreshBackendSettings();
-        if(backendSettings.has_whatsapp){
+        if(backendSettings.has_whatsapp&&!d._sameActiveSignal){
           setAutoStatus('Sending NEW ANALYZE to WhatsApp…','warn');
           await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
           setAutoStatus('NEW ANALYZE sent to WhatsApp','good');
-        }else setAutoStatus('Manual analysis ready • WhatsApp number not saved','warn');
+        }else if(d._sameActiveSignal)setAutoStatus('Same signal still active • no new WhatsApp / Record / MT5 pending','warn');
+        else setAutoStatus('Manual analysis ready • WhatsApp Signal Link not saved','warn');
       }catch(e){setAutoStatus(`WhatsApp send failed • ${e.message||e}`,'bad')}
     }
     return d;

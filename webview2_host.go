@@ -13,6 +13,10 @@ import (
 	"github.com/jchv/go-webview2/pkg/edge"
 )
 
+var chSetWindowDisplayAffinityV31 = chUser32.NewProc("SetWindowDisplayAffinity")
+
+const chWDAExcludeFromCaptureV31 = 0x00000011
+
 var (
 	wv2Browser   *edge.Chromium
 	wv2Container uintptr
@@ -47,6 +51,9 @@ func wv2Resize() {
 			chMoveWindow.Call(child, 0, uintptr(barH), uintptr(w), uintptr(h), 1)
 		}
 	}
+	if chSignalLinkBtn != 0 {
+		chMoveWindow.Call(chSignalLinkBtn, 600, 7, 145, 30, 1)
+	}
 }
 
 // V.27: MH Analysis must never be navigated away from after startup. The analysis
@@ -57,6 +64,14 @@ func wv2SetDesiredView(which int) {
 	chViewMu.Lock()
 	chDesiredView = which
 	chViewMu.Unlock()
+	// V29: restore the proven V26 Signal Link control exactly for WhatsApp view.
+	if chSignalLinkBtn != 0 {
+		if which == 2 {
+			chShowWindow.Call(chSignalLinkBtn, chSWShow)
+		} else {
+			chShowWindow.Call(chSignalLinkBtn, chSWHide)
+		}
+	}
 }
 
 func wv2HideAuxViews() {
@@ -128,11 +143,24 @@ func wv2EnsureAuxBrowser(which int) {
 	}
 }
 
+// V32: auxiliary views are created deterministically on first click; no startup prewarm race.
 func wv2ShowLocal(which int) {
 	if wv2Browser == nil {
 		return
 	}
 	wv2SetDesiredView(which)
+	// V34_ONE_CLICK_VIEW: first user click is authoritative. Retry visibility internally
+	// while WebView/MT5 child creation settles instead of requiring more user clicks.
+	for _, d := range []time.Duration{80 * time.Millisecond, 250 * time.Millisecond, 650 * time.Millisecond, 1200 * time.Millisecond} {
+		time.AfterFunc(d, func() { chApplyDesiredBrowserView(); chResizeChildren() })
+	}
+	if chSignalLinkBtn != 0 {
+		if which == 2 {
+			chShowWindow.Call(chSignalLinkBtn, chSWShow)
+		} else {
+			chShowWindow.Call(chSignalLinkBtn, chSWHide)
+		}
+	}
 	wv2HideAuxViews()
 
 	if which == 1 {
@@ -143,24 +171,32 @@ func wv2ShowLocal(which int) {
 		return
 	}
 
+	// V31: keep the current MH view visible until the requested child is actually ready.
+	// This prevents a blank first click and removes the need to click twice.
+	if which == 2 && chWhatsappWnd == 0 {
+		// V32: create/attach before returning so one click is enough.
+		wv2EnsureAuxBrowser(2)
+	}
+	if which == 3 && chRecordsWnd == 0 {
+		// V32: Records must be attached and visible on the first click.
+		wv2EnsureAuxBrowser(3)
+	}
+	if which == 2 && chWhatsappWnd == 0 {
+		return
+	}
+	if which == 3 && chRecordsWnd == 0 {
+		return
+	}
 	_ = wv2Browser.Hide()
 	chShowWindow.Call(wv2Container, chSWHide)
 
 	if which == 2 {
-		if chWhatsappWnd == 0 {
-			go wv2EnsureAuxBrowser(2)
-			return
-		}
 		chShowWindowAsync.Call(chWhatsappWnd, chSWShow)
 		chFocusEmbeddedBrowser(chWhatsappWnd)
 		wv2Resize()
 		return
 	}
 	if which == 3 {
-		if chRecordsWnd == 0 {
-			go wv2EnsureAuxBrowser(3)
-			return
-		}
 		chShowWindowAsync.Call(chRecordsWnd, chSWShow)
 		chFocusEmbeddedBrowser(chRecordsWnd)
 		wv2Resize()
@@ -181,6 +217,9 @@ func wv2ButtonAllowed(id int) bool {
 	if id == idMT5 {
 		section = "MT5 System"
 	}
+	if id == chIDSignalLink {
+		section = "Signal Link"
+	}
 	licSetNavNotice(section)
 	wv2ShowLocal(1)
 	return false
@@ -188,17 +227,12 @@ func wv2ButtonAllowed(id int) bool {
 
 func wv2ShowMT5() {
 	wv2SetDesiredView(4)
-	_ = wv2Browser.Hide()
-	chShowWindow.Call(wv2Container, chSWHide)
-	if chWhatsappWnd != 0 {
-		chShowWindowAsync.Call(chWhatsappWnd, chSWHide)
-	}
-	if chRecordsWnd != 0 {
-		chShowWindowAsync.Call(chRecordsWnd, chSWHide)
-	}
+	// V31: never blank the host while MT5 is starting. The terminal is hidden,
+	// re-parented into MH Analysis, resized, then shown by chApplyDesiredBrowserView.
 	go func() {
 		if err := chEnsureMT5Terminal(); err != nil {
 			messageBox(hostHWND, err.Error(), "MT5 System", 0x10)
+			wv2SetDesiredView(1)
 		}
 	}()
 }
@@ -222,6 +256,8 @@ func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			wv2ShowLocal(3)
 		case idMT5:
 			wv2ShowMT5()
+		case chIDSignalLink:
+			chShowNativeSettingsDialog(2)
 		}
 		return 0
 	case wmSwitchAnalysis:
@@ -283,10 +319,13 @@ func runWebView2Host() {
 		messageBox(0, "Could not create MH Analysis window.", "MH Analysis", 0x10)
 		return
 	}
+	// V31 best-effort Windows capture exclusion (Snipping Tool/most screen capture/share APIs).
+	chSetWindowDisplayAffinityV31.Call(hostHWND, chWDAExcludeFromCaptureV31)
 	btnAnalysis, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("MH Analysis"))), chWSChild|chWSVisible, 8, 7, 140, 30, hostHWND, idAnalysis, inst, 0)
 	btnWhatsapp, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("WhatsApp"))), chWSChild|chWSVisible, 156, 7, 140, 30, hostHWND, idWhatsapp, inst, 0)
 	btnRecords, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("Records"))), chWSChild|chWSVisible, 304, 7, 140, 30, hostHWND, idRecords, inst, 0)
 	btnMT5, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("MT5 System"))), chWSChild|chWSVisible, 452, 7, 140, 30, hostHWND, idMT5, inst, 0)
+	chSignalLinkBtn, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("BUTTON"))), uintptr(unsafe.Pointer(chWstr("Signal Link"))), chWSChild, 600, 7, 145, 30, hostHWND, chIDSignalLink, inst, 0)
 	wv2Container = wv2CreateContainer(hostHWND, inst)
 	data := filepath.Join(os.Getenv("LOCALAPPDATA"), "MHAnalysis", "WebView2")
 	_ = os.MkdirAll(data, 0755)
@@ -305,23 +344,13 @@ func runWebView2Host() {
 	}
 	wv2Resize()
 	b.Navigate(serverURL)
-	b.Focus()
 	wv2SetDesiredView(1)
+	// V28: keep the native host hidden until WebView2 gets its first paint.
+	time.Sleep(450 * time.Millisecond)
 	chShowWindow.Call(hostHWND, chSWMaximize)
 	chUpdateWindow.Call(hostHWND)
 	wv2Resize()
 	b.Focus()
-
-	// Keep WhatsApp CDP and Records ready in their own hidden embedded windows.
-	// They no longer replace/unload the MH Analysis page.
-	go func() {
-		time.Sleep(700 * time.Millisecond)
-		wv2EnsureAuxBrowser(2)
-	}()
-	go func() {
-		time.Sleep(1100 * time.Millisecond)
-		wv2EnsureAuxBrowser(3)
-	}()
 
 	var m chMsg
 	for {

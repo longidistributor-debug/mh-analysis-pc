@@ -32,7 +32,7 @@ import (
 )
 
 const licDefaultBaseURL = "https://mh-analysis.vercel.app"
-const licAppVersion = "V.12"
+const licAppVersion = "V.34"
 
 type licDataBlob struct {
 	cbData uint32
@@ -46,6 +46,7 @@ var (
 	licCryptUnprotectData    = licCrypt32.NewProc("CryptUnprotectData")
 	licLocalFree             = licKernel32.NewProc("LocalFree")
 	licMu                    sync.Mutex
+	licDeviceMu              sync.Mutex
 	licSessionMem            *licSession
 	licAuthorized            bool
 	licLastCheck             time.Time
@@ -197,7 +198,7 @@ func licReadProtected(path string, v any) error {
 }
 
 func licStableMachineID() (string, error) {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\\Microsoft\\Cryptography`, registry.QUERY_VALUE)
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`, registry.QUERY_VALUE)
 	if err != nil {
 		return "", fmt.Errorf("open MachineGuid: %w", err)
 	}
@@ -211,6 +212,8 @@ func licStableMachineID() (string, error) {
 }
 
 func licEnsureDevice() (*licDevice, error) {
+	licDeviceMu.Lock()
+	defer licDeviceMu.Unlock()
 	machineID, err := licStableMachineID()
 	if err != nil {
 		return nil, err
@@ -218,22 +221,23 @@ func licEnsureDevice() (*licDevice, error) {
 	path := licDevicePath()
 	var disk licDeviceDisk
 	if _, statErr := os.Stat(path); statErr == nil {
-		if err := licReadProtected(path, &disk); err != nil {
-			return nil, fmt.Errorf("existing device identity cannot be read: %w", err)
+		readErr := licReadProtected(path, &disk)
+		if readErr == nil {
+			raw, decErr := base64.StdEncoding.DecodeString(disk.PrivateKey)
+			if decErr == nil && len(raw) == ed25519.PrivateKeySize {
+				priv := ed25519.PrivateKey(raw)
+				pub := priv.Public().(ed25519.PublicKey)
+				der, marshalErr := x509.MarshalPKIXPublicKey(pub)
+				if marshalErr == nil {
+					return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
+				}
+			}
 		}
-		raw, err := base64.StdEncoding.DecodeString(disk.PrivateKey)
-		if err != nil || len(raw) != ed25519.PrivateKeySize {
-			return nil, errors.New("existing device identity is invalid")
-		}
-		priv := ed25519.PrivateKey(raw)
-		pub := priv.Public().(ed25519.PublicKey)
-		der, err := x509.MarshalPKIXPublicKey(pub)
-		if err != nil {
-			return nil, err
-		}
-		return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
+		// V28 recovery: old/broken DPAPI blob must not brick this Windows device forever.
+		_ = os.Remove(path + ".tmp")
+		_ = os.Remove(path)
 	} else if !os.IsNotExist(statErr) {
-		return nil, statErr
+		return nil, fmt.Errorf("device identity file unavailable: %w", statErr)
 	}
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -413,7 +417,7 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 	d, err := licEnsureDevice()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "device_key_failed", "message": "Could not create secure device identity."})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "code": "device_key_failed", "message": "Could not create secure device identity: " + err.Error()})
 		return
 	}
 	status, ch, callErr := licPost("auth/challenge", map[string]any{"username": q.Username, "device_id": d.ID}, "")

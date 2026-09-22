@@ -167,6 +167,70 @@ func recordNumberOK(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0) && v > 0
 }
 
+// MH_SAME_SIGNAL_GUARD_V30
+func sameSignalDisplayPriceV30(a, b float64) bool {
+	if !recordNumberOK(a) || !recordNumberOK(b) {
+		return false
+	}
+	scale := 100000.0
+	if math.Max(math.Abs(a), math.Abs(b)) >= 100 {
+		scale = 100.0
+	}
+	return math.Round(a*scale) == math.Round(b*scale)
+}
+func sameSignalPointV30(x mt5LocalRecord, q mt5LocalCapture) bool {
+	return strings.EqualFold(strings.TrimSpace(x.Symbol), strings.TrimSpace(q.Symbol)) &&
+		strings.EqualFold(strings.TrimSpace(x.Timeframe), strings.TrimSpace(q.Timeframe)) &&
+		strings.EqualFold(strings.TrimSpace(x.Direction), strings.TrimSpace(q.Direction)) &&
+		sameSignalDisplayPriceV30(x.Entry, q.Entry) && sameSignalDisplayPriceV30(x.SL, q.SL) &&
+		sameSignalDisplayPriceV30(x.TP1, q.TP1) && sameSignalDisplayPriceV30(x.TP2, q.TP2)
+}
+func activeRecordV30(x mt5LocalRecord) bool {
+	if recordTerminalMT5(x) {
+		return false
+	}
+	st := strings.ToUpper(strings.TrimSpace(x.Status))
+	if strings.Contains(st, "CANCEL") || strings.Contains(st, "EXPIRED") || strings.Contains(st, "REJECT") || strings.Contains(st, "CLOSED") || strings.Contains(st, "TP HIT") || strings.Contains(st, "SL HIT") || strings.Contains(st, "BREAK EVEN") {
+		return false
+	}
+	return true
+}
+func findSameActiveV30(s mt5LocalStore, q mt5LocalCapture) int {
+	for i := len(s.Records) - 1; i >= 0; i-- {
+		if activeRecordV30(s.Records[i]) && sameSignalPointV30(s.Records[i], q) {
+			return i
+		}
+	}
+	return -1
+}
+func mt5DuplicateSignalHandlerV30(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if r.Method != http.MethodPost {
+		http.Error(w, "method", http.StatusMethodNotAllowed)
+		return
+	}
+	var q mt5LocalCapture
+	if json.NewDecoder(r.Body).Decode(&q) != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	q.Symbol = strings.ToUpper(strings.TrimSpace(q.Symbol))
+	q.Timeframe = strings.TrimSpace(q.Timeframe)
+	q.Direction = strings.ToUpper(strings.TrimSpace(q.Direction))
+	mt5RecordsMu.Lock()
+	s := loadMT5LocalStore()
+	_, _, _ = syncMT5Lifecycle(&s)
+	i := findSameActiveV30(s, q)
+	_ = saveMT5LocalStore(s)
+	mt5RecordsMu.Unlock()
+	if i >= 0 {
+		x := s.Records[i]
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "duplicate": true, "same_signal": true, "existing_signal_id": x.SignalID, "existing_status": x.Status})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "duplicate": false})
+}
+
 func samePriceLoose(a, b float64) bool {
 	if a <= 0 || b <= 0 {
 		return false
@@ -573,6 +637,13 @@ func captureMT5LocalRecord(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	_, _, _ = syncMT5Lifecycle(&s)
+	if i := findSameActiveV30(s, q); i >= 0 {
+		x := s.Records[i]
+		_ = saveMT5LocalStore(s)
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "saved": false, "duplicate": true, "same_signal": true, "existing_signal_id": x.SignalID, "existing_status": x.Status})
+		return
+	}
 	now := time.Now()
 	x := mt5LocalRecord{
 		ID: q.SignalID, SignalID: q.SignalID,
@@ -732,6 +803,7 @@ func mt5LocalResetHandler(w http.ResponseWriter, r *http.Request) {
 
 func registerRecordsV2Routes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/records-v2", mt5LocalRecordsHandler)
+	mux.HandleFunc("/api/records-v2/duplicate", mt5DuplicateSignalHandlerV30)
 	mux.HandleFunc("/api/records-v2/capture", captureMT5LocalRecord)
 	mux.HandleFunc("/api/records-v2/sync", mt5LocalSyncHandler)
 	mux.HandleFunc("/api/records-v2/reset", mt5LocalResetHandler)

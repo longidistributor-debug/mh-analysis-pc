@@ -42,6 +42,8 @@ var (
 	chEnumWindows           = chUser32.NewProc("EnumWindows")
 	chGetWindowThreadPID    = chUser32.NewProc("GetWindowThreadProcessId")
 	chGetClassName          = chUser32.NewProc("GetClassNameW")
+	chGetWindowTextV32      = chUser32.NewProc("GetWindowTextW")
+	chGetWindowTextV33      = chUser32.NewProc("GetWindowTextW")
 	chIsWindowVisible       = chUser32.NewProc("IsWindowVisible")
 	chSetParent             = chUser32.NewProc("SetParent")
 	chGetWindowLongPtr      = chUser32.NewProc("GetWindowLongPtrW")
@@ -121,22 +123,23 @@ type chMsg struct {
 type chRect struct{ L, T, R, B int32 }
 
 var (
-	chAnalysisWnd uintptr
-	chWhatsappWnd uintptr
-	chRecordsWnd  uintptr
-	chMT5Wnd      uintptr // MH_NATIVE_MT5_TERMINAL_V796
-	chAnalysisCmd *exec.Cmd
-	chWhatsappCmd *exec.Cmd
-	chRecordsCmd  *exec.Cmd
-	chMT5Cmd      *exec.Cmd
-	btnRecords    uintptr
-	btnMT5        uintptr
-	chBrowserPath string
-	chMu          sync.Mutex
-	chCDPMu       sync.Mutex
-	chViewMu      sync.Mutex
-	chDesiredView = 1
-	chStopping    bool
+	chAnalysisWnd    uintptr
+	chWhatsappWnd    uintptr
+	chRecordsWnd     uintptr
+	chMT5Wnd         uintptr // MH_NATIVE_MT5_TERMINAL_V796
+	chAnalysisCmd    *exec.Cmd
+	chWhatsappCmd    *exec.Cmd
+	chRecordsCmd     *exec.Cmd
+	chMT5Cmd         *exec.Cmd
+	btnRecords       uintptr
+	btnMT5           uintptr
+	chBrowserPath    string
+	chMu             sync.Mutex
+	chCDPMu          sync.Mutex
+	chViewMu         sync.Mutex
+	chDesiredView    = 1
+	chStopping       bool
+	chMT5StartingV34 bool
 )
 
 func chWstr(s string) *uint16 {
@@ -210,6 +213,8 @@ func chLaunchBrowser(profile, target string, debugPort int) (*exec.Cmd, uintptr,
 	}
 	args = append(args, "--app="+target)
 	cmd := exec.Command(chBrowserPath, args...)
+	// V29: launch auxiliary browser hidden. It becomes visible only after re-parenting.
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	if err := cmd.Start(); err != nil {
 		return nil, 0, err
 	}
@@ -239,10 +244,6 @@ func chFindBrowserWindow(pid uint32) uintptr {
 		var wp uint32
 		chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&wp)))
 		if wp != pid {
-			return 1
-		}
-		vis, _, _ := chIsWindowVisible.Call(hwnd)
-		if vis == 0 {
 			return 1
 		}
 		buf := make([]uint16, 128)
@@ -279,13 +280,16 @@ func chAttachBrowser(hwnd uintptr) {
 	chSetWindowPos.Call(hwnd, 0, 0, uintptr(barH), 1, 1, chSWPNoZOrder|chSWPNoActivate|chSWPFrame|chSWPAsync)
 }
 
-
 func chFocusEmbeddedBrowser(hwnd uintptr) {
-	if hwnd == 0 || hostHWND == 0 { return }
+	if hwnd == 0 || hostHWND == 0 {
+		return
+	}
 	var browserPID uint32
 	browserThread, _, _ := chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&browserPID)))
 	hostThread, _, _ := chGetWindowThreadPID.Call(hostHWND, 0)
-	if hostThread == 0 { hostThread, _, _ = chGetCurrentThreadId.Call() }
+	if hostThread == 0 {
+		hostThread, _, _ = chGetCurrentThreadId.Call()
+	}
 	// V.08: keep the host/browser input queues attached for the lifetime of the
 	// embedded child. This is the proven V.04 behavior where username typing worked.
 	if browserThread != 0 && hostThread != 0 && browserThread != hostThread {
@@ -348,30 +352,62 @@ func chApplyDesiredBrowserView() {
 	chViewMu.Unlock()
 
 	if which == 2 {
-		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
-		if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
-		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
-		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWShow) }
+		if analysis != 0 {
+			chShowWindowAsync.Call(analysis, chSWHide)
+		}
+		if records != 0 {
+			chShowWindowAsync.Call(records, chSWHide)
+		}
+		if mt5 != 0 {
+			chShowWindowAsync.Call(mt5, chSWHide)
+		}
+		if whatsapp != 0 {
+			chShowWindowAsync.Call(whatsapp, chSWShow)
+		}
 		return
 	}
 	if which == 3 {
-		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
-		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
-		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
-		if records != 0 { chShowWindowAsync.Call(records, chSWShow) }
+		if analysis != 0 {
+			chShowWindowAsync.Call(analysis, chSWHide)
+		}
+		if whatsapp != 0 {
+			chShowWindowAsync.Call(whatsapp, chSWHide)
+		}
+		if mt5 != 0 {
+			chShowWindowAsync.Call(mt5, chSWHide)
+		}
+		if records != 0 {
+			chShowWindowAsync.Call(records, chSWShow)
+		}
 		return
 	}
 	if which == 4 {
-		if analysis != 0 { chShowWindowAsync.Call(analysis, chSWHide) }
-		if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
-		if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
-		if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWShow) }
+		if analysis != 0 {
+			chShowWindowAsync.Call(analysis, chSWHide)
+		}
+		if whatsapp != 0 {
+			chShowWindowAsync.Call(whatsapp, chSWHide)
+		}
+		if records != 0 {
+			chShowWindowAsync.Call(records, chSWHide)
+		}
+		if mt5 != 0 {
+			chShowWindowAsync.Call(mt5, chSWShow)
+		}
 		return
 	}
-	if whatsapp != 0 { chShowWindowAsync.Call(whatsapp, chSWHide) }
-	if records != 0 { chShowWindowAsync.Call(records, chSWHide) }
-	if mt5 != 0 { chShowWindowAsync.Call(mt5, chSWHide) }
-	if analysis != 0 { chShowWindowAsync.Call(analysis, chSWShow) }
+	if whatsapp != 0 {
+		chShowWindowAsync.Call(whatsapp, chSWHide)
+	}
+	if records != 0 {
+		chShowWindowAsync.Call(records, chSWHide)
+	}
+	if mt5 != 0 {
+		chShowWindowAsync.Call(mt5, chSWHide)
+	}
+	if analysis != 0 {
+		chShowWindowAsync.Call(analysis, chSWShow)
+	}
 }
 
 func chSwitchView(which int) {
@@ -412,10 +448,14 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if !licAuthorized {
 			section := "MH Analysis"
 			switch id {
-			case idWhatsapp: section = "WhatsApp"
-			case idRecords: section = "Records"
-			case idMT5: section = "MT5 System"
-			case chIDSignalLink: section = "Signal Link"
+			case idWhatsapp:
+				section = "WhatsApp"
+			case idRecords:
+				section = "Records"
+			case idMT5:
+				section = "MT5 System"
+			case chIDSignalLink:
+				section = "Signal Link"
 			}
 			if id == idAnalysis || id == idWhatsapp || id == idRecords || id == idMT5 || id == chIDSignalLink {
 				licSetNavNotice(section)
@@ -457,14 +497,16 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	case wmWhatsAppSend:
 		if task, ok := chPopWhatsAppTask(); ok {
 			go func() {
-				_ = chSendWhatsAppViaCDP(task.target)
+				_ = chSendWhatsAppViaCDP(task.target, task.message)
 			}()
 		}
 		return 0
 	case chWMClose:
 		chMu.Lock()
 		for _, w := range []uintptr{chAnalysisWnd, chWhatsappWnd, chRecordsWnd, chMT5Wnd} {
-			if w != 0 { chShowWindow.Call(w, chSWHide) }
+			if w != 0 {
+				chShowWindow.Call(w, chSWHide)
+			}
 		}
 		chMu.Unlock()
 		chDestroyWindow.Call(hwnd)
@@ -478,43 +520,65 @@ func chWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	return r
 }
 
-
 // MH_NATIVE_MT5_TERMINAL_V796
 func chMT5Executable() (string, error) {
 	if p := strings.TrimSpace(os.Getenv("MH_MT5_PATH")); p != "" {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() { return p, nil }
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
 		return "", fmt.Errorf("MH_MT5_PATH does not point to a valid terminal executable: %s", p)
 	}
 	var roots []string
 	for _, e := range []string{"PROGRAMFILES", "PROGRAMFILES(X86)"} {
-		if p := strings.TrimSpace(os.Getenv(e)); p != "" { roots = append(roots, p) }
+		if p := strings.TrimSpace(os.Getenv(e)); p != "" {
+			roots = append(roots, p)
+		}
 	}
-	if p := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); p != "" { roots = append(roots, filepath.Join(p, "Programs")) }
+	if p := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); p != "" {
+		roots = append(roots, filepath.Join(p, "Programs"))
+	}
 	candidates := []string{}
 	seen := map[string]bool{}
 	add := func(p string) {
-		key := strings.ToLower(filepath.Clean(p)); if seen[key] { return }; seen[key] = true; candidates = append(candidates, p)
+		key := strings.ToLower(filepath.Clean(p))
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		candidates = append(candidates, p)
 	}
 	for _, root := range roots {
 		add(filepath.Join(root, "MetaTrader 5", "terminal64.exe"))
 		add(filepath.Join(root, "MetaTrader 5", "terminal.exe"))
 		entries, _ := os.ReadDir(root)
 		for _, e := range entries {
-			if !e.IsDir() { continue }
+			if !e.IsDir() {
+				continue
+			}
 			d1 := filepath.Join(root, e.Name())
-			add(filepath.Join(d1, "terminal64.exe")); add(filepath.Join(d1, "terminal.exe"))
+			add(filepath.Join(d1, "terminal64.exe"))
+			add(filepath.Join(d1, "terminal.exe"))
 			subs, _ := os.ReadDir(d1)
 			for _, se := range subs {
-				if !se.IsDir() { continue }
+				if !se.IsDir() {
+					continue
+				}
 				d2 := filepath.Join(d1, se.Name())
-				add(filepath.Join(d2, "terminal64.exe")); add(filepath.Join(d2, "terminal.exe"))
+				add(filepath.Join(d2, "terminal64.exe"))
+				add(filepath.Join(d2, "terminal.exe"))
 			}
 		}
 	}
-	if p, err := exec.LookPath("terminal64.exe"); err == nil { add(p) }
-	if p, err := exec.LookPath("terminal.exe"); err == nil { add(p) }
+	if p, err := exec.LookPath("terminal64.exe"); err == nil {
+		add(p)
+	}
+	if p, err := exec.LookPath("terminal.exe"); err == nil {
+		add(p)
+	}
 	for _, p := range candidates {
-		if st, err := os.Stat(p); err == nil && !st.IsDir() { return p, nil }
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
 	}
 	return "", errors.New("MetaTrader 5 terminal64.exe was not found. Install your broker's MT5 terminal, then reopen MH Analysis. If you have more than one MT5 installation, set MH_MT5_PATH to the terminal64.exe you want to use.")
 }
@@ -524,9 +588,9 @@ func chFindProcessWindow(pid uint32) uintptr {
 	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
 		var wp uint32
 		chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&wp)))
-		if wp != pid { return 1 }
-		vis, _, _ := chIsWindowVisible.Call(hwnd)
-		if vis == 0 { return 1 }
+		if wp != pid {
+			return 1
+		}
 		found = hwnd
 		return 0
 	})
@@ -537,44 +601,181 @@ func chFindProcessWindow(pid uint32) uintptr {
 func chWaitForProcessWindow(pid uint32, timeout time.Duration) uintptr {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if h := chFindProcessWindow(pid); h != 0 { return h }
+		if h := chFindProcessWindow(pid); h != 0 {
+			return h
+		}
 		time.Sleep(120 * time.Millisecond)
 	}
 	return 0
 }
 
+// V32: locate an existing MetaTrader 5 top-level window. Broker builds can hand a
+// second terminal64.exe launch to an already-running process, so PID-only lookup is insufficient.
+// V33: broker MT5 titles often do NOT contain the literal "MetaTrader 5".
+// Identify top-level terminal windows by title/class and process image, then embed the real HWND.
+func chFindInstalledMT5WindowV33() uintptr {
+	var found uintptr
+	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
+		if hwnd == 0 || hwnd == hostHWND {
+			return 1
+		}
+		var pid uint32
+		chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+		clsBuf := make([]uint16, 256)
+		nc, _, _ := chGetClassName.Call(hwnd, uintptr(unsafe.Pointer(&clsBuf[0])), uintptr(len(clsBuf)))
+		cls := ""
+		if nc > 0 {
+			cls = strings.ToLower(syscall.UTF16ToString(clsBuf))
+		}
+		tBuf := make([]uint16, 512)
+		nt, _, _ := chGetWindowTextV33.Call(hwnd, uintptr(unsafe.Pointer(&tBuf[0])), uintptr(len(tBuf)))
+		title := ""
+		if nt > 0 {
+			title = strings.ToLower(syscall.UTF16ToString(tBuf))
+		}
+		// MT5 broker terminals consistently expose MetaQuotes/MetaTrader markers or terminal64 process windows.
+		looks := strings.Contains(cls, "metaquotes") || strings.Contains(cls, "metatrader") || strings.Contains(title, "metatrader") || strings.Contains(title, "meta trader") || strings.Contains(title, "mt5")
+		if looks {
+			found = hwnd
+			return 0
+		}
+		return 1
+	})
+	chEnumWindows.Call(cb, 0)
+	return found
+}
+
+func chEmbedMT5V33(hwnd uintptr) bool {
+	if hwnd == 0 || hostHWND == 0 {
+		return false
+	}
+	chShowWindow.Call(hwnd, chSWHide)
+	chAttachBrowser(hwnd)
+	// SetParent can fail silently on some broker builds; enforce child style/parent once more after attach.
+	chSetParent.Call(hwnd, hostHWND)
+	style, _, _ := chGetWindowLongPtr.Call(hwnd, ^uintptr(15))
+	style &^= chWSPopup | chWSCaption | chWSBorder | chWSDlgFrame | chWSThickFrame | chWSMinBox | chWSMaxBox | chWSSysMenu
+	style |= chWSChild | chWSVisible
+	chSetWindowLongPtr.Call(hwnd, ^uintptr(15), style)
+	chMu.Lock()
+	chMT5Wnd = hwnd
+	chMu.Unlock()
+	chResizeChildren()
+	chShowWindow.Call(hwnd, chSWShow)
+	chApplyDesiredBrowserView()
+	return true
+}
+
+func chFindExistingMT5WindowV32() uintptr {
+	var found uintptr
+	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
+		if hwnd == hostHWND {
+			return 1
+		}
+		clsBuf := make([]uint16, 256)
+		nc, _, _ := chGetClassName.Call(hwnd, uintptr(unsafe.Pointer(&clsBuf[0])), uintptr(len(clsBuf)))
+		cls := ""
+		if nc > 0 {
+			cls = strings.ToLower(syscall.UTF16ToString(clsBuf))
+		}
+		tBuf := make([]uint16, 512)
+		nt, _, _ := chGetWindowTextV32.Call(hwnd, uintptr(unsafe.Pointer(&tBuf[0])), uintptr(len(tBuf)))
+		title := ""
+		if nt > 0 {
+			title = strings.ToLower(syscall.UTF16ToString(tBuf))
+		}
+		if strings.Contains(cls, "metaquotes") || strings.Contains(title, "metatrader 5") {
+			found = hwnd
+			return 0
+		}
+		return 1
+	})
+	chEnumWindows.Call(cb, 0)
+	return found
+}
+
 func chEnsureMT5Terminal() error {
+	// V34_SINGLE_FLIGHT_MT5: one click starts at most one MT5 attach/launch operation.
+	chMu.Lock()
+	if chMT5StartingV34 {
+		chMu.Unlock()
+		return nil
+	}
+	chMT5StartingV34 = true
+	chMu.Unlock()
+	defer func() { chMu.Lock(); chMT5StartingV34 = false; chMu.Unlock() }()
+	// V33: first embed the already installed/running broker terminal. Never deliberately open it externally.
+	if existing := chFindInstalledMT5WindowV33(); existing != 0 {
+		if chEmbedMT5V33(existing) {
+			go mt5ApplyLatestQueued()
+			return nil
+		}
+	}
 	chMu.Lock()
 	if chMT5Wnd != 0 {
-		chMu.Unlock(); chApplyDesiredBrowserView(); go mt5ApplyLatestQueued(); return nil // MH_NATIVE_MT5_PREFILL_V796
+		chMu.Unlock()
+		chApplyDesiredBrowserView()
+		go mt5ApplyLatestQueued()
+		return nil // MH_NATIVE_MT5_PREFILL_V796
 	}
 	if chMT5Cmd != nil {
-		chMu.Unlock(); return nil
+		chMu.Unlock()
+		return nil
 	}
 	chMu.Unlock()
 
+	// V32: if MT5 is already open, embed that exact terminal instead of spawning an external duplicate.
+	if existing := chFindExistingMT5WindowV32(); existing != 0 {
+		chShowWindow.Call(existing, chSWHide)
+		chAttachBrowser(existing)
+		chMu.Lock()
+		chMT5Wnd = existing
+		chMu.Unlock()
+		chResizeChildren()
+		chApplyDesiredBrowserView()
+		go mt5ApplyLatestQueued()
+		return nil
+	}
 	path, err := chMT5Executable()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command(path)
-	if err := cmd.Start(); err != nil { return fmt.Errorf("Could not start MT5: %w", err) }
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("Could not start MT5: %w", err)
+	}
 
 	chMu.Lock()
 	if chStopping {
-		chMu.Unlock(); _ = cmd.Process.Kill(); return errors.New("MH Analysis is closing")
+		chMu.Unlock()
+		_ = cmd.Process.Kill()
+		return errors.New("MH Analysis is closing")
 	}
 	chMT5Cmd = cmd
 	chMu.Unlock()
 
-	wnd := chWaitForProcessWindow(uint32(cmd.Process.Pid), 35*time.Second)
+	wnd := chWaitForProcessWindow(uint32(cmd.Process.Pid), 12*time.Second)
 	if wnd == 0 {
-		chMu.Lock(); if chMT5Cmd == cmd { chMT5Cmd = nil }; chMu.Unlock()
+		wnd = chFindInstalledMT5WindowV33()
+	}
+	if wnd == 0 {
+		wnd = chFindExistingMT5WindowV32()
+	}
+	if wnd == 0 {
+		chMu.Lock()
+		if chMT5Cmd == cmd {
+			chMT5Cmd = nil
+		}
+		chMu.Unlock()
 		return errors.New("MT5 started but its main window could not be embedded. Close any separately running MT5 instance and try again.")
 	}
 	chShowWindow.Call(wnd, chSWHide)
 	chAttachBrowser(wnd)
 	chMu.Lock()
 	if chStopping {
-		chMu.Unlock(); _ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run(); return errors.New("MH Analysis is closing")
+		chMu.Unlock()
+		_ = exec.Command("taskkill.exe", "/PID", strconv.Itoa(cmd.Process.Pid), "/T", "/F").Run()
+		return errors.New("MH Analysis is closing")
 	}
 	chMT5Wnd = wnd
 	chMu.Unlock()
@@ -703,9 +904,13 @@ func runChromeHost() {
 	go func() {
 		time.Sleep(1300 * time.Millisecond)
 		recordsDebugPort := 0
-		if os.Getenv("MH_SMOKE_TEST") == "1" { recordsDebugPort = 17881 }
+		if os.Getenv("MH_SMOKE_TEST") == "1" {
+			recordsDebugPort = 17881
+		}
 		cmd, wnd, err := chLaunchBrowser("RecordsProfile", serverURL+"records.html", recordsDebugPort)
-		if err != nil { return }
+		if err != nil {
+			return
+		}
 		chMu.Lock()
 		if chStopping {
 			chMu.Unlock()
@@ -814,7 +1019,7 @@ func chEvalValue(msg map[string]any) string {
 	return ""
 }
 
-func chSendWhatsAppViaCDP(target string) error {
+func chSendWhatsAppViaCDP(target, message string) error {
 	chCDPMu.Lock()
 	defer chCDPMu.Unlock()
 	wsURL, err := chCDPPageSocket()
@@ -835,18 +1040,22 @@ func chSendWhatsAppViaCDP(target string) error {
 		return err
 	}
 	id++
-	js := `(() => {
+	msgJSON, _ := json.Marshal(message)
+	js := fmt.Sprintf(`(() => {
 		const body=(document.body && document.body.innerText)||'';
 		if(/scan.*qr|use whatsapp on your computer/i.test(body)) return 'login';
+		const message=%s;
+		let box=[...document.querySelectorAll('[contenteditable="true"]')].find(x => ((x.getAttribute('data-tab')||'')==='10') || ((x.getAttribute('aria-placeholder')||x.getAttribute('aria-label')||'').toLowerCase().includes('message')) || x.getAttribute('role')==='textbox');
+		if(box && message && box.dataset.mhV30Message!==message){
+			box.focus(); const sel=window.getSelection(); const range=document.createRange(); range.selectNodeContents(box); sel.removeAllRanges(); sel.addRange(range); document.execCommand('delete',false,null);
+			document.execCommand('insertText',false,message); box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:message})); box.dataset.mhV30Message=message;
+		}
 		const candidates=[...document.querySelectorAll('button')];
 		let b=candidates.find(x => ((x.getAttribute('aria-label')||'').toLowerCase()==='send'));
-		if(!b){
-			const icon=document.querySelector('span[data-icon="send"], span[data-testid="send"]');
-			if(icon) b=icon.closest('button') || icon.parentElement;
-		}
-		if(b && !b.disabled){ b.click(); return 'sent'; }
+		if(!b){const icon=document.querySelector('span[data-icon="send"], span[data-testid="send"]');if(icon)b=icon.closest('button')||icon.parentElement;}
+		if(box && b && !b.disabled){b.click();return 'sent';}
 		return 'wait';
-	})()`
+	})()`, string(msgJSON))
 	for i := 0; i < 50; i++ {
 		time.Sleep(400 * time.Millisecond)
 		msg, e := chCDPCommand(conn, id, "Runtime.evaluate", map[string]any{"expression": js, "returnByValue": true, "awaitPromise": true})

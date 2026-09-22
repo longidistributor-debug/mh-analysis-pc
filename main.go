@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -77,6 +78,15 @@ func main() {
 	mux.HandleFunc("/api/marketcap", marketcapHandler)
 	mux.HandleFunc("/api/news-risk", newsRiskHandler)
 	mux.HandleFunc("/api/economic-calendar", economicCalendarHandler)
+	mux.HandleFunc("/api/open-support-external", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method", 405)
+			return
+		}
+		// Open support outside MH Analysis; never replace the internal WhatsApp automation view.
+		_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "https://wa.me/923434824609").Start()
+		w.WriteHeader(204)
+	})
 	mux.HandleFunc("/api/open-whatsapp", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			postMessage(hostHWND, wmSwitchWhatsApp, 0, 0)
@@ -101,9 +111,10 @@ func main() {
 		postMessage(hostHWND, chWMOpenWhatsAppSettings, 0, 0)
 		w.WriteHeader(204)
 	})
-	registerRecordsRoutes(mux)    // MH_RECORDS_V796_PATCH
-	registerMT5PrefillRoutes(mux) // MH_NATIVE_MT5_PREFILL_V796
-	registerRecordsV2Routes(mux)  // MH_RECORDS_MT5_LOCAL_V797
+	registerRecordsRoutes(mux)        // MH_RECORDS_V796_PATCH
+	registerEASignalBridgeRoutes(mux) // V30 automatic unique-signal pending bridge
+	registerMT5PrefillRoutes(mux)     // MH_NATIVE_MT5_PREFILL_V796
+	registerRecordsV2Routes(mux)      // MH_RECORDS_MT5_LOCAL_V797
 	mux.HandleFunc("/api/send-whatsapp", sendWhatsappHandler)
 	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)
@@ -531,7 +542,10 @@ func marketcapHandler(w http.ResponseWriter, r *http.Request) {
 type whatsappReq struct {
 	Message string `json:"message"`
 }
-type waTask struct{ target string }
+type waTask struct {
+	target  string
+	message string
+}
 
 var waMu sync.Mutex
 var waQueue []waTask
@@ -548,15 +562,25 @@ func sendWhatsappHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := getSettings()
-	num := digits(v.WhatsAppLink)
-	if num == "" {
+	saved := strings.TrimSpace(v.WhatsAppLink)
+	if saved == "" {
 		w.WriteHeader(400)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "WhatsApp Signal Link is not saved."})
 		return
 	}
-	target := "https://web.whatsapp.com/send?phone=" + num + "&text=" + url.QueryEscape(q.Message)
+	target := ""
+	if u, err := url.Parse(saved); err == nil && (u.Scheme == "https" || u.Scheme == "http") && (strings.EqualFold(u.Host, "chat.whatsapp.com") || strings.EqualFold(u.Host, "web.whatsapp.com") || strings.EqualFold(u.Host, "wa.me") || strings.HasSuffix(strings.ToLower(u.Host), ".whatsapp.com")) {
+		target = saved
+	} else if num := digits(saved); num != "" {
+		target = "https://web.whatsapp.com/send?phone=" + num
+	}
+	if target == "" {
+		w.WriteHeader(400)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "Signal Link must be a WhatsApp group/chat link or phone number."})
+		return
+	}
 	waMu.Lock()
-	waQueue = append(waQueue, waTask{target: target})
+	waQueue = append(waQueue, waTask{target: target, message: q.Message})
 	waMu.Unlock()
 	postMessage(hostHWND, wmWhatsAppSend, 0, 0)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "queued": true})
@@ -935,7 +959,18 @@ func processWhatsAppQueue() {
 	waQueue = waQueue[1:]
 	waMu.Unlock()
 	wvNavigate(whatsappCore, t.target)
-	time.AfterFunc(4*time.Second, func() { postMessage(hostHWND, wmWhatsAppClick, 0, 0) })
+	// V33: the group URL opens the chat, but it does not carry the organized signal text.
+	// Wait for WhatsApp Web, inject the queued message into the composer, then click Send.
+	msgJSON, _ := json.Marshal(t.message)
+	// V34_WA_RETRY: WhatsApp Web load time varies. Retry the exact same queued message
+	// from Go until the composer is expected to exist; JS guards against duplicate injection.
+	for _, delay := range []time.Duration{3 * time.Second, 6 * time.Second, 10 * time.Second, 15 * time.Second} {
+		d := delay
+		time.AfterFunc(d, func() {
+			script := fmt.Sprintf(`(()=>{const msg=%s;const box=document.querySelector('footer [contenteditable="true"]')||document.querySelector('[contenteditable="true"][data-tab]');if(!box)return false;const mark='mh-v34-'+btoa(unescape(encodeURIComponent(msg))).slice(0,24);if(window[mark])return true;box.focus();document.execCommand('selectAll',false,null);document.execCommand('insertText',false,msg);box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:msg}));const b=document.querySelector('[data-icon="send"]')?.closest('button')||document.querySelector('button[aria-label="Send"]');if(b){b.click();window[mark]=true;return true;}box.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));window[mark]=true;return true;})()`, string(msgJSON))
+			wvExecute(whatsappCore, script)
+		})
+	}
 }
 func clickWhatsAppSend() {
 	script := `(()=>{const b=document.querySelector('[data-icon="send"]')?.closest('button')||document.querySelector('button[aria-label="Send"]');if(b){b.click();return true;}const box=document.querySelector('[contenteditable="true"][data-tab]');if(box){box.focus();box.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));return true;}return false;})()`

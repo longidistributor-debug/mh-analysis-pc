@@ -1,19 +1,6 @@
-/* MH Analysis V.31 UI/security hotfix */
-html.mhLicenseLocked,html.mhLicenseLocked body{overflow:hidden!important;height:100%!important}
-#mhLicenseOverlay.show{display:flex!important;flex-direction:column!important;justify-content:flex-start!important;align-items:center!important;overflow-y:auto!important;overflow-x:hidden!important;padding:18px 18px 20px!important;box-sizing:border-box!important}
-#mhLicenseOverlay .mhLicenseCard{flex:0 0 auto!important;margin:auto 0 12px!important;max-width:min(460px,94vw)!important;box-sizing:border-box!important}
-#mhLicenseOverlay .mhLicenseCredits{position:static!important;left:auto!important;right:auto!important;bottom:auto!important;flex:0 0 auto!important;width:min(760px,96vw)!important;margin:0 auto!important;padding:0 8px 4px!important;box-sizing:border-box!important;line-height:1.45!important}
-@media(max-height:760px){#mhLicenseOverlay.show{padding-top:12px!important}.mhLicenseCard{margin:0 0 10px!important;padding:20px!important}.mhLicenseCard h1{margin-top:12px!important}.mhLicenseSub{margin-bottom:12px!important}.mhLicenseCredits{font-size:9.5px!important}}
-
-/* RSI must be a complete rounded rectangle on every window size. */
-.rsiCanvasWrap{position:relative!important;box-sizing:border-box!important;border:1px solid rgba(0,151,136,.72)!important;border-radius:10px!important;overflow:hidden!important;margin:8px 8px 10px!important;width:calc(100% - 16px)!important;min-width:0!important;background:#050b0d!important}
-.rsiCanvasWrap canvas{display:block!important;max-width:100%!important;border-radius:0 0 9px 9px!important}
-.rsiLabel{position:relative!important;z-index:2!important}
-
-/* The application is view-only. Typing in settings/login remains possible, but page text cannot be selected/copied. */
-body,.appShell,.recordsShell{user-select:none!important;-webkit-user-select:none!important}
-input,textarea{user-select:text!important;-webkit-user-select:text!important}
-img{-webkit-user-drag:none!important;user-drag:none!important}
-
-/* Compact exact version/memorial line. */
-.version,.recordsVersion{white-space:nowrap!important;display:flex!important;align-items:center!important;gap:4px!important}
+/* V31 UI/security/layout */
+html,body{max-width:100%;overflow-x:hidden}
+body:not(.mhLicenseLocked),body:not(.mhLicenseLocked) *{user-select:none!important;-webkit-user-select:none!important}
+input,textarea,[contenteditable="true"]{user-select:text!important;-webkit-user-select:text!important}
+.rsiCanvasWrap{box-sizing:border-box!important;border:1px solid rgba(0,210,170,.42)!important;border-radius:0 0 12px 12px!important;overflow:hidden!important;margin:0 8px 8px!important}
+.mhMainCopyright{white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;padding:6px 12px!important;box-sizing:border-box!important}
