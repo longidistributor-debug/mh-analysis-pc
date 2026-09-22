@@ -28,6 +28,7 @@ var webFS embed.FS
 type settings struct {
 	APIKey       string `json:"api_key"`
 	WhatsAppLink string `json:"whatsapp_link"`
+	WhatsAppLink2 string `json:"whatsapp_link2"`
 }
 
 var settingsMu sync.RWMutex
@@ -144,7 +145,7 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		v := getSettings()
-		_ = json.NewEncoder(w).Encode(map[string]any{"has_api_key": strings.TrimSpace(v.APIKey) != "", "has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "", "whatsapp_link": v.WhatsAppLink})
+		_ = json.NewEncoder(w).Encode(map[string]any{"has_api_key": strings.TrimSpace(v.APIKey) != "", "has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "" || strings.TrimSpace(v.WhatsAppLink2) != "", "whatsapp_link": v.WhatsAppLink, "whatsapp_link2": v.WhatsAppLink2})
 	case http.MethodPost:
 		var m map[string]*string
 		if json.NewDecoder(r.Body).Decode(&m) != nil {
@@ -160,16 +161,15 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if p, ok := m["whatsapp_link"]; ok {
-			if p == nil {
-				cfg.WhatsAppLink = ""
-			} else {
-				cfg.WhatsAppLink = strings.TrimSpace(*p)
-			}
+			if p == nil { cfg.WhatsAppLink = "" } else { cfg.WhatsAppLink = strings.TrimSpace(*p) }
+		}
+		if p, ok := m["whatsapp_link2"]; ok {
+			if p == nil { cfg.WhatsAppLink2 = "" } else { cfg.WhatsAppLink2 = strings.TrimSpace(*p) }
 		}
 		settingsMu.Unlock()
 		_ = saveSettings()
 		v := getSettings()
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "has_api_key": v.APIKey != "", "has_whatsapp": v.WhatsAppLink != ""})
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "has_api_key": v.APIKey != "", "has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "" || strings.TrimSpace(v.WhatsAppLink2) != ""})
 	default:
 		http.Error(w, "method", 405)
 	}
@@ -562,28 +562,33 @@ func sendWhatsappHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v := getSettings()
-	saved := strings.TrimSpace(v.WhatsAppLink)
-	if saved == "" {
+	saved := []string{strings.TrimSpace(v.WhatsAppLink), strings.TrimSpace(v.WhatsAppLink2)}
+	targets := make([]string, 0, 2)
+	for _, raw := range saved {
+		if raw == "" { continue }
+		target := ""
+		if u, err := url.Parse(raw); err == nil && (u.Scheme == "https" || u.Scheme == "http") && (strings.EqualFold(u.Host, "chat.whatsapp.com") || strings.EqualFold(u.Host, "web.whatsapp.com") || strings.EqualFold(u.Host, "wa.me") || strings.HasSuffix(strings.ToLower(u.Host), ".whatsapp.com")) {
+			target = raw
+		} else if num := digits(raw); num != "" {
+			target = "https://web.whatsapp.com/send?phone=" + num
+		}
+		if target == "" {
+			w.WriteHeader(400)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "Each Signal Link must be a WhatsApp group/chat link or phone number."})
+			return
+		}
+		targets = append(targets, target)
+	}
+	if len(targets) == 0 {
 		w.WriteHeader(400)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "WhatsApp Signal Link is not saved."})
 		return
 	}
-	target := ""
-	if u, err := url.Parse(saved); err == nil && (u.Scheme == "https" || u.Scheme == "http") && (strings.EqualFold(u.Host, "chat.whatsapp.com") || strings.EqualFold(u.Host, "web.whatsapp.com") || strings.EqualFold(u.Host, "wa.me") || strings.HasSuffix(strings.ToLower(u.Host), ".whatsapp.com")) {
-		target = saved
-	} else if num := digits(saved); num != "" {
-		target = "https://web.whatsapp.com/send?phone=" + num
-	}
-	if target == "" {
-		w.WriteHeader(400)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "Signal Link must be a WhatsApp group/chat link or phone number."})
-		return
-	}
 	waMu.Lock()
-	waQueue = append(waQueue, waTask{target: target, message: q.Message})
+	for _, target := range targets { waQueue = append(waQueue, waTask{target: target, message: q.Message}) }
 	waMu.Unlock()
 	postMessage(hostHWND, wmWhatsAppSend, 0, 0)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "queued": true})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "queued": true, "destinations": len(targets)})
 }
 func digits(s string) string {
 	var b strings.Builder
