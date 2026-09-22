@@ -42,21 +42,21 @@ jobs:
           end=s.index('\twv2Whatsapp.Eval(script)', start)
           end2=end+len('\twv2Whatsapp.Eval(script)')
           replacement=r'''\tscript := fmt.Sprintf(`(()=>{\nconst msg=%s,isGroup=%s,token=%d;\nconst ack=(st)=>{try{window.external.invoke('MHWA|'+token+'|'+st)}catch(e){};return st};\nconst sentKey='mh-v542-sent-'+token;\nif(sessionStorage.getItem(sentKey)==='1')return ack('sent');\nconst host=(location.hostname||'').toLowerCase();\ntry{window.open=(u)=>{if(u)location.assign(String(u));return window}}catch(e){}\nif(isGroup&&host!=='web.whatsapp.com'){\n  const nodes=[...document.querySelectorAll('a,button,[role="button"]')];\n  const preferred=nodes.find(el=>{\n    const txt=((el.innerText||el.textContent||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();\n    const href=(el.href||el.getAttribute('href')||'').toLowerCase();\n    return /continue to chat|open chat|use whatsapp web|whatsapp web|continue|join chat/.test(txt)||href.includes('web.whatsapp.com');\n  });\n  if(preferred){\n    const a=preferred.tagName==='A'?preferred:preferred.closest('a');\n    const href=(a&&a.href)||preferred.href||preferred.getAttribute('href');\n    if(a){a.target='_self';a.removeAttribute('target')}\n    if(preferred.removeAttribute)preferred.removeAttribute('target');\n    ack('opening-group-same-view');\n    if(href&&/^https?:/i.test(href)){location.assign(href);return 'opening-group-same-view'}\n    preferred.click();return 'opening-group-same-view';\n  }\n  return ack('waiting-group-link');\n}\nif(host!=='web.whatsapp.com')return ack('waiting-whatsapp');\nconst box=document.querySelector('footer [contenteditable="true"][role="textbox"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('footer div[role="textbox"]');\nif(!box)return ack('waiting-chat');\nbox.focus();\nconst current=(box.innerText||box.textContent||'').trim();\nif(current!==msg.trim()){\n  try{document.execCommand('selectAll',false,null)}catch(e){}\n  let inserted=false;\n  try{inserted=document.execCommand('insertText',false,msg)}catch(e){}\n  if(!inserted){box.textContent=msg}\n  try{box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:msg}))}catch(e){box.dispatchEvent(new Event('input',{bubbles:true}))}\n}\nconst send=document.querySelector('footer [data-icon="send"]')?.closest('button,[role="button"]')||document.querySelector('button[aria-label="Send"]')||document.querySelector('[aria-label="Send"][role="button"]')||document.querySelector('[data-testid="compose-btn-send"]');\nif(!send)return ack('waiting-send');\nsend.click();\nsessionStorage.setItem(sentKey,'1');\nreturn ack('sent');\n})()`, string(msgJSON), string(groupJSON), token)\n\twv2Whatsapp.Eval(script)'''
+          replacement=replacement.replace(r'\n','\n').replace(r'\t','\t')
           s=s[:start]+replacement+s[end2:]
 
           anchor='''func wv2FinishWhatsAppV54(token uintptr) {'''
           ackfn='''func wv2WhatsAppAckV542(token uintptr) {\n\tif token == 0 || token != wv2WAActiveToken || token != wv2WALastAckToken { return }\n\tif wv2WALastAckStatus == "sent" {\n\t\twv2FinishWhatsAppV54(token)\n\t}\n}\n\n'''
           if anchor not in s: raise SystemExit('finish anchor not found')
           s=s.replace(anchor,ackfn+anchor,1)
-          s=s.replace('''\tcase wmWhatsAppNextV54:\n\t\twv2FinishWhatsAppV54(wp); return 0''','''\tcase wmWhatsAppNextV54:\n\t\twv2FinishWhatsAppV54(wp); return 0\n\tcase wmWhatsAppAckV542:\n\t\twv2WhatsAppAckV542(wp); return 0''',1)
+          s=s.replace('''\tcase wmWhatsAppNextV54:\n\t\twv2FinishWhatsAppV54(wp); return 0''','''\tcase wmWhatsAppNextV54:\n\t\tif wv2WAProcessing && wp == wv2WAActiveToken {\n\t\t\twv2EvalWhatsAppV54(wp)\n\t\t\ttime.AfterFunc(5*time.Second, func() { postMessage(hostHWND, wmWhatsAppNextV54, wp, 0) })\n\t\t}\n\t\treturn 0\n\tcase wmWhatsAppAckV542:\n\t\twv2WhatsAppAckV542(wp); return 0''',1)
 
           p.write_text(s,encoding='utf-8',newline='\n')
 
-          # V54.2 version stamps; preserve updater hash-loop guard and all V54.1 fixes.
           for path,pat,repl in [
               ('updater.go',r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.54.2"'),
               ('license_auth.go',r'const licAppVersion = "[^"]+"','const licAppVersion = "V.54.2"')]:
-              q=Path(path); z=q.read_text(encoding='utf-8'); z,n=re.subn(pat,repl,z,count=1); 
+              q=Path(path); z=q.read_text(encoding='utf-8'); z,n=re.subn(pat,repl,z,count=1)
               if n!=1: raise SystemExit(f'version stamp failed {path}')
               q.write_text(z,encoding='utf-8',newline='\n')
           Path('VERSION').write_text('V.54.2\n',encoding='ascii')
@@ -72,7 +72,7 @@ jobs:
           if($wa -notmatch "MHWA\|"){throw 'WhatsApp JS acknowledgement missing'}
           if($wa -notmatch 'wv2WALastAckStatus == "sent"'){throw 'Confirmed-send completion guard missing'}
           if($wa -notmatch 'WhatsAppWebView2'){throw 'Persistent same-session WhatsApp profile missing'}
-          if($wa -match 'NewChromium\(\).*NewChromium\(\)'){throw 'Unexpected extra WhatsApp Chromium creation'}
+          if($wa -notmatch 'time.AfterFunc\(5\*time.Second'){throw 'Confirmed-send retry loop missing'}
 
       - name: Test and build V54.2
         shell: powershell
@@ -114,7 +114,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference='Continue'; gh release delete v54.2 -y 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
-          gh release create v54.2 'dist/MH-Analysis-Setup-V54.2.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.2' --notes 'Same logged-in embedded WhatsApp session only. Background group-link navigation now re-evaluates on NavigationCompleted and only marks a WhatsApp task complete after the embedded WhatsApp page acknowledges that Send was clicked. Preserves V54.1 updater-loop fix and MT5 retry.'
+          gh release create v54.2 'dist/MH-Analysis-Setup-V54.2.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.2' --notes 'Same logged-in embedded WhatsApp session only. Background group-link navigation retries until the embedded WhatsApp page confirms Send was clicked. Preserves V54.1 updater-loop fix and MT5 retry.'
           if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
 
       - name: Publish mandatory V54.2 updater
