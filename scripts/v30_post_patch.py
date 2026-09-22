@@ -76,8 +76,23 @@ s=s.replace("[pscustomobject]@{ok=$ok;status=$status;detail=$detail;submitted=($
 s=s.replace('res.Status = "PENDING ORDER SUBMITTED"','res.Status = "READY - EA HANDLES AUTO PENDING"')
 wr(p,s)
 
-# Final visible-text Unicode sanitation. Try recovering cp1252/UTF-8 mojibake text nodes;
-# if an irrecoverable replacement glyph remains, remove it rather than showing garbage.
+# Final visible-text Unicode sanitation. Old source mixes cp1252 punctuation with raw C1
+# byte code-points, so reconstruct the original byte stream one character at a time.
+def mixed_legacy_bytes(x):
+    out=bytearray()
+    for ch in x:
+        try:
+            b=ch.encode('cp1252')
+            if len(b)==1:
+                out.extend(b); continue
+        except Exception:
+            pass
+        o=ord(ch)
+        if o<=255:
+            out.append(o); continue
+        raise UnicodeError('not legacy-byte text')
+    return bytes(out)
+
 def recover_visible_html(path):
     src=rd(path)
     def fix_node(m):
@@ -85,17 +100,25 @@ def recover_visible_html(path):
         if not any(k in x for k in ('Ã','Â','â','ð','Ø','Ù','�')):
             return '>'+x+'<'
         y=x
-        for _ in range(2):
+        for _ in range(3):
             try:
-                z=y.encode('cp1252').decode('utf-8')
+                z=mixed_legacy_bytes(y).decode('utf-8')
                 if z==y: break
                 y=z
             except Exception:
                 break
+        # No replacement glyph or legacy mojibake marker is allowed in visible text.
         y=y.replace('\ufffd','')
+        if any(k in y for k in ('Ã','Â','â','ð','Ø','Ù')):
+            parts=[]
+            for token in re.split(r'(\s+)',y):
+                if any(k in token for k in ('Ã','Â','â','ð','Ø','Ù')):
+                    try: token=mixed_legacy_bytes(token).decode('utf-8')
+                    except Exception: token='•'
+                parts.append(token)
+            y=''.join(parts).replace('\ufffd','')
         return '>'+y+'<'
     src=re.sub(r'>([^<>]+)<',fix_node,src)
-    # restore exact locked Arabic even if inherited bytes were especially damaged
     src=re.sub(r'<div class="bismillah">.*?</div>','<div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>',src,count=1)
     src=src.replace('\ufffd','')
     wr(path,src)
@@ -103,4 +126,4 @@ def recover_visible_html(path):
 recover_visible_html('web/index.html')
 recover_visible_html('web/records.html')
 
-print('V30 post patch applied: EA auto-pending is single final-placement path; visible Unicode sanitized')
+print('V30 post patch applied: EA auto-pending is single final-placement path; mixed-byte Unicode sanitized')
