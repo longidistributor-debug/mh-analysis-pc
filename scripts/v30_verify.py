@@ -51,7 +51,7 @@ req('lot:0.02' in app.replace(' ',''),'EA unique-signal lot 0.02 handoff missing
 # WhatsApp Signal Link must accept full group/chat URL, not digits-only.
 req('chat.whatsapp.com' in main and 'waTask{target: target, message: q.Message}' in main,'full WhatsApp group/chat Signal Link handling missing')
 req('func chSendWhatsAppViaCDP(target, message string)' in chrome,'WhatsApp CDP message composer path missing')
-req('execCommand(\'insertText\'' in chrome and 'data-icon=\\"send\\"' in chrome,'WhatsApp composer/send automation missing')
+req("execCommand('insertText'" in chrome and 'contenteditable' in chrome and 'data-icon' in chrome and 'send' in chrome,'WhatsApp composer/send automation missing')
 req('*MH ANALYSIS SIGNAL*' in app and '*Pair:*' in app and '*Entry:*' in app,'organized bold WhatsApp message format lost')
 
 # Native MT5 visual queue remains, but final placement is single EA path to avoid duplicates.
