@@ -1,1 +1,1 @@
-Build V.27 runtime recovery
+V.27 build 2: align persistent-view regression guard

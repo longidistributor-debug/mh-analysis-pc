@@ -39,7 +39,7 @@ jobs:
           $ErrorActionPreference='Stop'
           if((Get-Content -Raw VERSION).Trim() -ne 'V.27'){throw 'VERSION not V.27'}
           $w=Get-Content -Raw webview2_host.go
-          foreach($m in @('chSignalLinkBtn','chIDSignalLink','wv2SetDesiredView(4)','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','chBringWindowToTop.Call(mt5')){if(-not $w.Contains($m)){throw "Active WebView2 runtime regression: $m"}}
+          foreach($m in @('chSignalLinkBtn','chIDSignalLink','wv2SetDesiredView(4)','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','v27LayoutViews()')){if(-not $w.Contains($m)){throw "Active WebView2 runtime regression: $m"}}
           $h=Get-Content -Raw chrome_host.go
           foreach($m in @('licAuthorized','chEnsureMT5Terminal')){if(-not $h.Contains($m)){throw "Core regression: $m"}}
           $i=Get-Content -Raw -Encoding UTF8 web/index.html
@@ -48,7 +48,9 @@ jobs:
           if(-not $m.Contains('https://wa.me/923434824609')){throw 'External WhatsApp support missing'}
           if(-not $m.Contains('"os/exec"')){throw 'External browser launcher import missing'}
           node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'JavaScript syntax failed'}
           node desktop/test_v27_handoff.cjs
+          if($LASTEXITCODE -ne 0){throw 'Signal handoff tests failed'}
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
       - name: Build V.27 Windows x64
