@@ -1,0 +1,160 @@
+name: Publish MH Analysis V38 MT5 Embed Only
+on:
+  push:
+    branches: [v38-mt5-embed-only]
+    paths:
+      - 'updater.go'
+      - 'VERSION'
+      - '.github/workflows/publish-v38-mt5-only.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v38-release
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+
+      - name: Apply surgical V38 MT5 process-image embedding fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path='chrome_host.go'
+          $src=Get-Content -Raw $path
+          if($src -notmatch 'chGetParent') {
+            $src=$src.Replace('chSetParent             = chUser32.NewProc("SetParent")', 'chSetParent             = chUser32.NewProc("SetParent")' + [Environment]::NewLine + "`tchGetParent             = chUser32.NewProc(`"GetParent`")")
+          }
+          $newFinder=@'
+          // V38_MT5_PROCESS_IMAGE_ONLY: identify broker MT5 by the actual terminal process,
+          // not by broker-specific window title text. This prevents a second external terminal.
+          func chMT5ProcessPIDsV38() map[uint32]bool {
+              out := map[uint32]bool{}
+              for _, image := range []string{"terminal64.exe", "terminal.exe"} {
+                  b, err := exec.Command("tasklist.exe", "/FI", "IMAGENAME eq "+image, "/FO", "CSV", "/NH").Output()
+                  if err != nil { continue }
+                  for _, line := range strings.Split(string(b), "\n") {
+                      f := strings.Split(strings.TrimSpace(line), ",")
+                      if len(f) < 2 { continue }
+                      name := strings.Trim(strings.TrimSpace(f[0]), "\"")
+                      if !strings.EqualFold(name, image) { continue }
+                      p := strings.Trim(strings.TrimSpace(f[1]), "\"")
+                      n, err := strconv.ParseUint(p, 10, 32)
+                      if err == nil && n != 0 { out[uint32(n)] = true }
+                  }
+              }
+              return out
+          }
+
+          func chFindInstalledMT5WindowV33() uintptr {
+              pids := chMT5ProcessPIDsV38()
+              if len(pids) == 0 { return 0 }
+              var found uintptr
+              cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
+                  if hwnd == 0 || hwnd == hostHWND { return 1 }
+                  var pid uint32
+                  chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+                  if !pids[pid] { return 1 }
+                  visible, _, _ := chIsWindowVisible.Call(hwnd)
+                  if visible == 0 { return 1 }
+                  found = hwnd
+                  return 0
+              })
+              chEnumWindows.Call(cb, 0)
+              return found
+          }
+          '@
+          $pattern='(?s)// V32: locate an existing MetaTrader 5 top-level window\..*?func chFindInstalledMT5WindowV33\(\) uintptr \{.*?\r?\n\}\r?\n\r?\n(?=func chEmbedMT5V33)'
+          $rx=[regex]::new($pattern)
+          if(-not $rx.IsMatch($src)){throw 'Could not locate V37 MT5 finder block'}
+          $src=$rx.Replace($src,[System.Text.RegularExpressions.MatchEvaluator]{param($m) $newFinder + [Environment]::NewLine},1)
+
+          $old='chSetParent.Call(hwnd, hostHWND)'
+          $verify=@'
+          chSetParent.Call(hwnd, hostHWND)
+              parent, _, _ := chGetParent.Call(hwnd)
+              if parent != hostHWND {
+                  // One retry after style normalization. Never report embedded when Windows kept MT5 external.
+                  styleRetry, _, _ := chGetWindowLongPtr.Call(hwnd, ^uintptr(15))
+                  styleRetry &^= chWSPopup | chWSCaption | chWSBorder | chWSDlgFrame | chWSThickFrame | chWSMinBox | chWSMaxBox | chWSSysMenu
+                  styleRetry |= chWSChild | chWSVisible
+                  chSetWindowLongPtr.Call(hwnd, ^uintptr(15), styleRetry)
+                  chSetParent.Call(hwnd, hostHWND)
+                  parent, _, _ = chGetParent.Call(hwnd)
+                  if parent != hostHWND {
+                      chShowWindow.Call(hwnd, chSWHide)
+                      return false
+                  }
+              }
+          '@
+          $embedStart=$src.IndexOf('func chEmbedMT5V33')
+          if($embedStart -lt 0){throw 'MT5 embed function missing'}
+          $pos=$src.IndexOf($old,$embedStart)
+          if($pos -lt 0){throw 'MT5 SetParent call missing'}
+          $src=$src.Substring(0,$pos)+$verify+$src.Substring($pos+$old.Length)
+          [IO.File]::WriteAllText((Join-Path $PWD $path),$src,(New-Object Text.UTF8Encoding($false)))
+
+          # V38 identity only; no behavior change to licensing.
+          $lic=Get-Content -Raw license_auth.go
+          $lic=$lic.Replace('const licAppVersion = "V.37"','const licAppVersion = "V.38"')
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$lic,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Verify V38 and all V37 regression locks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $wv=Get-Content -Raw webview2_host.go; $ch=Get-Content -Raw chrome_host.go; $app=Get-Content -Raw web/app.js; $upd=Get-Content -Raw updater.go; $lic=Get-Content -Raw license_auth.go
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.38'){throw 'VERSION is not V.38'}
+          if($upd -notmatch 'mhPublicVersionV001 = "V\.38"'){throw 'updater is not V.38'}
+          if($lic -notmatch 'licAppVersion = "V\.38"'){throw 'license identity is not V.38'}
+          if($ch -notmatch 'V38_MT5_PROCESS_IMAGE_ONLY'){throw 'V38 MT5 process-image finder missing'}
+          if($ch -notmatch 'tasklist\.exe'){throw 'terminal process detection missing'}
+          if($ch -notmatch 'chGetParent\.Call\(hwnd\)'){throw 'MT5 parent verification missing'}
+          if($ch -notmatch 'parent != hostHWND'){throw 'MT5 embed verification missing'}
+          if($wv -notmatch 'V36_TRUE_PERSISTENT_WEBVIEWS'){throw 'V37 persistent WebViews regressed'}
+          if($wv -notmatch 'wv2Whatsapp \*edge\.Chromium' -or $wv -notmatch 'wv2Records \*edge\.Chromium'){throw 'V37 embedded views regressed'}
+          if($wv -notmatch 'wmWhatsAppSend' -or $wv -notmatch 'V36_WA_FANOUT'){throw 'V37 WhatsApp flow regressed'}
+          if($app -notmatch 'V36_CANONICAL_SIGNAL_FANOUT'){throw 'V37 signal fanout regressed'}
+          if($app -match "Promise\.allSettled\(\[captureSignalRecordV30" -or $app -match "void captureSignalRecordV796\(d,state\)"){throw 'legacy signal writer returned'}
+          node --check web/app.js
+          gofmt -w chrome_host.go updater.go license_auth.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V38 tests failed'}
+
+      - name: Build and verify V38 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V38 EXE build failed'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=38.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V38'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V38.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V38.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V38.exe')){throw 'V38 installer failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV38Verify'; $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V38.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V38 silent installer verification failed'}
+
+      - name: Publish V38 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v38 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v38 'dist/MH-Analysis-Setup-V38.exe' 'dist/MH Analysis.exe' --target $env:GITHUB_SHA --title 'MH Analysis V.38' --notes 'V.38 changes only the MT5 embedding path: detects broker MT5 by terminal64.exe/terminal.exe process identity and verifies the HWND is actually parented inside MH Analysis. V.37 behavior otherwise retained.'
+          if($LASTEXITCODE -ne 0){throw 'V38 release publish failed'}
+
+      - name: Publish and verify V38 auto-update channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $d=Join-Path $env:RUNNER_TEMP 'v38-update'; New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $d 'MH Analysis.exe'); $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $manifest=[ordered]@{version='V.38';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.38 - MT5 internal embedding correction only; V.37 working behavior retained.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.38'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v38_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $d '*') .; git add .; git commit -m 'Publish MH Analysis V.38 update channel'; git push --force origin HEAD:mh-analysis-update-channel
+          Start-Sleep -Seconds 3; $stamp=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); $raw=(Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json?verify=$stamp").Content; $m=$raw|ConvertFrom-Json; if($m.version -ne 'V.38'){throw 'live manifest is not V.38'}; $tmp=Join-Path $env:RUNNER_TEMP 'MH-V38-live.exe'; Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri ($m.download_url+'?verify='+$stamp) -OutFile $tmp; $live=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower(); if($live -ne $m.sha256.ToLower()){throw 'live V38 EXE SHA mismatch'}
