@@ -28,7 +28,6 @@ jobs:
           if($wv -notmatch 'wv2Records \*edge\.Chromium'){throw 'embedded Records controller missing'}
           if($wv -notmatch 'wmWhatsAppSend'){throw 'WhatsApp queue event missing from active host'}
           if($wv -notmatch 'V36_WA_FANOUT'){throw 'embedded WhatsApp signal fanout missing'}
-          # Verify the real internal MT5 route, not a nonexistent marker.
           if($ch -notmatch 'func chFindInstalledMT5WindowV33\(\) uintptr'){throw 'MT5 installed-window detection missing'}
           if($ch -notmatch 'func chEmbedMT5V33\(hwnd uintptr\) bool'){throw 'MT5 embed routine missing'}
           if($ch -notmatch 'chSetParent\.Call\(hwnd, hostHWND\)'){throw 'MT5 SetParent embedding missing'}
@@ -64,7 +63,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference='Continue'; gh release delete v36 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
-          gh release create v36 'dist/MH-Analysis-Setup-V36.exe' 'dist/MH Analysis.exe' --target HEAD --title 'MH Analysis V.36' --notes 'Direct-source runtime correction: persistent embedded WhatsApp and Records, verified internal MT5 route, and deterministic single-ID Records/MT5 signal fanout.'
+          $target=$env:GITHUB_SHA
+          if([string]::IsNullOrWhiteSpace($target)){throw 'GITHUB_SHA missing'}
+          gh release create v36 'dist/MH-Analysis-Setup-V36.exe' 'dist/MH Analysis.exe' --target $target --title 'MH Analysis V.36' --notes 'Direct-source runtime correction: persistent embedded WhatsApp and Records, verified internal MT5 route, and deterministic single-ID Records/MT5 signal fanout.'
           if($LASTEXITCODE -ne 0){throw 'release publish failed'}
       - name: Publish V36 auto-update channel
         shell: powershell
