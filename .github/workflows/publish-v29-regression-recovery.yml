@@ -1,0 +1,169 @@
+name: Publish MH Analysis V29 Regression Recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v29-regression-recovery]
+    paths:
+      - '.github/workflows/publish-v29-regression-recovery.yml'
+      - 'scripts/v29_regression_recovery.py'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v29-regression-recovery
+  cancel-in-progress: true
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply retained V28 fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v28_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V28 retained-fix patch failed'}
+
+      - name: Apply V29 regression recovery
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v29_regression_recovery.py
+          if($LASTEXITCODE -ne 0){throw 'V29 regression-recovery patch failed'}
+          gofmt -w license_auth.go webview2_host.go chrome_host.go updater.go
+
+      - name: V29 no-regression guards and tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $idx=Get-Content -Raw -Encoding UTF8 web/index.html
+          $wv=Get-Content -Raw webview2_host.go
+          $ch=Get-Content -Raw chrome_host.go
+          $lic=Get-Content -Raw license_auth.go
+          $upd=Get-Content -Raw updater.go
+
+          if(-not $idx.Contains('بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ')){throw 'Arabic Bismillah regression'}
+          if($idx.Contains('Ø¨Ù') -or $idx.Contains('â—') -or $idx.Contains('â€”')){throw 'Visible mojibake remains in main UI'}
+
+          foreach($m in @('Signal Link','chSignalLinkBtn','case chIDSignalLink:','chShowNativeSettingsDialog(2)','V29: restore the proven V26 Signal Link control')){
+            if(-not $wv.Contains($m)){throw "Signal Link regression guard missing: $m"}
+          }
+          if(-not $wv.Contains('if which == 2')){throw 'Signal Link WhatsApp-only visibility guard missing'}
+
+          foreach($m in @('HideWindow: true','CreationFlags: 0x08000000','V29: launch auxiliary browser hidden')){
+            if(-not $ch.Contains($m)){throw "Taskbar flicker guard missing: $m"}
+          }
+          if($ch.Contains('vis, _, _ := chIsWindowVisible.Call(hwnd)')){throw 'Hidden browser discovery still requires visible top-level window'}
+
+          if(-not $lic.Contains('registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`')){throw 'V28 MachineGuid fix lost'}
+          if(-not $lic.Contains('V28 recovery: old/broken DPAPI blob')){throw 'V28 device self-heal lost'}
+          if(-not $wv.Contains('V28: keep the native host hidden until WebView2 gets its first paint.')){throw 'V28 startup first-paint fix lost'}
+          if($wv.Contains('time.Sleep(700 * time.Millisecond)') -or $wv.Contains('time.Sleep(1100 * time.Millisecond)')){throw 'Auxiliary startup prewarm returned'}
+
+          if(-not $upd.Contains('const mhPublicVersionV001 = "V.29"')){throw 'Updater V29 stamp missing'}
+          if(-not $lic.Contains('const licAppVersion = "V.29"')){throw 'License V29 stamp missing'}
+
+          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V29 tests failed'}
+
+      - name: Build V29 Windows EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V29 EXE build failed'}
+
+      - name: Build and verify V29 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'
+          $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=29.0.0'
+          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V29'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V29.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V29.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V29.exe')){throw 'V29 installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV29Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V29.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V29 installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V29.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V29.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+          "MH_EXE_SHA=$exeSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Publish V29 GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v29 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v29 'dist/MH-Analysis-Setup-V29.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.29' --notes 'V.29 regression recovery: restores correct Arabic Bismillah and UI Unicode, restores the proven WhatsApp Signal Link control, prevents auxiliary Chrome/Edge from flashing as a taskbar window, and retains all V.28 secure device identity fixes.'
+          if($LASTEXITCODE -ne 0){throw 'V29 release publish failed'}
+
+      - name: Publish V29 release branch
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $tmp=Join-Path $env:RUNNER_TEMP 'v29-release-files'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          Copy-Item 'dist\MH-Analysis-Setup-V29.exe' (Join-Path $tmp 'MH-Analysis-Setup-V29.exe')
+          Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $tmp 'SHA256SUMS.txt')
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v29_release
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'MH-Analysis-Setup-V29.exe') '.\MH-Analysis-Setup-V29.exe'
+          Copy-Item (Join-Path $tmp 'SHA256SUMS.txt') '.\SHA256SUMS.txt'
+          Set-Content VERSION 'V.29' -Encoding ascii
+          git add .
+          git commit -m 'Publish verified MH Analysis V.29 installer'
+          git push --force origin HEAD:v29-release
+          if($LASTEXITCODE -ne 0){throw 'V29 release branch publish failed'}
+
+      - name: Publish mandatory V29 updater manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $exeSource=Join-Path $env:RUNNER_TEMP 'v29-release-files\MH Analysis.exe'
+          $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v29-update-channel'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item $exeSource (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.29';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.29 - regression recovery: Bismillah Unicode, WhatsApp Signal Link, taskbar/browser flicker, retaining V.28 identity fixes.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.29'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v29_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .
+          git commit -m 'Publish MH Analysis V.29 mandatory update'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'V29 updater manifest publish failed'}
