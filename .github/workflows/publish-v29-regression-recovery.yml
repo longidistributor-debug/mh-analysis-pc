@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/publish-v29-regression-recovery.yml'
       - 'scripts/v29_regression_recovery.py'
+      - 'scripts/v29_remove_visibility_gates.py'
       - 'scripts/v29_verify.py'
 
 permissions:
@@ -43,6 +44,8 @@ jobs:
           $ErrorActionPreference='Stop'
           python scripts/v29_regression_recovery.py
           if($LASTEXITCODE -ne 0){throw 'V29 regression-recovery patch failed'}
+          python scripts/v29_remove_visibility_gates.py
+          if($LASTEXITCODE -ne 0){throw 'V29 visibility-gate cleanup failed'}
           gofmt -w license_auth.go webview2_host.go chrome_host.go updater.go
 
       - name: V29 no-regression guards and tests
