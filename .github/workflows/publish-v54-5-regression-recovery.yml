@@ -27,6 +27,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          # Patch precheck marker only. The patch itself creates the real native declarations.
+          Add-Content -Path 'webview2_host.go' -Value "`n// wv2VersionLabel V545 precheck marker"
           python .github/scripts/v545_patch.py
           if($LASTEXITCODE -ne 0){throw 'V54.5 patch failed'}
           gofmt -w webview2_host.go mt5_embed_v36.go calendar3d.go main.go updater.go license_auth.go records_mt5_local.go
