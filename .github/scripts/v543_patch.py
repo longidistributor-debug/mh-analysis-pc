@@ -105,7 +105,7 @@ function sendDecisionWhatsApp(d,action,status=''){
   })()},0);
   return Promise.resolve({ok:true,queued:true,background:true});
 }'''
-ns, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+ns, n = re.subn(pattern, lambda _m: replacement, s, count=1, flags=re.S)
 if n != 1:
     raise SystemExit(f'WhatsApp formatter/background sender replacement failed: {n}')
 p.write_text(ns, encoding='utf-8', newline='\n')
