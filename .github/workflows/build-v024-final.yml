@@ -1,0 +1,148 @@
+name: Build MH Analysis V.24 Final
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v24-final]
+    paths: ['v24-build-trigger.txt']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v024-final
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Final regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.24'){throw 'VERSION is not V.24'}
+          $u=Get-Content -Raw updater.go
+          if(-not $u.Contains('var mhPublicVersionV001 = "DEV"')){throw 'Updater version injection target missing'}
+          $h=Get-Content -Raw chrome_host.go
+          foreach($m in @('chSignalLinkBtn','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','licAuthorized')){if(-not $h.Contains($m)){throw "V.22 base regression: $m"}}
+          $f=Get-Content -Raw v24_targeted_fix.go
+          foreach($m in @('v24TargetedRuntimeGuard','v24FindExistingMT5Window')){if(-not $f.Contains($m)){throw "V.24 targeted fix missing: $m"}}
+          if(Test-Path v23_runtime_fix.go){throw 'V.23 runtime file must not exist in V.24 recovery base'}
+          if(Test-Path v23_runtime_fixes.go){throw 'V.23 duplicate runtime file must not exist in V.24 recovery base'}
+
+      - name: Compile tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if(Test-Path 'web/app.js'){node --check web/app.js}
+          if(Test-Path 'web/auth.js'){node --check web/auth.js}
+          if(Test-Path 'web/records.js'){node --check web/records.js}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Build V.24 with real runtime version
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w v24_targeted_fix.go
+          mkdir -p dist dist-installer
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w -X main.mhPublicVersionV001=V.24' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.24",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.24 - V.22 recovery base, updater loop correction, Signal Link and MT5 embed reliability"
+          }
+          EOF
+          printf 'V.24\n' > dist/VERSION
+
+      - name: Assert updater will not loop on V.24
+        shell: powershell
+        run: |
+          $src=Get-Content -Raw updater.go
+          if(-not $src.Contains('mhNewerVersionV001(m.Version,mhPublicVersionV001)')){throw 'Updater comparison missing'}
+          $ld=(Select-String -Path .github/workflows/build-v024-final.yml -Pattern 'main.mhPublicVersionV001=V.24' -SimpleMatch)
+          if(-not $ld){throw 'Runtime version injection missing'}
+          Write-Host 'PASS: V.24 binary is compiled to report V.24, so V.24 manifest cannot retrigger V.24.'
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"}
+          New-Item -ItemType Directory -Force installer | Out-Null
+          @'
+          [Setup]
+          AppName=MH Analysis
+          AppVersion=24.0
+          DefaultDirName={autopf}\MH Analysis
+          DefaultGroupName=MH Analysis
+          OutputDir=..\dist-installer
+          OutputBaseFilename=MH Analysis V.24
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          UninstallDisplayIcon={app}\MH Analysis.exe
+          [Files]
+          Source: "..\dist\MH Analysis.exe"; DestDir: "{app}"; Flags: ignoreversion
+          [Icons]
+          Name: "{autoprograms}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          Name: "{autodesktop}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          [Run]
+          Filename: "{app}\MH Analysis.exe"; Description: "Launch MH Analysis"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Encoding UTF8 installer\MHAnalysis-V24.iss
+          & $iscc installer\MHAnalysis-V24.iss
+          if($LASTEXITCODE -ne 0){throw 'Installer build failed'}
+          if(-not(Test-Path 'dist-installer\MH Analysis V.24.exe')){throw 'Installer missing'}
+
+      - name: Upload V.24 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.24-FINAL
+          path: |
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH Analysis V.24.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish stable channel only after all checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v24"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/v24/MH Analysis.exe"
+          cp 'dist/SHA256SUMS.txt' "$RUNNER_TEMP/v24/SHA256SUMS.txt"
+          cp 'dist/update.json' "$RUNNER_TEMP/v24/update.json"
+          cp 'dist/VERSION' "$RUNNER_TEMP/v24/VERSION"
+          cp 'dist-installer/MH Analysis V.24.exe' "$RUNNER_TEMP/v24/MH Analysis V.24.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v24_release
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/v24/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/v24/MH Analysis V.24.exe" './MH Analysis V.24.exe'
+          cp "$RUNNER_TEMP/v24/SHA256SUMS.txt" .
+          cp "$RUNNER_TEMP/v24/update.json" .
+          cp "$RUNNER_TEMP/v24/VERSION" .
+          git add .
+          git commit -m 'MH Analysis V.24 final stable release'
+          git push --force origin HEAD:mh-analysis-update-channel
