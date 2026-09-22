@@ -14,11 +14,12 @@ req('chSignalLinkBtn' in w and 'which == 2' in w,'Signal Link same-click visibil
 req('chFindExistingMT5WindowV32' in c and 'metatrader 5' in c.lower(),'existing MT5 detection missing')
 req('chAttachBrowser(existing)' in c,'existing MT5 is not re-parented')
 req('wnd = chFindExistingMT5WindowV32()' in c,'broker handoff MT5 fallback missing')
-req('V.32' in u and 'V.32' in l,'compiled updater/license version parity missing')
+req('const mhPublicVersionV001 = "V.32"' in u,'updater compiled version is not exactly V.32')
+req('const licAppVersion = "V.32"' in l,'license compiled version is not exactly V.32')
 req('V.32 (Late - CH Shaukat Ali)' in idx and 'V.32 (Late - CH Shaukat Ali)' in rec,'V32 UI version labels missing')
-# Retained protections from earlier releases.
+# Retained protections from the known working chain. These are guards only: no old release artifact is published.
 req('MachineGuid' in l,'secure device identity regression')
 req('SetWindowDisplayAffinity' in w,'capture exclusion regression')
 req('SAME SIGNAL STILL ACTIVE' in s('web/app.js'),'same-signal guard regression')
 req('registerEASignalBridgeRoutes' in s('main.go'),'EA bridge regression')
-print('PASS V32 requested fixes + retained regression guards')
+print('PASS V32 exact requested fixes + retained no-regression guards')
