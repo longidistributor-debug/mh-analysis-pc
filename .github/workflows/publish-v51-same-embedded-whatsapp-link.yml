@@ -1,0 +1,79 @@
+name: Publish MH Analysis V51 Same Embedded WhatsApp Link
+on:
+  push:
+    branches: [v51-same-embedded-whatsapp-link]
+    paths: ['.github/workflows/publish-v51-same-embedded-whatsapp-link.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Apply V51 same-session WhatsApp group link fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='webview2_host.go'
+          $s=Get-Content -Raw $p
+          $old='if strings.HasPrefix(lower,"https://wa.me/"){if u,err:=url.Parse(target);err==nil{if n:=digits(u.Path);n!=""{target="https://web.whatsapp.com/send?phone="+n}}}`r`n`t' + 'wv2Whatsapp.Navigate(target)'
+          if(-not $s.Contains($old)){
+            $old='if strings.HasPrefix(lower,"https://wa.me/"){if u,err:=url.Parse(target);err==nil{if n:=digits(u.Path);n!=""{target="https://web.whatsapp.com/send?phone="+n}}}`n`t' + 'wv2Whatsapp.Navigate(target)'
+          }
+          if(-not $s.Contains($old)){throw 'Expected WhatsApp navigation block not found'}
+          $new=@'
+if strings.HasPrefix(lower,"https://wa.me/"){if u,err:=url.Parse(target);err==nil{if n:=digits(u.Path);n!=""{target="https://web.whatsapp.com/send?phone="+n}}}
+	// V51: keep group invite handling on the SAME authenticated embedded web.whatsapp.com origin.
+	// Do not navigate the embedded logged-in WebView to chat.whatsapp.com landing page.
+	if isGroup {
+		if u,err:=url.Parse(target);err==nil {
+			code:=strings.Trim(strings.TrimSpace(u.Path),"/")
+			if code!="" { target="https://web.whatsapp.com/accept?code="+url.QueryEscape(code) }
+		}
+	}
+	wv2Whatsapp.Navigate(target)
+'@
+          $s=$s.Replace($old,$new.TrimEnd("`r","`n"))
+          $s=$s.Replace("const sentKey='mh-v47-sent-'","const sentKey='mh-v51-sent-'")
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $u=Get-Content -Raw updater.go
+          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.51"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go
+          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.51"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          gofmt -w webview2_host.go updater.go license_auth.go
+          Select-String -Path webview2_host.go -SimpleMatch 'https://web.whatsapp.com/accept?code=' | Out-Null
+          if($LASTEXITCODE -ne 0){throw 'V51 authenticated group route missing'}
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V51 build failed'}
+      - name: Upload V51 installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V51-Installer
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
+      - name: Publish mandatory V51 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $d=Join-Path $env:RUNNER_TEMP 'v51';New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $m=[ordered]@{version='V.51';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.51 - New Analysis and Re-evaluate group signals keep the saved group invite link but resolve it directly on the same authenticated embedded web.whatsapp.com session, then auto-type and send the organized message. EA remains independent and untouched.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.51'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v51_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .
+          git add .;git commit -m 'Publish MH Analysis V.51 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
