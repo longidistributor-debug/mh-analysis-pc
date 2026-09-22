@@ -23,8 +23,11 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $wv=Get-Content -Raw webview2_host.go; $ch=Get-Content -Raw chrome_host.go; $app=Get-Content -Raw web/app.js
-          if(($wv -notmatch 'V36_PREWARM_PERSISTENT') -and ($wv -notmatch 'V36_DIRECT_SOURCE_AUX')){throw 'persistent embedded auxiliary views missing'}
+          if($wv -notmatch 'V36_TRUE_PERSISTENT_WEBVIEWS'){throw 'persistent embedded WhatsApp/Records WebViews missing'}
+          if($wv -notmatch 'wv2Whatsapp \*edge\.Chromium'){throw 'embedded WhatsApp controller missing'}
+          if($wv -notmatch 'wv2Records \*edge\.Chromium'){throw 'embedded Records controller missing'}
           if($wv -notmatch 'wmWhatsAppSend'){throw 'WhatsApp queue event missing from active host'}
+          if($wv -notmatch 'V36_WA_FANOUT'){throw 'embedded WhatsApp signal fanout missing'}
           if($ch -notmatch 'V36_MT5_PROCESS_IMAGE'){throw 'native MT5 process embedding missing'}
           if($app -notmatch 'V36_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
           if($app -match "Promise\.allSettled\(\[captureSignalRecordV30"){throw 'old racing fanout still active'}
