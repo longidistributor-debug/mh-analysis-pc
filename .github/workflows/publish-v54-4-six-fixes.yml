@@ -1,0 +1,97 @@
+name: Publish MH Analysis V54.4 Six Fixes
+
+on:
+  push:
+    branches:
+      - v54-4-six-fixes
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V54.4 six fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python .github/scripts/v544_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.4 patch failed'}
+          gofmt -w main.go calendar3d.go ea_signal_bridge.go webview2_host.go updater.go license_auth.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'V54.4 JS validation failed'}
+
+      - name: Test and build V54.4
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+
+      - name: Build and verify V54.4 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $src='installer\MH-Analysis-V54.1.iss'
+          $dst='installer\MH-Analysis-V54.4.iss'
+          (Get-Content -Raw $src).Replace('V54.1','V54.4').Replace('V.54.1','V.54.4').Replace('54.1.0.0','54.4.0.0') | Set-Content -Encoding utf8 $dst
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc $dst
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.4.exe')){throw 'Installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV544Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V54.4.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Silent installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.4.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.4.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.4-Six-Fixes
+          path: |
+            dist/MH-Analysis-Setup-V54.4.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish V54.4 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v54.4 -y 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v54.4 'dist/MH-Analysis-Setup-V54.4.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.4' --notes 'Six requested fixes: fast local economic calendar, non-blocking New Analysis/Re-Evaluate background handoffs, CH Shaukat Ali subtitle, exact organized WhatsApp signal template, independent immediate EA pending handoff, and current Version label under the title-bar area. Preserves V54.3 confirmed same-session WhatsApp send.'
+          if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
+
+      - name: Publish mandatory V54.4 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v544-update'; New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.54.4';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V54.4 six requested fixes.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54.4'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v544_update; git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'; Copy-Item (Join-Path $tmp 'update.json') '.\update.json'; Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .; git commit -m 'Publish MH Analysis V.54.4 six fixes'; git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}
