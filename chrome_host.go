@@ -546,7 +546,7 @@ func chWaitForProcessWindow(pid uint32, timeout time.Duration) uintptr {
 func chEnsureMT5Terminal() error {
 	chMu.Lock()
 	if chMT5Wnd != 0 {
-		chMu.Unlock(); chApplyDesiredBrowserView(); go mt5ApplyLatestQueued(); return nil // MH_NATIVE_MT5_PREFILL_V796
+		chMu.Unlock(); chApplyDesiredBrowserView(); /* V.27: EA bridge handles new signals; navigation never submits/retries an order. */; return nil // MH_NATIVE_MT5_PREFILL_V796
 	}
 	if chMT5Cmd != nil {
 		chMu.Unlock(); return nil
@@ -580,7 +580,7 @@ func chEnsureMT5Terminal() error {
 	chMu.Unlock()
 	chResizeChildren()
 	chApplyDesiredBrowserView()
-	go mt5ApplyLatestQueued() // MH_NATIVE_MT5_PREFILL_V796
+	/* V.27: EA bridge handles new signals; navigation never submits/retries an order. */ // MH_NATIVE_MT5_PREFILL_V796
 	return nil
 }
 

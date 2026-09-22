@@ -103,6 +103,7 @@ func main() {
 		w.WriteHeader(204)
 	})
 	registerRecordsRoutes(mux)    // MH_RECORDS_V796_PATCH
+	registerEASignalBridgeRoutes(mux)
 	registerMT5PrefillRoutes(mux) // MH_NATIVE_MT5_PREFILL_V796
 	registerRecordsV2Routes(mux)  // MH_RECORDS_MT5_LOCAL_V797
 	mux.HandleFunc("/api/send-whatsapp", sendWhatsappHandler)
@@ -556,11 +557,12 @@ func sendWhatsappHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := "https://web.whatsapp.com/send?phone=" + num + "&text=" + url.QueryEscape(q.Message)
-	waMu.Lock()
-	waQueue = append(waQueue, waTask{target: target})
-	waMu.Unlock()
-	postMessage(hostHWND, wmWhatsAppSend, 0, 0)
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "queued": true})
+ if err := v27SendWhatsApp(r.Context(), target, q.Message); err != nil {
+  w.WriteHeader(http.StatusBadGateway)
+  _ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+  return
+ }
+ _ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "submitted": true})
 }
 func digits(s string) string {
 	var b strings.Builder

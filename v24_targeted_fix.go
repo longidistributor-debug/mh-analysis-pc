@@ -36,7 +36,7 @@ func v24TargetedRuntimeGuard() {
                     chShowWindow.Call(wnd, chSWHide)
                     chAttachBrowser(wnd)
                     chMu.Lock(); if chMT5Wnd == 0 { chMT5Wnd = wnd }; chMu.Unlock()
-                    chResizeChildren(); chApplyDesiredBrowserView(); go mt5ApplyLatestQueued()
+                    chResizeChildren(); chApplyDesiredBrowserView(); /* V.27: EA bridge handles new signals; navigation never submits/retries an order. */
                 }
             }
         }

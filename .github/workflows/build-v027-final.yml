@@ -1,0 +1,113 @@
+name: Build MH Analysis V.27 Final
+on:
+  workflow_dispatch:
+  push:
+    branches: [v27-runtime-recovery]
+    paths: ['v27-build-trigger.txt']
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v027-final
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Apply preserved UI and external support correction
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='web/index.html'; $s=Get-Content -Raw -Encoding UTF8 $p
+          $b='&#1576;&#1616;&#1587;&#1618;&#1605;&#1616; &#1575;&#1604;&#1604;&#1617;&#1614;&#1607;&#1616; &#1575;&#1604;&#1585;&#1617;&#1614;&#1581;&#1618;&#1605;&#1614;&#1606;&#1616; &#1575;&#1604;&#1585;&#1617;&#1614;&#1581;&#1616;&#1610;&#1605;&#1616;'
+          $s=[regex]::Replace($s,'<div class="bismillah">.*?</div>','<div class="bismillah">'+$b+'</div>',1)
+          Set-Content -Encoding UTF8 $p $s
+          $p='main.go'; $s=Get-Content -Raw -Encoding UTF8 $p
+          $old='postMessage(hostHWND, wmSwitchWhatsApp, 0, 0)'
+          $new='_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "https://wa.me/923434824609").Start()'
+          $idx=$s.IndexOf($old); if($idx -lt 0){throw 'Support route target missing'}
+          $s=$s.Substring(0,$idx)+$new+$s.Substring($idx+$old.Length)
+          if(-not $s.Contains('"os/exec"')){$s=$s.Replace('"os"','"os"'+[Environment]::NewLine+[char]9+'"os/exec"')}
+          Set-Content -Encoding UTF8 $p $s
+      - name: Regression guards and compile tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.27'){throw 'VERSION not V.27'}
+          $w=Get-Content -Raw webview2_host.go
+          foreach($m in @('chSignalLinkBtn','chIDSignalLink','wv2SetDesiredView(4)','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','chBringWindowToTop.Call(mt5')){if(-not $w.Contains($m)){throw "Active WebView2 runtime regression: $m"}}
+          $h=Get-Content -Raw chrome_host.go
+          foreach($m in @('licAuthorized','chEnsureMT5Terminal')){if(-not $h.Contains($m)){throw "Core regression: $m"}}
+          $i=Get-Content -Raw -Encoding UTF8 web/index.html
+          if(-not $i.Contains('&#1576;&#1616;&#1587;&#1618;&#1605;&#1616;')){throw 'Bismillah correction missing'}
+          $m=Get-Content -Raw -Encoding UTF8 main.go
+          if(-not $m.Contains('https://wa.me/923434824609')){throw 'External WhatsApp support missing'}
+          if(-not $m.Contains('"os/exec"')){throw 'External browser launcher import missing'}
+          node --check web/app.js
+          node desktop/test_v27_handoff.cjs
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+      - name: Build V.27 Windows x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w webview2_host.go v27_views_windows.go v24_targeted_fix.go main.go mt5_prefill.go
+          mkdir -p dist dist-installer
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w -X main.mhPublicVersionV001=V.27' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {"version":"V.27","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/v27-release/MH%20Analysis.exe","sha256":"$HASH","notes":"MH Analysis V.27 - persistent analysis views, WhatsApp send handling, unified MT5 EA and records handoff, no PowerShell on MT5 navigation"}
+          EOF
+          printf 'V.27\n' > dist/VERSION
+      - name: Build V.27 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"; if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"}
+          New-Item -ItemType Directory -Force installer | Out-Null
+          @'
+          [Setup]
+          AppName=MH Analysis
+          AppVersion=27.0
+          DefaultDirName={autopf}\MH Analysis
+          DefaultGroupName=MH Analysis
+          OutputDir=..\dist-installer
+          OutputBaseFilename=MH Analysis V.27
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          [Files]
+          Source: "..\dist\MH Analysis.exe"; DestDir: "{app}"; Flags: ignoreversion
+          [Icons]
+          Name: "{autoprograms}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          Name: "{autodesktop}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          [Run]
+          Filename: "{app}\MH Analysis.exe"; Description: "Launch MH Analysis"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Encoding UTF8 installer\MHAnalysis-V26.iss
+          & $iscc installer\MHAnalysis-V26.iss
+          if($LASTEXITCODE -ne 0){throw 'Installer failed'}
+      - name: Upload V.27 candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.27-FINAL
+          path: |
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH Analysis V.27.exe
+          if-no-files-found: error
+      - name: Publish V.27 package after all checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v27"; cp dist/* "$RUNNER_TEMP/v27/"; cp 'dist-installer/MH Analysis V.27.exe' "$RUNNER_TEMP/v27/"
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v27_release; git rm -rf . || true; find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/v27/"* .; git add .; git commit -m 'MH Analysis V.27 final stable release'; git push --force origin HEAD:v27-release

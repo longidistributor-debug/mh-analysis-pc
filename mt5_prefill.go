@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+ "syscall"
 	"time"
 	"unicode/utf16"
 )
@@ -310,6 +311,7 @@ Out-Result $true 'READY FOR USER CONFIRMATION' ("$($p.pending_type) • Entry $(
 
 	enc := encodePowerShellCommand(ps)
 	psCmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc)
+	psCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	psCmd.Env = append(os.Environ(),
 		"MH_MT5_PREFILL="+payload64,
 		"MH_MT5_PID="+strconv.Itoa(cmd.Process.Pid),

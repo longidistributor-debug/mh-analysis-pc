@@ -50,17 +50,12 @@ func wv2Resize() {
 }
 
 func wv2ShowLocal(which int) {
-	wv2SetDesiredView(which)
-	if wv2Browser == nil { return }
-	if chMT5Wnd != 0 { chShowWindow.Call(chMT5Wnd, chSWHide) }
-	chShowWindow.Call(wv2Container, chSWShow)
-	_ = wv2Browser.Show()
-	wv2Resize()
-	if which == 2 { wv2Browser.Navigate("https://web.whatsapp.com/")
-	} else if which == 3 { wv2Browser.Navigate(serverURL+"records.html")
-	} else { wv2Browser.Navigate(serverURL) }
-	wv2Browser.Focus()
-	if which == 2 && chSignalLinkBtn != 0 { chBringWindowToTop.Call(chSignalLinkBtn); chUpdateWindow.Call(chSignalLinkBtn) }
+ wv2SetDesiredView(which)
+ if wv2Browser == nil { return }
+ if chMT5Wnd != 0 { chShowWindow.Call(chMT5Wnd, chSWHide) }
+ if err := v27EnsureView(which); err != nil { messageBox(hostHWND, err.Error(), "MH Analysis", 0x10); return }
+ v27LayoutViews()
+ if which == 1 { wv2Browser.Focus() } else if b := v27Views[which]; b != nil { b.Focus() }
 }
 
 func wv2ButtonAllowed(id int) bool {
@@ -75,8 +70,10 @@ func wv2ButtonAllowed(id int) bool {
 
 func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
+ case v27DispatchMessage:
+  v27DrainDispatch(); return 0
 	case chWMSize:
-		wv2Resize(); return 0
+		wv2Resize(); v27LayoutViews(); return 0
 	case chWMCommand:
 		id := int(wp & 0xffff)
 		if !wv2ButtonAllowed(id) { return 0 }
@@ -87,15 +84,17 @@ func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 			wv2ShowLocal(2)
 		case idRecords:
 			wv2ShowLocal(3)
-		case idMT5:
-			wv2SetDesiredView(4)
-			if wv2Browser != nil { _ = wv2Browser.Hide() }
-			chShowWindow.Call(wv2Container, chSWHide)
-			go func() {
-				if err := chEnsureMT5Terminal(); err != nil { messageBox(hostHWND, err.Error(), "MT5 System", 0x10); wv2ShowLocal(1); return }
-				chMu.Lock(); mt5 := chMT5Wnd; chMu.Unlock()
-				if mt5 != 0 { chShowWindow.Call(mt5, chSWShow); chBringWindowToTop.Call(mt5); wv2Resize(); go mt5ApplyLatestQueued() }
-			}()
+        case idMT5:
+            wv2SetDesiredView(4)
+            v27LayoutViews()
+            go func() {
+                err := chEnsureMT5Terminal()
+                v27Dispatch(func() {
+                    if err != nil { messageBox(hostHWND, err.Error(), "MT5 System", 0x10); wv2ShowLocal(1); return }
+                    v27LayoutViews()
+                })
+            }()
+
 		case chIDSignalLink:
 			// Signal Link is a separate navigation option shown only while WhatsApp is selected.
 			chShowNativeSettingsDialog(2)
@@ -142,7 +141,8 @@ func runWebView2Host() {
 	b:=edge.NewChromium(); b.DataPath=data; wv2Browser=b
 	if !b.Embed(wv2Container) { messageBox(hostHWND,"Microsoft Edge WebView2 Runtime is required.","MH Analysis",0x10); chDestroyWindow.Call(hostHWND); return }
 	if err:=b.Show(); err!=nil { messageBox(hostHWND,"Could not display the embedded MH Analysis view.","MH Analysis",0x10); chDestroyWindow.Call(hostHWND); return }
-	wv2SetDesiredView(1); wv2Resize(); b.Navigate(serverURL); b.Focus(); chShowWindow.Call(hostHWND,chSWMaximize); chUpdateWindow.Call(hostHWND); wv2Resize(); b.Focus()
+	v27Views[1] = b; v27Containers[1] = wv2Container
+ wv2SetDesiredView(1); wv2Resize(); b.Navigate(serverURL); b.Focus(); chShowWindow.Call(hostHWND,chSWMaximize); chUpdateWindow.Call(hostHWND); wv2Resize(); b.Focus()
 	var m chMsg
 	for { r,_,_:=chGetMessage.Call(uintptr(unsafe.Pointer(&m)),0,0,0); if int32(r)<=0 { break }; chTranslateMessage.Call(uintptr(unsafe.Pointer(&m))); chDispatchMessage.Call(uintptr(unsafe.Pointer(&m))) }
 }
