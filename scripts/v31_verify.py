@@ -14,11 +14,9 @@ css=need('web/v31.css','.rsiCanvasWrap','border-radius:0 0 12px 12px','user-sele
 js=need('web/v31.js','/api/open-support-external','PrintScreen','contextmenu')
 wv=need('webview2_host.go','SetWindowDisplayAffinity','chWDAExcludeFromCaptureV31','V31: keep the current MH view visible','V31: never blank the host while MT5 is starting','chEnsureMT5Terminal')
 main=need('main.go','/api/open-support-external','https://wa.me/923434824609','registerRecordsRoutes','registerMT5PrefillRoutes','registerRecordsV2Routes','registerEASignalBridgeRoutes')
-# retained critical regression protections
 need('license_auth.go','MachineGuid')
 need('ea_signal_bridge.go','0.02')
 need('web/app.js','SAME SIGNAL STILL ACTIVE','NO NEW SIGNAL')
-# old wrong visible labels must not survive in rendered header/records
 if 'AUTO CYCLE (HAMMAD & SOMI)' in idx: raise SystemExit('old AUTO CYCLE label still visible in MH header')
 if 'AUTO CYCLE (HAMMAD & SOMI)' in rec: raise SystemExit('old AUTO CYCLE label still visible in Records')
-print('V31 regression guards passed')
+print('V31 regression guards passed: UI, first-click navigation, embedded MT5 nonblank startup, capture/copy restrictions, and retained V28-V30 protections')
