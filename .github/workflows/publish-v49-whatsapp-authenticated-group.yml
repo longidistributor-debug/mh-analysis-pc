@@ -1,7 +1,7 @@
-name: Publish MH Analysis V49 Authenticated WhatsApp Group
+name: Publish MH Analysis V50 WhatsApp UI Group Send
 on:
   push:
-    branches: [v49-whatsapp-authenticated-group]
+    branches: [v50-whatsapp-ui-group-send]
     paths: ['.github/workflows/publish-v49-whatsapp-authenticated-group.yml']
   workflow_dispatch:
 permissions:
@@ -15,14 +15,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
-      - name: Apply V49 authenticated WhatsApp group route and build
+      - name: Apply V50 logged-in WhatsApp UI group sender and build
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $p='webview2_host.go'
           $s=Get-Content -Raw $p
-          $old='wv2Whatsapp.Navigate(target)'
-          $new=@'
+          $navOld='wv2Whatsapp.Navigate(target)'
+          $navNew=@'
           if isGroup {
             if u,err:=url.Parse(target);err==nil {
               code:=strings.Trim(strings.TrimSpace(u.Path),"/")
@@ -31,41 +31,54 @@ jobs:
           }
           wv2Whatsapp.Navigate(target)
           '@
-          if(-not $s.Contains($old)){throw 'WhatsApp navigation point not found'}
-          $s=$s.Replace($old,$new.Trim())
+          if(-not $s.Contains($navOld)){throw 'WhatsApp navigation point not found'}
+          $s=$s.Replace($navOld,$navNew.Trim())
+          $uiOld="if(host!=='web.whatsapp.com')return 'waiting-whatsapp';const box="
+          $uiNew=@'
+          if(host!=='web.whatsapp.com')return 'waiting-whatsapp';
+          if(isGroup){
+            const buttons=[...document.querySelectorAll('button,[role="button"],a')];
+            const open=buttons.find(el=>{const t=((el.innerText||el.textContent||'')+' '+(el.getAttribute('aria-label')||'')).trim().toLowerCase();return /view group|open group|continue to chat|open chat|join group|continue|go to chat/.test(t)});
+            if(open){open.click();return 'opening-group-in-auth-ui';}
+          }
+          const box=
+          '@
+          if(-not $s.Contains($uiOld)){throw 'WhatsApp authenticated UI injection point not found'}
+          $s=$s.Replace($uiOld,$uiNew.Trim())
           [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
           $u=Get-Content -Raw updater.go
-          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.49"',1)
+          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.50"',1)
           [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
           $l=Get-Content -Raw license_auth.go
-          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.49"',1)
+          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.50"',1)
           [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
           gofmt -w webview2_host.go updater.go license_auth.go
-          if((Get-Content -Raw webview2_host.go) -notmatch 'web\.whatsapp\.com/accept\?code='){throw 'V49 authenticated group route missing'}
+          $check=Get-Content -Raw webview2_host.go
+          if($check -notmatch 'opening-group-in-auth-ui'){throw 'V50 authenticated UI group sender missing'}
           go test ./...
           New-Item -ItemType Directory -Force dist|Out-Null
           $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
-          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V49 build failed'}
-      - name: Upload V49 installer artifact
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V50 build failed'}
+      - name: Upload V50 installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V49-Installer
+          name: MH-Analysis-V50-Installer
           path: dist/MH Analysis.exe
           if-no-files-found: error
-      - name: Publish mandatory V49 manifest
+      - name: Publish mandatory V50 manifest
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
-          $d=Join-Path $env:RUNNER_TEMP 'v49';New-Item -ItemType Directory -Force $d|Out-Null
+          $d=Join-Path $env:RUNNER_TEMP 'v50';New-Item -ItemType Directory -Force $d|Out-Null
           Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
-          $m=[ordered]@{version='V.49';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.49 - group invite links are routed through the existing authenticated embedded WhatsApp Web session instead of the unauthenticated chat.whatsapp.com landing flow. V.48 independent WhatsApp and EA behavior is preserved.'}|ConvertTo-Json -Compress
+          $m=[ordered]@{version='V.50';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.50 - group sending now works through the existing logged-in embedded WhatsApp Web UI: resolve/open the group in the authenticated session, wait for the real composer, inject the generated signal and click Send. EA behavior is unchanged.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
-          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.49'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.50'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
           git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __v49_update
+          git checkout --orphan __v50_update
           git rm -rf . 2>$null
           Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
           Copy-Item (Join-Path $d '*') .
-          git add .;git commit -m 'Publish MH Analysis V.49 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
+          git add .;git commit -m 'Publish MH Analysis V.50 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
