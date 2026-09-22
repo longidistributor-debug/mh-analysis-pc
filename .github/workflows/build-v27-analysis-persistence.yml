@@ -1,0 +1,157 @@
+name: Build and Publish MH Analysis V27
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v27-analysis-persistence-fix]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v27
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout V27 source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Stamp V27 public version
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $u=Get-Content -Raw updater.go
+          $u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.27"'
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $i=Get-Content -Raw web/index.html
+          $i=$i -replace '<div class="version">[^<]*</div>','<div class="version">V.27 AUTO CYCLE (HAMMAD & SOMI)</div>'
+          $i=$i -replace '<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.27</div>'
+          [IO.File]::WriteAllText((Join-Path $PWD 'web/index.html'),$i,(New-Object Text.UTF8Encoding($false)))
+
+      - name: V27 source guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $wv=Get-Content -Raw webview2_host.go
+          $mt=Get-Content -Raw mt5_prefill.go
+          $bridge=Get-Content -Raw web/v03.js
+          foreach($m in @('V.27: MH Analysis must never be navigated away','WhatsAppProfile','RecordsProfile','wv2SetDesiredView(4)')){if(-not $wv.Contains($m)){throw "V27 persistence guard missing: $m"}}
+          if($wv.Contains('wv2Browser.Navigate("https://web.whatsapp.com/")')){throw 'Regression: single WebView2 still navigates to WhatsApp'}
+          if($wv.Contains('wv2Browser.Navigate(serverURL + "records.html")')){throw 'Regression: single WebView2 still navigates to Records'}
+          foreach($m in @('HideWindow: true','CreationFlags: 0x08000000','-WindowStyle", "Hidden')){if(-not $mt.Contains($m)){throw "V27 hidden PowerShell guard missing: $m"}}
+          foreach($m in @('/api/records-v2/capture','/api/mt5/prepare','action:''NEW''')){if(-not $bridge.Contains($m)){throw "V27 signal fan-out guard missing: $m"}}
+          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
+          if($LASTEXITCODE -ne 0){throw 'JavaScript syntax check failed'}
+          Write-Host 'PASS V27 source guards'
+
+      - name: Go format and tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          gofmt -w webview2_host.go mt5_prefill.go updater.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Build Windows x64 EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not (Test-Path 'dist/MH Analysis.exe')){throw 'V27 EXE build failed'}
+
+      - name: Build V27 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not (Test-Path $iscc)){choco install innosetup --no-progress -y}
+          if(-not (Test-Path $iscc)){throw 'Inno Setup compiler unavailable'}
+          & $iscc 'installer\MH-Analysis-V27.iss'
+          if($LASTEXITCODE -ne 0){throw 'Installer compilation failed'}
+          if(-not (Test-Path 'dist\MH-Analysis-Setup-V27.exe')){throw 'V27 installer output missing'}
+
+      - name: Verify installer can install silently
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $target=Join-Path $env:RUNNER_TEMP 'MHAnalysisV27Test'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V27.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0){throw "Installer exit code $($p.ExitCode)"}
+          if(-not (Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Installed MH Analysis.exe missing'}
+
+      - name: Hash V27 outputs
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $exe=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setup=(Get-FileHash 'dist\MH-Analysis-Setup-V27.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exe}  MH Analysis.exe`n${setup}  MH-Analysis-Setup-V27.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+          "MH_EXE_SHA=$exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload V27 build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V27
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-Setup-V27.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish V27 GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release delete v27 --yes --cleanup-tag 2>$null
+          gh release create v27 'dist/MH-Analysis-Setup-V27.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.27' --notes 'V.27 restores persistent MH Analysis state and fixed 15-minute automation while navigating between MH Analysis, WhatsApp, Records and MT5; restores NEW signal fan-out to Records and MT5; and hides MT5 PowerShell automation windows.'
+          if($LASTEXITCODE -ne 0){throw 'V27 release publish failed'}
+
+      - name: Publish mandatory V27 update channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $exeSource=Join-Path $PWD 'dist\MH Analysis.exe'
+          $tmp=Join-Path $env:RUNNER_TEMP 'mh-v27-publish'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item $exeSource (Join-Path $tmp 'MH Analysis.exe') -Force
+          $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower()
+          $manifest=[ordered]@{
+            version='V.27'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes='MH Analysis V.27 - persistent analysis runtime, restored WhatsApp/Records/MT5 automation, hidden MT5 PowerShell windows'
+          } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          Set-Content -Path (Join-Path $tmp 'VERSION') -Value 'V.27' -Encoding ascii
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v27_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add 'MH Analysis.exe' update.json VERSION
+          git commit -m 'Publish MH Analysis V.27 mandatory update'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Update channel publish failed'}
