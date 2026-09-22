@@ -33,7 +33,7 @@ jobs:
           $hostSrc=Get-Content -Raw chrome_host.go
           $fix=Get-Content -Raw v23_runtime_fix.go
           foreach($m in @('chSignalLinkBtn','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','licAuthorized')){if(-not $hostSrc.Contains($m)){throw "Working-system regression: $m"}}
-          foreach($m in @('mhV23ApplyNav','mhV23EnsureMT5','mhV23FindExistingMT5Window')){if(-not $fix.Contains($m)){throw "V.23 fix missing: $m"}}
+          foreach($m in @('v23RuntimeGuard','v23FindMT5MainWindow','chSignalLinkBtn','mt5ApplyLatestQueued')){if(-not $fix.Contains($m)){throw "V.23 fix missing: $m"}}
           if(-not (Test-Path 'VERSION')){throw 'VERSION missing'}
           $v=(Get-Content -Raw VERSION).Trim()
           if($v -ne 'V.23'){throw "Expected V.23, got $v"}
