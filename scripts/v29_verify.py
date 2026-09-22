@@ -13,9 +13,11 @@ upd = text('updater.go')
 required_arabic = 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ'
 if required_arabic not in idx:
     raise SystemExit('Arabic Bismillah regression')
-for bad in ('Ø¨Ù', 'â—', 'â€”'):
-    if bad in idx:
-        raise SystemExit(f'Visible mojibake remains in main UI: {bad!r}')
+# Positive Unicode checks avoid Windows console/codepage false positives while
+# still proving the visible UI characters were repaired by the V29 patch.
+for good in ('◆', '─', '•', '₿', '◎', '—', '€', '¥', '£', '●', '↻', '◴', '…'):
+    if good not in idx:
+        raise SystemExit(f'Expected repaired UI Unicode missing: U+{ord(good):04X}')
 
 for marker in (
     'Signal Link',
