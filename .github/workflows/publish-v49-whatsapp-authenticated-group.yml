@@ -1,0 +1,71 @@
+name: Publish MH Analysis V49 Authenticated WhatsApp Group
+on:
+  push:
+    branches: [v49-whatsapp-authenticated-group]
+    paths: ['.github/workflows/publish-v49-whatsapp-authenticated-group.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Apply V49 authenticated WhatsApp group route and build
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='webview2_host.go'
+          $s=Get-Content -Raw $p
+          $old='wv2Whatsapp.Navigate(target)'
+          $new=@'
+          if isGroup {
+            if u,err:=url.Parse(target);err==nil {
+              code:=strings.Trim(strings.TrimSpace(u.Path),"/")
+              if code!="" { target="https://web.whatsapp.com/accept?code="+url.QueryEscape(code) }
+            }
+          }
+          wv2Whatsapp.Navigate(target)
+          '@
+          if(-not $s.Contains($old)){throw 'WhatsApp navigation point not found'}
+          $s=$s.Replace($old,$new.Trim())
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $u=Get-Content -Raw updater.go
+          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.49"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go
+          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.49"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          gofmt -w webview2_host.go updater.go license_auth.go
+          if((Get-Content -Raw webview2_host.go) -notmatch 'web\.whatsapp\.com/accept\?code='){throw 'V49 authenticated group route missing'}
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V49 build failed'}
+      - name: Upload V49 installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V49-Installer
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
+      - name: Publish mandatory V49 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $d=Join-Path $env:RUNNER_TEMP 'v49';New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $m=[ordered]@{version='V.49';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.49 - group invite links are routed through the existing authenticated embedded WhatsApp Web session instead of the unauthenticated chat.whatsapp.com landing flow. V.48 independent WhatsApp and EA behavior is preserved.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.49'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v49_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .
+          git add .;git commit -m 'Publish MH Analysis V.49 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
