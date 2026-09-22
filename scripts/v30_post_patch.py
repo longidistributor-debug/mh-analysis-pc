@@ -45,17 +45,14 @@ function derivePendingTypeV30(direction,entry,market){
 '''
     s=s.replace(anchor,fn+anchor,1)
 
-# Unique new analysis sends to Records + EA + native MT5 visual queue. Same signal sends none.
 old="if(d.signal&&!d._sameActiveSignal){void captureSignalRecordV30(d);void prepareMT5SignalV796(d,'NEW');} // V30 unique signal fan-out"
 new="if(d.signal&&!d._sameActiveSignal){void captureSignalRecordV30(d);void sendUniqueSignalToEAV30(d);void prepareMT5SignalV796(d,'NEW');} // V30 unique signal fan-out"
 need(old in s,'V30 unique fanout post anchor missing'); s=s.replace(old,new,1)
 
-# Make duplicate state unmistakable in the analysis header.
 old="$('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':'NEW ANALYSIS';"
 new="$('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');"
 need(old in s,'V30 duplicate heading anchor missing'); s=s.replace(old,new,1)
 
-# Correct manual duplicate status instead of claiming WhatsApp is not saved.
 old="""        }else setAutoStatus('Manual analysis ready • WhatsApp number not saved','warn');
 """
 new="""        }else if(d._sameActiveSignal)setAutoStatus('Same signal still active • no new WhatsApp / Record / MT5 pending','warn');
@@ -67,19 +64,43 @@ wr(p,s)
 # Native MT5 prefill remains visual/support only. EA bridge above owns final order placement,
 # preventing two pending orders from the same unique signal.
 p='mt5_prefill.go'; s=rd(p)
-# Replace V30 auto-Place block if present with a verified ready state.
 pattern=re.compile(r'''\$place=\$null\n\$buttons=All \$dialog \(\[System\.Windows\.Automation\.ControlType\]::Button\).*?Out-Result \$true 'PENDING ORDER SUBMITTED' \(\\"\$\(\$p\.pending_type\).*?\\"\)''',re.S)
 replacement="Out-Result $true 'READY - EA HANDLES AUTO PENDING' (\"$($p.pending_type) • Entry $($p.entry) • SL $($p.sl) • TP1 $($p.tp1)\")"
 s,n=pattern.subn(replacement,s,count=1)
 if n==0:
-    # less strict fallback around the literal injected block
     a=s.find("$place=$null")
     b=s.find("\n`\n",a)
     if a>=0 and b>a:
         s=s[:a]+replacement+s[b:]
-# Output function should not report this visual prefill as submitted.
 s=s.replace("[pscustomobject]@{ok=$ok;status=$status;detail=$detail;submitted=($status -eq 'PENDING ORDER SUBMITTED')} | ConvertTo-Json -Compress","[pscustomobject]@{ok=$ok;status=$status;detail=$detail;submitted=$false} | ConvertTo-Json -Compress")
 s=s.replace('res.Status = "PENDING ORDER SUBMITTED"','res.Status = "READY - EA HANDLES AUTO PENDING"')
 wr(p,s)
 
-print('V30 post patch applied: EA auto-pending is single final-placement path')
+# Final visible-text Unicode sanitation. Try recovering cp1252/UTF-8 mojibake text nodes;
+# if an irrecoverable replacement glyph remains, remove it rather than showing garbage.
+def recover_visible_html(path):
+    src=rd(path)
+    def fix_node(m):
+        x=m.group(1)
+        if not any(k in x for k in ('Ã','Â','â','ð','Ø','Ù','�')):
+            return '>'+x+'<'
+        y=x
+        for _ in range(2):
+            try:
+                z=y.encode('cp1252').decode('utf-8')
+                if z==y: break
+                y=z
+            except Exception:
+                break
+        y=y.replace('\ufffd','')
+        return '>'+y+'<'
+    src=re.sub(r'>([^<>]+)<',fix_node,src)
+    # restore exact locked Arabic even if inherited bytes were especially damaged
+    src=re.sub(r'<div class="bismillah">.*?</div>','<div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ</div>',src,count=1)
+    src=src.replace('\ufffd','')
+    wr(path,src)
+
+recover_visible_html('web/index.html')
+recover_visible_html('web/records.html')
+
+print('V30 post patch applied: EA auto-pending is single final-placement path; visible Unicode sanitized')
