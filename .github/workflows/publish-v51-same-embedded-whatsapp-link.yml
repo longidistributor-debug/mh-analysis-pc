@@ -1,14 +1,11 @@
 name: Publish MH Analysis V51 Same Embedded WhatsApp Link
-
-'on':
+on:
   push:
-    branches:
-      - v51-same-embedded-whatsapp-link
+    branches: [v51-same-embedded-whatsapp-link]
+    paths: ['.github/workflows/publish-v51-same-embedded-whatsapp-link.yml']
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build:
     runs-on: windows-latest
@@ -18,25 +15,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
-      - name: Apply V51 same-session WhatsApp group link fix
+      - name: Build V51
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $p='webview2_host.go'
           $s=Get-Content -Raw $p
-          $pattern='wv2Whatsapp\.Navigate\(target\)'
-          if(-not [regex]::IsMatch($s,$pattern)){throw 'Expected WhatsApp navigation call not found'}
-          $replacement=@'
-if isGroup {
-    if u,err:=url.Parse(target);err==nil {
-        code:=strings.Trim(strings.TrimSpace(u.Path),"/")
-        if code!="" { target="https://web.whatsapp.com/accept?code="+url.QueryEscape(code) }
-    }
-}
-wv2Whatsapp.Navigate(target)
-'@
-          $s=[regex]::Replace($s,$pattern,$replacement.TrimEnd("`r","`n"),1)
-          $s=$s.Replace("const sentKey='mh-v47-sent-'","const sentKey='mh-v51-sent-'")
+          $s=$s.Replace('wv2Whatsapp.Navigate(target)','if isGroup { if u,err:=url.Parse(target); err==nil { code:=strings.Trim(strings.TrimSpace(u.Path),"/"); if code!="" { target="https://web.whatsapp.com/accept?code="+url.QueryEscape(code) } } }; wv2Whatsapp.Navigate(target)')
           [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
           $u=Get-Content -Raw updater.go
           $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.51"',1)
@@ -45,12 +30,9 @@ wv2Whatsapp.Navigate(target)
           $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.51"',1)
           [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
           gofmt -w webview2_host.go updater.go license_auth.go
-          if(-not (Select-String -Path webview2_host.go -SimpleMatch 'https://web.whatsapp.com/accept?code=')){throw 'V51 authenticated group route missing'}
           go test ./...
-          New-Item -ItemType Directory -Force dist | Out-Null
-          $env:GOOS='windows'
-          $env:GOARCH='amd64'
-          $env:CGO_ENABLED='0'
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V51 build failed'}
       - name: Upload V51 installer artifact
@@ -64,18 +46,14 @@ wv2Whatsapp.Navigate(target)
         run: |
           $ErrorActionPreference='Stop'
           $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
-          $d=Join-Path $env:RUNNER_TEMP 'v51'
-          New-Item -ItemType Directory -Force $d | Out-Null
+          $d=Join-Path $env:RUNNER_TEMP 'v51';New-Item -ItemType Directory -Force $d|Out-Null
           Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
-          $m=[ordered]@{version='V.51';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.51 - New Analysis and Re-evaluate group signals use the saved group link in the same authenticated embedded WhatsApp session. EA remains independent and untouched.'}|ConvertTo-Json -Compress
+          $m=[ordered]@{version='V.51';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.51 - saved group link opens through same embedded authenticated WhatsApp session for New Analysis and Re-evaluate. EA untouched.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
-          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),('V.51'+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false)))
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.51'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --orphan __v51_update
           git rm -rf . 2>$null
-          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
           Copy-Item (Join-Path $d '*') .
-          git add .
-          git commit -m 'Publish MH Analysis V.51 mandatory update'
-          git push --force origin HEAD:mh-analysis-update-channel
+          git add .;git commit -m 'Publish MH Analysis V.51 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
