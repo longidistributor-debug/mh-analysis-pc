@@ -22,100 +22,26 @@ var (
     v42SetThreadDpiAwarenessContext = chUser32.NewProc("SetThreadDpiAwarenessContext")
 )
 
-func v36ProcessImage(pid uint32) string {
-    const processQueryLimitedInformation = 0x1000
-    h, _, _ := v36OpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
-    if h == 0 { return "" }
-    defer v36CloseHandle.Call(h)
-    buf := make([]uint16, 32768)
-    n := uint32(len(buf))
-    ok, _, _ := v36QueryFullProcessImageName.Call(h, 0, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n)))
-    if ok == 0 || n == 0 { return "" }
-    return strings.ToLower(filepath.Base(syscall.UTF16ToString(buf[:n])))
-}
+func v36ProcessImage(pid uint32) string { const processQueryLimitedInformation=0x1000;h,_,_:=v36OpenProcess.Call(processQueryLimitedInformation,0,uintptr(pid));if h==0{return ""};defer v36CloseHandle.Call(h);buf:=make([]uint16,32768);n:=uint32(len(buf));ok,_,_:=v36QueryFullProcessImageName.Call(h,0,uintptr(unsafe.Pointer(&buf[0])),uintptr(unsafe.Pointer(&n)));if ok==0||n==0{return ""};return strings.ToLower(filepath.Base(syscall.UTF16ToString(buf[:n])))}
+func v36FindRunningMT5() uintptr {var found uintptr;var bestArea int64;cb:=syscall.NewCallback(func(hwnd,_ uintptr)uintptr{if hwnd==0||hwnd==hostHWND{return 1};var pid uint32;chGetWindowThreadPID.Call(hwnd,uintptr(unsafe.Pointer(&pid)));image:=v36ProcessImage(pid);if image!="terminal64.exe"&&image!="terminal.exe"{return 1};var r chRect;ok,_,_:=v41GetWindowRect.Call(hwnd,uintptr(unsafe.Pointer(&r)));if ok==0{return 1};w:=int64(r.R-r.L);h:=int64(r.B-r.T);if w<300||h<200{return 1};if a:=w*h;a>bestArea{bestArea=a;found=hwnd};return 1});chEnumWindows.Call(cb,0);return found}
 
-func v36FindRunningMT5() uintptr {
-    var found uintptr
-    var bestArea int64
-    cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
-        if hwnd == 0 || hwnd == hostHWND { return 1 }
-        var pid uint32
-        chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-        image := v36ProcessImage(pid)
-        if image != "terminal64.exe" && image != "terminal.exe" { return 1 }
-        var r chRect
-        ok, _, _ := v41GetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-        if ok == 0 { return 1 }
-        w := int64(r.R-r.L); h := int64(r.B-r.T)
-        if w < 300 || h < 200 { return 1 }
-        if a:=w*h; a > bestArea { bestArea=a; found=hwnd }
-        return 1
-    })
-    chEnumWindows.Call(cb, 0)
-    return found
-}
-
-// V42_MT5_DPI_SAFE_CHILD: SetParent can fail with ERROR_INVALID_STATE when the
-// caller/target DPI awareness contexts are incompatible. Temporarily use the
-// system-aware thread context for the cross-process reparent operation, restore
-// it immediately afterwards, and still require GetParent()==hostHWND.
+// V42_MT5_DPI_SAFE_CHILD plus V45_SINGLE_TASKBAR_MT5.
 func v36EmbedMT5(hwnd uintptr) bool {
-    if hwnd == 0 || hostHWND == 0 { return false }
-    chShowWindow.Call(hwnd, chSWHide)
-
-    // Convert the terminal's top-level style before cross-process parenting.
-    style, _, _ := chGetWindowLongPtr.Call(hwnd, ^uintptr(15))
-    style &^= chWSPopup | chWSCaption | chWSBorder | chWSDlgFrame | chWSThickFrame | chWSMinBox | chWSMaxBox | chWSSysMenu
-    style |= chWSChild | chWSVisible
-    chSetWindowLongPtr.Call(hwnd, ^uintptr(15), style)
-
-    // DPI_AWARENESS_CONTEXT_SYSTEM_AWARE == -2. Win32 represents these special
-    // contexts as negative HANDLE values.
-    systemAware := ^uintptr(1)
-    previousDPI, _, _ := v42SetThreadDpiAwarenessContext.Call(systemAware)
-    chSetParent.Call(hwnd, hostHWND)
-    if previousDPI != 0 { v42SetThreadDpiAwarenessContext.Call(previousDPI) }
-
-    parent, _, _ := v36GetParent.Call(hwnd)
-    if parent != hostHWND {
-        chShowWindow.Call(hwnd, chSWHide)
-        return false
-    }
-
-    chSetWindowPos.Call(hwnd, 0, 0, uintptr(barH), 1, 1, chSWPNoZOrder|chSWPNoActivate|chSWPFrame)
-    parent, _, _ = v36GetParent.Call(hwnd)
-    if parent != hostHWND { chShowWindow.Call(hwnd,chSWHide); return false }
-
-    chMu.Lock(); chMT5Wnd=hwnd; chMu.Unlock()
-    chResizeChildren()
-    chApplyDesiredBrowserView()
-    return true
+    if hwnd==0||hostHWND==0{return false};chShowWindow.Call(hwnd,chSWHide)
+    style,_,_:=chGetWindowLongPtr.Call(hwnd,^uintptr(15));style &^= chWSPopup|chWSCaption|chWSBorder|chWSDlgFrame|chWSThickFrame|chWSMinBox|chWSMaxBox|chWSSysMenu;style |= chWSChild|chWSVisible;chSetWindowLongPtr.Call(hwnd,^uintptr(15),style)
+    // V45: remove top-level application identity before parenting so MT5 cannot own a second taskbar button.
+    exStyle,_,_:=chGetWindowLongPtr.Call(hwnd,^uintptr(19));exStyle &^= chEXAppWindow|chEXDlgModal|chEXWindowEdge|chEXClientEdge|chEXStaticEdge;exStyle |= chEXToolWindow;chSetWindowLongPtr.Call(hwnd,^uintptr(19),exStyle)
+    systemAware:=^uintptr(1);previousDPI,_,_:=v42SetThreadDpiAwarenessContext.Call(systemAware);chSetParent.Call(hwnd,hostHWND);if previousDPI!=0{v42SetThreadDpiAwarenessContext.Call(previousDPI)}
+    parent,_,_:=v36GetParent.Call(hwnd);if parent!=hostHWND{chShowWindow.Call(hwnd,chSWHide);return false}
+    chSetWindowPos.Call(hwnd,0,0,uintptr(barH),1,1,chSWPNoZOrder|chSWPNoActivate|chSWPFrame);parent,_,_=v36GetParent.Call(hwnd);if parent!=hostHWND{chShowWindow.Call(hwnd,chSWHide);return false}
+    // Some terminals rewrite extended styles on the first child resize. Enforce it again afterwards.
+    exStyle,_,_=chGetWindowLongPtr.Call(hwnd,^uintptr(19));exStyle &^= chEXAppWindow;exStyle |= chEXToolWindow;chSetWindowLongPtr.Call(hwnd,^uintptr(19),exStyle);chSetWindowPos.Call(hwnd,0,0,uintptr(barH),1,1,chSWPNoZOrder|chSWPNoActivate|chSWPFrame)
+    chMu.Lock();chMT5Wnd=hwnd;chMu.Unlock();chResizeChildren();chApplyDesiredBrowserView();return true
 }
 
 func chEnsureMT5TerminalV36() error {
-    chMu.Lock(); existingEmbedded:=chMT5Wnd; chMu.Unlock()
-    if existingEmbedded != 0 {
-        parent,_,_:=v36GetParent.Call(existingEmbedded)
-        if parent==hostHWND {
-            chResizeChildren(); chShowWindow.Call(existingEmbedded,chSWShow); chFocusEmbeddedBrowser(existingEmbedded)
-            go mt5ApplyLatestQueued(); return nil
-        }
-        chMu.Lock(); if chMT5Wnd==existingEmbedded { chMT5Wnd=0 }; chMu.Unlock()
-    }
-    chMu.Lock(); if chMT5StartingV34 { chMu.Unlock(); return nil }; chMT5StartingV34=true; chMu.Unlock()
-    defer func(){chMu.Lock();chMT5StartingV34=false;chMu.Unlock()}()
-
-    if hwnd:=v36FindRunningMT5(); hwnd!=0 {
-        if !v36EmbedMT5(hwnd) { return errors.New("Installed MT5 was detected, but Windows still refused child embedding. Close MT5 and start MH Analysis with the same Windows privilege level as MT5, then try again.") }
-        go mt5ApplyLatestQueued(); return nil
-    }
-    path,err:=chMT5Executable(); if err!=nil{return err}
-    cmd:=exec.Command(path); cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true,CreationFlags:0x08000000}
-    if err:=cmd.Start();err!=nil{return fmt.Errorf("Could not start MT5: %w",err)}
-    chMu.Lock();chMT5Cmd=cmd;chMu.Unlock()
-    deadline:=time.Now().Add(15*time.Second); var hwnd uintptr
-    for time.Now().Before(deadline){hwnd=v36FindRunningMT5();if hwnd!=0{break};time.Sleep(120*time.Millisecond)}
-    if hwnd==0{return errors.New("MT5 started but its main terminal window could not be detected")}
-    if !v36EmbedMT5(hwnd){return errors.New("MT5 started, but Windows still refused child embedding. Run MH Analysis and MT5 at the same Windows privilege level.")}
-    go mt5ApplyLatestQueued(); return nil
+    chMu.Lock();existingEmbedded:=chMT5Wnd;chMu.Unlock();if existingEmbedded!=0{parent,_,_:=v36GetParent.Call(existingEmbedded);if parent==hostHWND{chResizeChildren();chShowWindow.Call(existingEmbedded,chSWShow);chFocusEmbeddedBrowser(existingEmbedded);go mt5ApplyLatestQueued();return nil};chMu.Lock();if chMT5Wnd==existingEmbedded{chMT5Wnd=0};chMu.Unlock()}
+    chMu.Lock();if chMT5StartingV34{chMu.Unlock();return nil};chMT5StartingV34=true;chMu.Unlock();defer func(){chMu.Lock();chMT5StartingV34=false;chMu.Unlock()}()
+    if hwnd:=v36FindRunningMT5();hwnd!=0{if !v36EmbedMT5(hwnd){return errors.New("Installed MT5 was detected, but Windows still refused child embedding. Close MT5 and start MH Analysis with the same Windows privilege level as MT5, then try again.")};go mt5ApplyLatestQueued();return nil}
+    path,err:=chMT5Executable();if err!=nil{return err};cmd:=exec.Command(path);cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true,CreationFlags:0x08000000};if err:=cmd.Start();err!=nil{return fmt.Errorf("Could not start MT5: %w",err)};chMu.Lock();chMT5Cmd=cmd;chMu.Unlock();deadline:=time.Now().Add(15*time.Second);var hwnd uintptr;for time.Now().Before(deadline){hwnd=v36FindRunningMT5();if hwnd!=0{break};time.Sleep(120*time.Millisecond)};if hwnd==0{return errors.New("MT5 started but its main terminal window could not be detected")};if !v36EmbedMT5(hwnd){return errors.New("MT5 started, but Windows still refused child embedding. Run MH Analysis and MT5 at the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil
 }
