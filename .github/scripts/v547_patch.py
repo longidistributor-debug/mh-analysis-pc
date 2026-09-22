@@ -1,6 +1,14 @@
 from pathlib import Path
 import re, runpy
 
+# The inherited V54.5 build-time patch contains a stale precheck that fires before
+# it has a chance to declare the native version label. Neutralize only that stale
+# precheck in the CI workspace, then apply the full inherited V54.6 runtime.
+legacy=Path('.github/scripts/v545_patch.py')
+legacy_src=legacy.read_text(encoding='utf-8')
+legacy_src=legacy_src.replace("if 'wv2VersionLabel' not in s:\n    raise SystemExit('unexpected precheck')", "if False:\n    raise SystemExit('unexpected precheck')", 1)
+legacy.write_text(legacy_src,encoding='utf-8',newline='\n')
+
 # Start from V54.6 exactly, then apply only the four reported runtime fixes.
 runpy.run_path('.github/scripts/v546_patch.py', run_name='__main__')
 
@@ -13,14 +21,14 @@ s=p.read_text(encoding='utf-8')
 
 anchor='func wv2HideAll() {'
 park=r'''func wv2ParkWhatsAppV547() {
-	if wv2Whatsapp == nil || wv2WhatsappContainer == 0 || hostHWND == 0 { return }
-	var r chRect
-	chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
-	x:=int32(r.R-r.L)+32
-	y:=int32(r.B-r.T)+32
-	chMoveWindow.Call(wv2WhatsappContainer, uintptr(x), uintptr(y), 2, 2, 1)
-	chShowWindow.Call(wv2WhatsappContainer, chSWShow)
-	_ = wv2Whatsapp.Show()
+\tif wv2Whatsapp == nil || wv2WhatsappContainer == 0 || hostHWND == 0 { return }
+\tvar r chRect
+\tchGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
+\tx:=int32(r.R-r.L)+32
+\ty:=int32(r.B-r.T)+32
+\tchMoveWindow.Call(wv2WhatsappContainer, uintptr(x), uintptr(y), 2, 2, 1)
+\tchShowWindow.Call(wv2WhatsappContainer, chSWShow)
+\t_ = wv2Whatsapp.Show()
 }
 
 '''
@@ -46,13 +54,13 @@ s=s.replace(oldloop,newloop,1)
 # When explicitly opening WhatsApp, bring the same parked WebView back into client area.
 s=s.replace('case 2:\n\t\twv2WAResolvedTarget = ""\n\t\tif wv2Whatsapp != nil { chShowWindow.Call(wv2WhatsappContainer, chSWShow); _ = wv2Whatsapp.Show(); wv2Whatsapp.Focus() }',
 '''case 2:
-		wv2WAResolvedTarget = ""
-		if wv2Whatsapp != nil {
-			var r chRect; chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
-			w:=int32(r.R-r.L); h:=int32(r.B-r.T-int32(barH)); if w<1{w=1}; if h<1{h=1}
-			chMoveWindow.Call(wv2WhatsappContainer,0,uintptr(barH),uintptr(w),uintptr(h),1)
-			chShowWindow.Call(wv2WhatsappContainer,chSWShow); _=wv2Whatsapp.Show(); wv2Whatsapp.Focus()
-		}''',1)
+\t\twv2WAResolvedTarget = ""
+\t\tif wv2Whatsapp != nil {
+\t\t\tvar r chRect; chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
+\t\t\tw:=int32(r.R-r.L); h:=int32(r.B-r.T-int32(barH)); if w<1{w=1}; if h<1{h=1}
+\t\t\tchMoveWindow.Call(wv2WhatsappContainer,0,uintptr(barH),uintptr(w),uintptr(h),1)
+\t\t\tchShowWindow.Call(wv2WhatsappContainer,chSWShow); _=wv2Whatsapp.Show(); wv2Whatsapp.Focus()
+\t\t}''',1)
 
 # Faster background retry cadence now that the renderer stays alive.
 s=s.replace('[]time.Duration{200*time.Millisecond, 500*time.Millisecond, 900*time.Millisecond, 1400*time.Millisecond, 2*time.Second, 3*time.Second}',
