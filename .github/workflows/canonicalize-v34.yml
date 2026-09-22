@@ -1,9 +1,6 @@
 name: Canonicalize MH Analysis V34 Source
 on:
   workflow_dispatch:
-  push:
-    branches: [v34-canonical-single-source]
-    paths: ['.github/workflows/canonicalize-v34.yml']
 permissions:
   contents: write
   actions: write
@@ -33,18 +30,19 @@ jobs:
           python scripts/v33_patch.py
           python scripts/v34_canonical_fix.py
           gofmt -w updater.go license_auth.go main.go chrome_host.go webview2_host.go records_mt5_local.go mt5_prefill.go ea_signal_bridge.go
-      - name: Verify canonical source before commit
+      - name: Verify canonical V34 source before commit
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          python scripts/v32_verify.py
-          python scripts/v33_verify.py
           node --check web/app.js
           node --check web/v03.js
           node --check web/records.js
           node --check web/auth.js
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'Canonical V34 tests failed'}
+          $up=Get-Content -Raw updater.go; $lic=Get-Content -Raw license_auth.go
+          if($up -notmatch 'mhPublicVersionV001 = "V\.34"'){throw 'Updater is not V.34'}
+          if($lic -notmatch 'licAppVersion = "V\.34"'){throw 'License version is not V.34'}
           $ch=Get-Content -Raw chrome_host.go
           if($ch -match 'Get-Process -Id'){throw 'PowerShell MT5 polling still exists'}
           if($ch -notmatch 'V34_SINGLE_FLIGHT_MT5'){throw 'MT5 single-flight guard missing'}
@@ -52,16 +50,20 @@ jobs:
           if($wv -notmatch 'V34_ONE_CLICK_VIEW'){throw 'one-click view recovery missing'}
           $app=Get-Content -Raw web/app.js
           if($app -notmatch 'V34_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
+          if($app -notmatch 'SAME SIGNAL STILL ACTIVE'){throw 'same-signal protection regressed'}
           $main=Get-Content -Raw main.go
           if($main -notmatch 'V34_WA_RETRY'){throw 'WhatsApp delivery retry missing'}
-      - name: Commit canonical source tree
+          if($lic -notmatch 'MachineGuid'){throw 'secure device identity regressed'}
+      - name: Commit canonical source tree without race
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git commit -m 'Canonical V34 source: consolidate all retained fixes; remove runtime patch layering'
+          git commit -m 'Canonical V34 source: single source of truth' || echo 'No source changes to commit'
+          git fetch origin v34-canonical-single-source
+          git rebase origin/v34-canonical-single-source
           git push origin HEAD:v34-canonical-single-source
       - name: Start clean V34 release build
         shell: powershell
