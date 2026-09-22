@@ -1,0 +1,69 @@
+name: Publish MH Analysis V53 Single Signal Link
+on:
+  push:
+    branches: [v53-single-signal-link]
+    paths: ['.github/workflows/publish-v53-single-signal-link.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Apply V53 single-link fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='native_settings.go'; $s=Get-Content -Raw $p
+          $s=$s.Replace('return chSaveNativeSettings(mode, value, "")','return chSaveNativeSettings(mode, value, "")')
+          $s=$s.Replace("`t`tvalue2 := \"\"`r`n`t`tif chSettingsMode == 2 && chSettingsEdit2 != 0 { value2 = chWindowText(chSettingsEdit2) }`r`n`t`tif err := chSaveNativeSettings(chSettingsMode, chWindowText(edit), value2); err != nil {","`t`tif err := chSaveNativeSettings(chSettingsMode, chWindowText(edit), \"\"); err != nil {")
+          $s=$s.Replace("`t`tvalue2 = v.WhatsAppLink2`r`n",'')
+          $s=$s.Replace('title = "WhatsApp Signal Links"','title = "WhatsApp Signal Link"')
+          $s=$s.Replace('label = "WhatsApp Signal Link / Number 1"','label = "WhatsApp Signal Link / Group Link"')
+          $s=$s.Replace("`tdlgH := int32(235)`r`n`tif mode == 2 { dlgH = 315 }","`tdlgH := int32(235)")
+          $block=@'
+	buttonY := uintptr(105)
+	if mode == 2 {
+		chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("STATIC"))), uintptr(unsafe.Pointer(chWstr("WhatsApp Signal Link / Number 2"))), chWSChild|chWSVisible, 20, 100, 620, 24, chSettingsDialog, 0, inst, 0)
+		chSettingsEdit2, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("EDIT"))), uintptr(unsafe.Pointer(chWstr(value2))), chWSChild|chWSVisible|chWSBorder|chWSTabStop|chESAutoHScroll, 20, 130, 620, 34, chSettingsDialog, chIDSettingsEdit2, inst, 0)
+		buttonY = 185
+	} else {
+		chSettingsEdit2 = 0
+	}
+'@
+          $replacement="`tbuttonY := uintptr(105)`r`n`tchSettingsEdit2 = 0`r`n"
+          $s=$s.Replace($block,$replacement)
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $m=Get-Content -Raw main.go
+          $m=$m.Replace('strings.TrimSpace(v.WhatsAppLink) != "" || strings.TrimSpace(v.WhatsAppLink2) != ""','strings.TrimSpace(v.WhatsAppLink) != ""')
+          $m=$m.Replace(', "whatsapp_link2": v.WhatsAppLink2','')
+          $m=[regex]::Replace($m,'\s*if p, ok := m\["whatsapp_link2"\]; ok \{[^\r\n]*\}\r?\n','')
+          [IO.File]::WriteAllText((Join-Path $PWD 'main.go'),$m,(New-Object Text.UTF8Encoding($false)))
+          $w=Get-Content -Raw webview2_host.go
+          $w=$w.Replace('targets := []string{strings.TrimSpace(v.WhatsAppLink), strings.TrimSpace(v.WhatsAppLink2)}','targets := []string{strings.TrimSpace(v.WhatsAppLink)}')
+          $w=$w.Replace('[]string{strings.TrimSpace(v.WhatsAppLink), strings.TrimSpace(v.WhatsAppLink2)}','[]string{strings.TrimSpace(v.WhatsAppLink)}')
+          [IO.File]::WriteAllText((Join-Path $PWD 'webview2_host.go'),$w,(New-Object Text.UTF8Encoding($false)))
+          $u=Get-Content -Raw updater.go; $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.53"',1); [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go; $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.53"',1); [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          gofmt -w native_settings.go main.go webview2_host.go updater.go license_auth.go
+          if(Select-String -Path native_settings.go -SimpleMatch 'WhatsApp Signal Link / Number 2'){throw 'Second Signal Link UI still present'}
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V53 build failed'}
+      - name: Upload V53 installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V53-Installer
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
+      - name: Publish mandatory V53 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $d=Join-Path $env:RUNNER_TEMP 'v53'; New-Item -ItemType Directory -Force $d|Out-Null; Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe'); $m=[ordered]@{version='V.53';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.53 - Signal Link is now one saved link only. New Analysis and Re-evaluate WhatsApp sending reads that single saved link and routes it through the existing embedded WhatsApp session. EA remains independent.'}|ConvertTo-Json -Compress; [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $d 'VERSION'),('V.53'+[Environment]::NewLine),(New-Object Text.UTF8Encoding($false))); git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; git checkout --orphan __v53_update; git rm -rf . 2>$null; Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $d '*') .; git add .; git commit -m 'Publish MH Analysis V.53 mandatory update'; git push --force origin HEAD:mh-analysis-update-channel
