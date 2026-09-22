@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const mhPublicVersionV001 = "V.39"
+const mhPublicVersionV001 = "V.42"
 const mhUpdateManifestURLV001 = "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json"
 
 type mhUpdateManifestV001 struct { Version string `json:"version"`; Mandatory bool `json:"mandatory"`; DownloadURL string `json:"download_url"`; SHA256 string `json:"sha256"`; Notes string `json:"notes,omitempty"` }
