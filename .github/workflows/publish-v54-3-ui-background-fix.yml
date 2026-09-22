@@ -1,0 +1,228 @@
+name: Publish MH Analysis V54.3 Fast Background WhatsApp
+
+on:
+  push:
+    branches:
+      - v54-3-ui-background-fix
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Reapply V54.2 base and add V54.3 fast background behavior
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+
+          # Reuse the exact already-proven V54.2 patch embedded in the previous workflow.
+          $baseWf=Get-Content -Raw '.github/workflows/publish-v54-2-whatsapp-confirmed-send.yml'
+          $m=[regex]::Match($baseWf,"(?s)@'\r?\n(.*?)\r?\n\s*'@ \| Set-Content -Encoding utf8 \.v542_patch\.py")
+          if(-not $m.Success){throw 'Could not extract proven V54.2 patch'}
+          $py=($m.Groups[1].Value -replace '(?m)^ {10}','')
+          [IO.File]::WriteAllText((Join-Path $PWD '.v542_patch.py'),$py,(New-Object Text.UTF8Encoding($false)))
+          python .v542_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.2 base patch failed'}
+          gofmt -w webview2_host.go updater.go license_auth.go
+
+          @'
+          from pathlib import Path
+          import re
+
+          # ---------- WhatsApp host: fast path + short retries + no forced wait ----------
+          p=Path('webview2_host.go')
+          s=p.read_text(encoding='utf-8')
+
+          s=s.replace(
+              'wv2WALastAckStatus     string\n)',
+              'wv2WALastAckStatus     string\n\twv2WAActiveTarget      string\n\twv2WAResolvedTarget    string\n)',
+              1)
+
+          s=s.replace(
+              '\twv2WAActiveMessage = t.message\n\twv2WAActiveGroup = isGroup\n\ttoken := wv2WAActiveToken',
+              '\twv2WAActiveMessage = t.message\n\twv2WAActiveGroup = isGroup\n\twv2WAActiveTarget = target\n\ttoken := wv2WAActiveToken',
+              1)
+
+          old=r'''\t// Navigate the exact saved link in the already-created persistent WhatsApp WebView.
+\t// This function is called from WndProc, so Navigate stays on the WebView UI thread.
+\twv2Whatsapp.Navigate(target)
+
+\tfor _, delay := range []time.Duration{800*time.Millisecond, 1500*time.Millisecond, 2500*time.Millisecond, 4*time.Second, 6*time.Second, 9*time.Second, 13*time.Second, 18*time.Second, 24*time.Second, 31*time.Second, 39*time.Second} {
+\t\td := delay
+\t\ttime.AfterFunc(d, func() { postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
+\t}
+\ttime.AfterFunc(43*time.Second, func() { postMessage(hostHWND, wmWhatsAppNextV54, token, 0) })'''.replace(r'\n','\n').replace(r'\t','\t')
+
+          new=r'''\t// Fast path: if this exact Signal Link already resolved to the current hidden group chat,
+\t// do not navigate/reload WhatsApp again. That avoids the 5-15 second UI stall.
+\tif wv2WAResolvedTarget == target {
+\t\tpostMessage(hostHWND, wmWhatsAppEvalV54, token, 0)
+\t} else {
+\t\twv2Whatsapp.Navigate(target)
+\t}
+
+\t// NavigationCompleted also triggers an immediate attempt. These are only short fallbacks.
+\tfor _, delay := range []time.Duration{200*time.Millisecond, 500*time.Millisecond, 900*time.Millisecond, 1400*time.Millisecond, 2*time.Second, 3*time.Second} {
+\t\td := delay
+\t\ttime.AfterFunc(d, func() { postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
+\t}
+\ttime.AfterFunc(4*time.Second, func() { postMessage(hostHWND, wmWhatsAppNextV54, token, 0) })'''.replace(r'\n','\n').replace(r'\t','\t')
+          if old not in s: raise SystemExit('V54.2 WhatsApp timer block not found')
+          s=s.replace(old,new,1)
+
+          s=s.replace(
+              'if wv2WALastAckStatus == "sent" {\n\t\twv2FinishWhatsAppV54(token)',
+              'if wv2WALastAckStatus == "sent" {\n\t\twv2WAResolvedTarget = wv2WAActiveTarget\n\t\twv2FinishWhatsAppV54(token)',
+              1)
+
+          s=s.replace(
+              '\twv2WAActiveMessage = ""\n\twv2WAActiveGroup = false',
+              '\twv2WAActiveMessage = ""\n\twv2WAActiveGroup = false\n\twv2WAActiveTarget = ""',
+              1)
+
+          # If user manually opens WhatsApp, invalidate the fast-chat cache so we never send to a chat they changed manually.
+          s=s.replace(
+              'case 2:\n\t\tif wv2Whatsapp != nil { chShowWindow.Call(wv2WhatsappContainer, chSWShow); _ = wv2Whatsapp.Show(); wv2Whatsapp.Focus() }',
+              'case 2:\n\t\twv2WAResolvedTarget = ""\n\t\tif wv2Whatsapp != nil { chShowWindow.Call(wv2WhatsappContainer, chSWShow); _ = wv2Whatsapp.Show(); wv2Whatsapp.Focus() }',
+              1)
+
+          s=s.replace('time.AfterFunc(5*time.Second, func() { postMessage(hostHWND, wmWhatsAppNextV54, wp, 0) })',
+                      'time.AfterFunc(2*time.Second, func() { postMessage(hostHWND, wmWhatsAppNextV54, wp, 0) })',1)
+          p.write_text(s,encoding='utf-8',newline='\n')
+
+          # ---------- Frontend: exact organized format + fire-and-forget queue handoff ----------
+          p=Path('web/app.js')
+          s=p.read_text(encoding='utf-8')
+          pattern=r"function decisionWhatsAppMessage\(d,action='NEW ANALYSIS',status=''\)\{.*?\n\}\nasync function sendDecisionWhatsApp\(d,action,status=''\)\{.*?\n\}"
+          replacement=r'''function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
+  const sig=d?.signal||(action==='RE-EVALUATE'?d?.originalSignal:null),isSell=sig?.direction==='SELL',dot=sig?(isSell?'🔴':'🟢'):'⚪';
+  const statusText=status||(sig?'Signal generated':'No clear edge');
+  const lines=[`*MH ANALYSIS SIGNAL*`,`🤝 *Status:* ${statusText}`,'',`*Pair:* ${symbol}`,`*Timeframe:* ${String(timeframe).toUpperCase()}`,`*Time:* ${new Date().toLocaleString()}`,''];
+  if(sig){lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Setup:* ${d.bestFamily||sig.setupReason||'Best current setup'}`)}
+  else{lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*BUY Score:* ${d?.buyScore??'—'}`,`*SELL Score:* ${d?.sellScore??'—'}`,`*Reason:* ${d?.explanation||'No statistically clear directional edge on the fresh analysis.'}`)}
+  return lines.join('\n');
+}
+function sendDecisionWhatsApp(d,action,status=''){
+  const message=decisionWhatsAppMessage(d,action,status);
+  // Hand off immediately so MH Analysis never waits for WhatsApp navigation/rendering.
+  setTimeout(()=>{(async()=>{
+    try{
+      await refreshBackendSettings();
+      if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
+      const r=await fetch('/api/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
+      let j={};try{j=await r.json()}catch(_){ }
+      if(!r.ok)throw new Error(j.error||'WhatsApp queue failed');
+    }catch(e){console.warn('Background WhatsApp send failed',e)}
+  })()},0);
+  return Promise.resolve({ok:true,queued:true,background:true});
+}'''
+          ns,n=re.subn(pattern,replacement,s,count=1,flags=re.S)
+          if n!=1: raise SystemExit(f'WhatsApp formatter/background sender replacement failed: {n}')
+          p.write_text(ns,encoding='utf-8',newline='\n')
+
+          # ---------- V54.3 stamps ----------
+          for path,pat,repl in [
+              ('updater.go',r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.54.3"'),
+              ('license_auth.go',r'const licAppVersion = "[^"]+"','const licAppVersion = "V.54.3"')]:
+              q=Path(path); z=q.read_text(encoding='utf-8'); z,n=re.subn(pat,repl,z,count=1)
+              if n!=1: raise SystemExit(f'version stamp failed {path}')
+              q.write_text(z,encoding='utf-8',newline='\n')
+          Path('VERSION').write_text('V.54.3\n',encoding='ascii')
+          q=Path('web/index.html'); z=q.read_text(encoding='utf-8')
+          z=re.sub(r'<div class="version">[^<]*</div>','<div class="version">V.54.3 AUTO CYCLE (HAMMAD & SOMI)</div>',z,count=1)
+          z=re.sub(r'<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54.3</div>',z,count=1)
+          q.write_text(z,encoding='utf-8',newline='\n')
+          '@ | Set-Content -Encoding utf8 .v543_patch.py
+          python .v543_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.3 patch failed'}
+
+          gofmt -w webview2_host.go updater.go license_auth.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'V54.3 JS validation failed'}
+
+          $wa=Get-Content -Raw webview2_host.go
+          if($wa -notmatch 'wv2WAResolvedTarget == target'){throw 'Fast resolved-group path missing'}
+          if($wa -notmatch '200\*time.Millisecond'){throw 'Short WhatsApp retries missing'}
+          if($wa -match '43\*time.Second'){throw 'Legacy 43-second WhatsApp wait still present'}
+          if($wa -notmatch 'wv2WAResolvedTarget = wv2WAActiveTarget'){throw 'Confirmed target cache missing'}
+          $a=Get-Content -Raw web/app.js
+          if($a -notmatch '🤝 \*Status:\*'){throw 'Requested organized WhatsApp Status format missing'}
+          if($a -match '\*Action:\*'){throw 'Legacy Action line still present'}
+          if($a -notmatch 'background:true'){throw 'Non-blocking WhatsApp handoff missing'}
+
+      - name: Test and build V54.3
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+
+      - name: Build and verify V54.3 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $src='installer\MH-Analysis-V54.1.iss'
+          $dst='installer\MH-Analysis-V54.3.iss'
+          (Get-Content -Raw $src).Replace('V54.1','V54.3').Replace('V.54.1','V.54.3').Replace('54.1.0.0','54.3.0.0') | Set-Content -Encoding utf8 $dst
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc $dst
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.3.exe')){throw 'Installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV543Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V54.3.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Silent installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.3.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.3.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.3-Fast-Background
+          path: |
+            dist/MH-Analysis-Setup-V54.3.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish V54.3 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v54.3 -y 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v54.3 'dist/MH-Analysis-Setup-V54.3.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.3' --notes 'Fast non-blocking WhatsApp background handoff. Reuses the already-resolved hidden group chat when safe, uses short fallback retries, preserves confirmed-send acknowledgement, and sends the requested organized MH ANALYSIS SIGNAL format for New Analysis and Re-evaluate. Preserves V54.2/V54.1 fixes.'
+          if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
+
+      - name: Publish mandatory V54.3 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v543-update'; New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.54.3';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V54.3 fast non-blocking WhatsApp background send and organized signal format; preserves V54.2 confirmed-send and V54.1 updater-loop fixes.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54.3'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v543_update; git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'; Copy-Item (Join-Path $tmp 'update.json') '.\update.json'; Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .; git commit -m 'Publish MH Analysis V.54.3 fast background update'; git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}
