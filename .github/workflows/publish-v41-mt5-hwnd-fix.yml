@@ -1,0 +1,59 @@
+name: Publish MH Analysis V41 MT5 HWND Fix
+on:
+  push:
+    branches: [v41-mt5-runtime-diagnostic]
+    paths: ['.github/workflows/publish-v41-mt5-hwnd-fix.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v41-release
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Set V41 identity and preserve V40 route
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $ch=Get-Content -Raw chrome_host.go
+          if($ch -match 'if err := chEnsureMT5Terminal\(\); err != nil'){$ch=$ch.Replace('if err := chEnsureMT5Terminal(); err != nil {','if err := chEnsureMT5TerminalV36(); err != nil {')}
+          [IO.File]::WriteAllText((Join-Path $PWD 'chrome_host.go'),$ch,(New-Object Text.UTF8Encoding($false)))
+          $u=Get-Content -Raw updater.go; $u=$u.Replace('const mhPublicVersionV001 = "V.39"','const mhPublicVersionV001 = "V.41"').Replace('const mhPublicVersionV001 = "V.40"','const mhPublicVersionV001 = "V.41"'); [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go; $l=$l.Replace('const licAppVersion = "V.39"','const licAppVersion = "V.41"').Replace('const licAppVersion = "V.40"','const licAppVersion = "V.41"'); [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.41'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+      - name: Verify V41 MT5-only correction
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; $mt5=Get-Content -Raw mt5_embed_v36.go; $ch=Get-Content -Raw chrome_host.go; $main=Get-Content -Raw main.go; $native=Get-Content -Raw native_settings.go
+          if($ch -notmatch 'chEnsureMT5TerminalV36'){throw 'V40 verified route missing'}
+          if($mt5 -notmatch 'V41_VERIFIED_TRUE_CHILD'){throw 'V41 embed implementation missing'}
+          if($mt5 -match 'if parent != 0 \{ return 1 \}'){throw 'broken GetParent finder filter returned'}
+          if($mt5 -notmatch 'bestArea'){throw 'largest terminal HWND selection missing'}
+          if($mt5 -notmatch 'chSetParent.Call\(hwnd, hostHWND\)'){throw 'SetParent missing'}
+          if($mt5 -notmatch 'parent != hostHWND'){throw 'parent verification missing'}
+          if($main -notmatch 'WhatsAppLink2 string' -or $native -notmatch 'WhatsApp Signal Link / Number 2'){throw 'V39 dual WhatsApp regressed'}
+          gofmt -w mt5_embed_v36.go chrome_host.go updater.go license_auth.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V41 tests failed'}
+      - name: Build and verify V41 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null; $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'; go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .; if($LASTEXITCODE -ne 0){throw 'V41 build failed'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=41.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V41'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V41.iss'),$iss,(New-Object Text.UTF8Encoding($false))); $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V41.iss'; if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V41.exe')){throw 'V41 installer failed'}
+      - name: Publish V41 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v41 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v41 'dist/MH-Analysis-Setup-V41.exe' 'dist/MH Analysis.exe' --target $env:GITHUB_SHA --title 'MH Analysis V.41' --notes 'MT5-only correction: removes invalid GetParent==0 discovery filter, selects the real largest terminal HWND, then verifies it is a true MH Analysis child. Existing V40/V39 behavior retained.'
+      - name: Publish V41 mandatory update
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $d=Join-Path $env:RUNNER_TEMP 'v41-update'; New-Item -ItemType Directory -Force $d|Out-Null; Copy-Item 'dist\MH Analysis.exe' (Join-Path $d 'MH Analysis.exe'); $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $m=[ordered]@{version='V.41';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.41 - MT5 HWND discovery and true child embedding correction only.'}|ConvertTo-Json -Compress; [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.41'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); git checkout --orphan __v41_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $d '*') .; git add .; git commit -m 'Publish MH Analysis V.41 update channel'; git push --force origin HEAD:mh-analysis-update-channel
