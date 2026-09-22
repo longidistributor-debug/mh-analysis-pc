@@ -39,17 +39,52 @@ jobs:
           if((Get-Content -Raw license_auth.go) -notmatch 'V\.35'){throw 'license version mismatch'}
           node --check web/app.js; node --check web/records.js; go test ./...
           if($LASTEXITCODE -ne 0){throw 'V35 tests failed'}
-      - name: Build V35 EXE and installer
+      - name: Build and verify V35 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null
-          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'; go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
-          if($LASTEXITCODE -ne 0){throw 'EXE build failed'}
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=35.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V35'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V35.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
-          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V35.iss'
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'EXE build failed'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'
+          $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=35.0.0'
+          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V35'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V35.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V35.iss'
           if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V35.exe')){throw 'installer failed'}
-      - name: Publish V35
+          $target=Join-Path $env:RUNNER_TEMP 'MHV35Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V35.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'silent installer verification failed'}
+      - name: Publish V35 release
         shell: powershell
-        env: {GH_TOKEN: '${{ github.token }}'}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference='Continue'; gh release delete v35 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v35 'dist/MH-Analysis-Setup-V35.exe' 'dist/MH Analysis.exe' --target '${{ github.sha }}' --title 'MH Analysis V.35' --notes 'Runtime navigation fix: auxiliary views are pre-created for deterministic first-click switching; MT5 is detected natively by terminal64.exe process image before any launch; retained V34 signal fanout and WhatsApp retry.'
+          $ErrorActionPreference='Continue'
+          gh release delete v35 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v35 'dist/MH-Analysis-Setup-V35.exe' 'dist/MH Analysis.exe' --target '${{ github.sha }}' --title 'MH Analysis V.35' --notes 'V.35 rebuilt with updater compatibility. Runtime navigation fix, native MT5 detection, retained signal delivery fixes.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+      - name: Publish V35 auto-update channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $upd=Join-Path $env:RUNNER_TEMP 'v35-update'
+          New-Item -ItemType Directory -Force $upd|Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $upd 'MH Analysis.exe')
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $manifest=[ordered]@{version='V.35';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.35 - updater-compatible rebuild; deterministic first-click navigation; native MT5 detection; retained WhatsApp and signal delivery fixes.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.35'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v35_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $upd '*') .
+          git add .
+          git commit -m 'Publish MH Analysis V.35 updater-compatible channel'
+          git push --force origin HEAD:mh-analysis-update-channel
