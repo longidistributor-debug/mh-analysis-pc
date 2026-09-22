@@ -1,0 +1,71 @@
+name: Publish MH Analysis V46 WhatsApp Group Resolve
+on:
+  push:
+    branches: [v46-whatsapp-group-resolve]
+    paths: ['.github/workflows/publish-v46-whatsapp-group-resolve.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2'}
+      - name: Apply V46 WhatsApp group resolver only
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('webview2_host.go'); s=p.read_text(encoding='utf-8')
+          start=s.index('func wv2ProcessWhatsAppQueueV36(){')
+          end=s.index('\nfunc wv2WndProc(',start)
+          new=r'''func wv2ProcessWhatsAppQueueV36(){
+	if wv2Whatsapp==nil{return}
+	waMu.Lock();if len(waQueue)==0{waMu.Unlock();return};t:=waQueue[0];waQueue=waQueue[1:];waMu.Unlock()
+	target:=strings.TrimSpace(t.target);lower:=strings.ToLower(target);isGroup:=strings.Contains(lower,"chat.whatsapp.com/")
+	if strings.HasPrefix(lower,"https://wa.me/"){if u,err:=url.Parse(target);err==nil{if n:=digits(u.Path);n!=""{target="https://web.whatsapp.com/send?phone="+n}}}
+	// V46: keep the original invite URL. WhatsApp Web itself resolves the invite into the
+	// user's existing group membership. We then click only the in-Web resolver controls,
+	// never the public Open App / Continue landing page.
+	wv2Whatsapp.Navigate(target);msgJSON,_:=json.Marshal(t.message);groupJSON,_:=json.Marshal(isGroup)
+	for _,delay:=range []time.Duration{2*time.Second,4*time.Second,7*time.Second,10*time.Second,14*time.Second,19*time.Second,25*time.Second,32*time.Second}{d:=delay;time.AfterFunc(d,func(){if wv2Whatsapp==nil{return};script:=fmt.Sprintf(`(()=>{const msg=%s,isGroup=%s;const sentKey='mh-v46-sent-'+btoa(unescape(encodeURIComponent(msg))).slice(0,32);if(window[sentKey])return 'sent';const host=location.hostname;
+	if(isGroup&&host==='web.whatsapp.com'){
+		// Invite resolver can render before the conversation. Prefer semantic buttons/links
+		// that remain inside web.whatsapp.com; never trigger external/app protocol links.
+		const candidates=[...document.querySelectorAll('button,a,[role="button"]')];
+		for(const el of candidates){const href=(el.getAttribute('href')||'').trim();const txt=((el.innerText||el.textContent||'')+' '+(el.getAttribute('aria-label')||'')).trim().toLowerCase();if(href&&(href.startsWith('whatsapp:')||href.startsWith('intent:')))continue;if(/join chat|join group|continue to chat|open chat|view group|go to group/.test(txt)){el.click();return 'resolving';}}
+	}
+	if(host!=='web.whatsapp.com')return 'waiting-web';
+	const box=document.querySelector('footer [contenteditable="true"]')||document.querySelector('footer div[role="textbox"]')||document.querySelector('[contenteditable="true"][data-tab]');if(!box)return 'waiting-chat';
+	box.focus();document.execCommand('selectAll',false,null);document.execCommand('insertText',false,msg);box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:msg}));
+	const send=document.querySelector('[data-icon="send"]')?.closest('button')||document.querySelector('button[aria-label="Send"]');if(send){send.click();window[sentKey]=true;return 'sent'}
+	box.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));box.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));window[sentKey]=true;return 'enter';})()`,string(msgJSON),string(groupJSON));wv2Whatsapp.Eval(script)})}
+	time.AfterFunc(35*time.Second,func(){postMessage(hostHWND,wmWhatsAppSend,0,0)})
+}
+'''
+          s=s[:start]+new+s[end:]
+          p.write_text(s,encoding='utf-8')
+      - name: Set V46 identity and verify regressions
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $u=Get-Content -Raw updater.go;$u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.46"',1);[IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go;$l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.46"',1);[IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.46'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          $wv=Get-Content -Raw webview2_host.go;$ea=Get-Content -Raw ea_signal_bridge.go;$mt=Get-Content -Raw mt5_embed_v36.go
+          if($wv -notmatch 'V46:' -or $wv -notmatch 'join chat\|join group\|continue to chat'){throw 'V46 resolver missing'}
+          if($wv -match 'web\.whatsapp\.com/accept\?code='){throw 'failed V45 accept route still present'}
+          if($ea -notmatch 'eaPublishMu'){throw 'V45 EA reliability regressed'}
+          if($mt -notmatch 'V45_SINGLE_TASKBAR_MT5'){throw 'V45 taskbar fix regressed'}
+          gofmt -w webview2_host.go updater.go license_auth.go
+          go test ./...
+      - name: Build V46
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop';New-Item -ItemType Directory -Force dist|Out-Null;$env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0';go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .;if($LASTEXITCODE -ne 0){throw 'build failed'}
+      - name: Publish mandatory V46 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop';$sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower();$d=Join-Path $env:RUNNER_TEMP 'v46';New-Item -ItemType Directory -Force $d|Out-Null;Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe');$m=[ordered]@{version='V.46';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.46 - WhatsApp group invite resolves to the logged-in group chat before background signal send.'}|ConvertTo-Json -Compress;[IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)));[IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.46'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)));git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com';git checkout --orphan __v46_update;git rm -rf . 2>$null;Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force;Copy-Item (Join-Path $d '*') .;git add .;git commit -m 'Publish MH Analysis V.46 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
