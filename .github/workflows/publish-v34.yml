@@ -1,6 +1,9 @@
 name: Publish MH Analysis V34 Canonical
 on:
   workflow_dispatch:
+  push:
+    branches: [license-server-deploy]
+    paths: ['.github/workflows/publish-v34.yml']
 permissions:
   contents: write
 concurrency:
