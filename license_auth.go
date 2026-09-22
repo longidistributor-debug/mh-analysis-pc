@@ -32,7 +32,7 @@ import (
 )
 
 const licDefaultBaseURL = "https://mh-analysis.vercel.app"
-const licAppVersion = "V.34"
+const licAppVersion = "V.37"
 
 type licDataBlob struct {
 	cbData uint32
