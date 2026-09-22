@@ -333,7 +333,7 @@ function addRecent(d,state='NEW'){
   const key=`${symbol}|${timeframe}|${label}|${score}|${state}`;
   if(recentSession[0]?.key!==key)recentSession.unshift({time:now,timeframe,label,score,state,key});
   if(recentSession.length>6)recentSession.length=6;
-  if(sig&&String(state).toUpperCase()==='NEW')void captureSignalRecordV796(d,state);
+  // V36: Records are written only by the canonical V2 fanout.
   renderRecentSignals();
 }
 function updateSignalHeadline(d){
@@ -571,6 +571,24 @@ async function prepareMT5SignalV796(d,state='NEW'){
     if(!r.ok){const t=await r.text();throw new Error(t||`HTTP ${r.status}`)}
   }catch(e){console.warn('MT5 prefill queue failed',e)}
 }
+// V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
+async function dispatchUniqueSignalV36(d){
+  const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
+  const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
+  const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
+  const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
+  const recordPayload={signal_id:signalId,symbol,timeframe,direction:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp1:Number(sig.tp1),tp2:Number(sig.tp2),score:Number(sig.score)||0,setup:d.bestFamily||sig.setupReason||'',action:'NEW'};
+  const rr=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recordPayload)});
+  let rj={};try{rj=await rr.json()}catch(_){}
+  if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`);
+  if(rj.duplicate||rj.same_signal){d._sameActiveSignal=true;d._sameSignalStatus=rj.existing_status||'';setAutoStatus('Same signal still active • no duplicate Record / MT5 pending','warn');return rj;}
+  const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0})});
+  let ej={};try{ej=await er.json()}catch(_){}
+  if(!er.ok)throw new Error(ej.error||`EA bridge HTTP ${er.status}`);
+  try{await prepareMT5SignalV796(d,'NEW')}catch(_){}
+  setAutoStatus(`Signal recorded • MT5 pending sent • ${pending}`,'good');
+  return {record:rj,ea:ej,signal_id:signalId};
+}
 async function executeNewAnalysis(fromAuto=false){
   if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
@@ -581,7 +599,7 @@ async function executeNewAnalysis(fromAuto=false){
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
     if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');
-    if(d.signal&&!d._sameActiveSignal){Promise.allSettled([captureSignalRecordV30(d),sendUniqueSignalToEAV30(d),prepareMT5SignalV796(d,'NEW')]).then(()=>{});} // V34_CANONICAL_SIGNAL_FANOUT
+    if(d.signal&&!d._sameActiveSignal){await dispatchUniqueSignalV36(d);} // V36_CANONICAL_SIGNAL_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
     else{
       try{
