@@ -1,0 +1,106 @@
+name: Publish MH Analysis V43 WhatsApp Direct Send Only
+on:
+  push:
+    branches: [v43-whatsapp-direct-send-only]
+    paths: ['.github/workflows/publish-v43-whatsapp-direct-send-only.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+
+      - name: Apply WhatsApp-only V43 patch
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('chrome_host.go')
+          s=p.read_text(encoding='utf-8')
+          old='''\tcase wmWhatsAppSend:\n\t\tif task, ok := chPopWhatsAppTask(); ok {\n\t\t\tgo func() {\n\t\t\t\t_ = chSendWhatsAppViaCDP(task.target, task.message)\n\t\t\t}()\n\t\t}\n\t\treturn 0'''
+          new='''\tcase wmWhatsAppSend:\n\t\t// V43_WA_DIRECT_QUEUE: drain both saved Signal Link destinations serially.\n\t\t// One failed destination must not block the second destination.\n\t\tgo func() {\n\t\t\tfor {\n\t\t\t\ttask, ok := chPopWhatsAppTask()\n\t\t\t\tif !ok {\n\t\t\t\t\treturn\n\t\t\t\t}\n\t\t\t\t_ = chSendWhatsAppViaCDP(task.target, task.message)\n\t\t\t}\n\t\t}()\n\t\treturn 0'''
+          if old not in s: raise SystemExit('WhatsApp queue anchor missing; refusing broad change')
+          s=s.replace(old,new,1)
+          old2='''\tif _, err = chCDPCommand(conn, id, "Page.navigate", map[string]any{"url": target}); err != nil {\n\t\treturn err\n\t}\n\tid++\n\tmsgJSON, _ := json.Marshal(message)'''
+          new2='''\t// V43_WA_DIRECT_TARGET: group invite links must stay inside the already logged-in\n\t// WhatsApp Web session instead of opening the public Continue in app/browser landing page.\n\tnavTarget := strings.TrimSpace(target)\n\tlowerTarget := strings.ToLower(navTarget)\n\tif i := strings.Index(lowerTarget, "chat.whatsapp.com/"); i >= 0 {\n\t\tcode := navTarget[i+len("chat.whatsapp.com/"):]\n\t\tif j := strings.IndexAny(code, "?#/"); j >= 0 { code = code[:j] }\n\t\tcode = strings.TrimSpace(code)\n\t\tif code != "" { navTarget = "https://web.whatsapp.com/accept?code=" + code }\n\t}\n\tif _, err = chCDPCommand(conn, id, "Page.navigate", map[string]any{"url": navTarget}); err != nil {\n\t\treturn err\n\t}\n\tid++\n\tmsgJSON, _ := json.Marshal(message)'''
+          if old2 not in s: raise SystemExit('WhatsApp navigation anchor missing; refusing broad change')
+          s=s.replace(old2,new2,1)
+          p.write_text(s,encoding='utf-8')
+
+      - name: Set V43 build identity only
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $u=Get-Content -Raw updater.go
+          $u=$u.Replace('const mhPublicVersionV001 = "V.42"','const mhPublicVersionV001 = "V.43"')
+          if($u -notmatch 'const mhPublicVersionV001 = "V\.43"'){throw 'V43 updater identity failed'}
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go
+          $l=$l.Replace('const licAppVersion = "V.39"','const licAppVersion = "V.43"').Replace('const licAppVersion = "V.42"','const licAppVersion = "V.43"')
+          if($l -notmatch 'const licAppVersion = "V\.43"'){throw 'V43 license identity failed'}
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.43'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Verify only requested behavior and preserve V42
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $c=Get-Content -Raw chrome_host.go
+          $m=Get-Content -Raw mt5_embed_v36.go
+          $main=Get-Content -Raw main.go
+          $lic=Get-Content -Raw license_auth.go
+          $upd=Get-Content -Raw updater.go
+          if($c -notmatch 'V43_WA_DIRECT_QUEUE' -or $c -notmatch 'V43_WA_DIRECT_TARGET'){throw 'V43 WhatsApp patch missing'}
+          if($c -notmatch 'web\.whatsapp\.com/accept\?code='){throw 'direct WhatsApp Web group route missing'}
+          if($main -notmatch 'WhatsAppLink2 string'){throw 'two Signal Link destinations regressed'}
+          if($m -notmatch 'V42_MT5_DPI_SAFE_CHILD'){throw 'V42 MT5 fix regressed'}
+          if($lic -notmatch 'func licHandleLogin' -or $lic -notmatch 'func licenseGate'){throw 'license auth regressed'}
+          if($upd -notmatch 'const mhPublicVersionV001 = "V\.43"'){throw 'updater identity wrong'}
+          gofmt -w chrome_host.go updater.go license_auth.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'tests failed'}
+
+      - name: Build V43 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0){throw 'build failed'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'
+          $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=43.0.0'
+          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V43'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V43.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V43.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer failed'}
+
+      - name: Publish V43
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v43 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v43 'dist/MH-Analysis-Setup-V43.exe' 'dist/MH Analysis.exe' --target $env:GITHUB_SHA --title 'MH Analysis V.43' --notes 'WhatsApp-only fix: both saved Signal Link destinations drain serially; chat.whatsapp.com group links are routed directly through the logged-in WhatsApp Web session. V42 MT5 and all other behavior preserved.'
+
+      - name: Publish V43 mandatory update
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $d=Join-Path $env:RUNNER_TEMP 'v43-update'; New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $j=[ordered]@{version='V.43';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.43 - WhatsApp direct-send only fix.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$j,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.43'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v43_update; git rm -rf . 2>$null
+          Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .; git add .; git commit -m 'Publish MH Analysis V.43 update channel'; git push --force origin HEAD:mh-analysis-update-channel
