@@ -1,0 +1,111 @@
+name: Build MH Analysis V.25 Final
+on:
+  workflow_dispatch:
+  push:
+    branches: [v25-final-fix]
+    paths: ['v25-build-trigger.txt']
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v025-final
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Apply narrow runtime corrections
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          # Correct the damaged Arabic Bismillah in the embedded HTML without touching layout.
+          $p='web/index.html'; $s=Get-Content -Raw -Encoding UTF8 $p
+          $s=[regex]::Replace($s,'<div class="bismillah">.*?</div>','<div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ</div>',1)
+          Set-Content -Encoding UTF8 $p $s
+          # WhatsApp 24/7 Support must open the user support destination in the normal external browser, not switch embedded WhatsApp.
+          $p='main.go'; $s=Get-Content -Raw $p
+          $old='postMessage(hostHWND, wmSwitchWhatsApp, 0, 0)'
+          $new='_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "https://wa.me/923434824609").Start()'
+          if(-not $s.Contains($old)){throw 'WhatsApp support route target missing'}
+          $s=$s.Replace($old,$new)
+          if(-not $s.Contains('"os/exec"')){$s=$s.Replace('"os"','"os"`r`n`t"os/exec"')}
+          Set-Content -Encoding UTF8 $p $s
+      - name: Regression guards and tests
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.25'){throw 'VERSION not V.25'}
+          $h=Get-Content -Raw chrome_host.go
+          foreach($m in @('chSignalLinkBtn','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','licAuthorized')){if(-not $h.Contains($m)){throw "Regression: $m"}}
+          $f=Get-Content -Raw v24_targeted_fix.go
+          foreach($m in @('chBringWindowToTop','QueryFullProcessImageNameW','terminal64.exe')){if(-not $f.Contains($m)){throw "V.25 fix missing: $m"}}
+          $i=Get-Content -Raw -Encoding UTF8 web/index.html
+          if(-not $i.Contains('بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ')){throw 'Bismillah correction missing'}
+          $m=Get-Content -Raw main.go
+          if(-not $m.Contains('https://wa.me/923434824609')){throw 'External WhatsApp support missing'}
+          node --check web/app.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+      - name: Build V.25
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w v24_targeted_fix.go main.go
+          mkdir -p dist dist-installer
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w -X main.mhPublicVersionV001=V.25' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {"version":"V.25","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"MH Analysis V.25 - updater loop safe, Signal Link visible, MT5 broker embed, WhatsApp support external browser, Bismillah corrected"}
+          EOF
+          printf 'V.25\n' > dist/VERSION
+      - name: Build installer
+        shell: powershell
+        run: |
+          $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"; if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; $iscc="${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"}
+          New-Item -ItemType Directory -Force installer | Out-Null
+          @'
+          [Setup]
+          AppName=MH Analysis
+          AppVersion=25.0
+          DefaultDirName={autopf}\MH Analysis
+          DefaultGroupName=MH Analysis
+          OutputDir=..\dist-installer
+          OutputBaseFilename=MH Analysis V.25
+          Compression=lzma2
+          SolidCompression=yes
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          [Files]
+          Source: "..\dist\MH Analysis.exe"; DestDir: "{app}"; Flags: ignoreversion
+          [Icons]
+          Name: "{autoprograms}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          Name: "{autodesktop}\MH Analysis"; Filename: "{app}\MH Analysis.exe"
+          [Run]
+          Filename: "{app}\MH Analysis.exe"; Description: "Launch MH Analysis"; Flags: nowait postinstall skipifsilent
+          '@ | Set-Content -Encoding UTF8 installer\MHAnalysis-V25.iss
+          & $iscc installer\MHAnalysis-V25.iss
+          if($LASTEXITCODE -ne 0){throw 'Installer failed'}
+      - name: Upload candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.25-FINAL
+          path: |
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH Analysis V.25.exe
+          if-no-files-found: error
+      - name: Publish stable only after success
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v25"; cp dist/* "$RUNNER_TEMP/v25/"; cp 'dist-installer/MH Analysis V.25.exe' "$RUNNER_TEMP/v25/"
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v25_release; git rm -rf . || true; find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/v25/"* .; git add .; git commit -m 'MH Analysis V.25 final stable release'; git push --force origin HEAD:mh-analysis-update-channel
