@@ -1,0 +1,78 @@
+name: Publish MH Analysis V33 MT5 WhatsApp Fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [v33-mt5-whatsapp-fix]
+    paths:
+      - '.github/workflows/publish-v33.yml'
+      - 'scripts/v33_patch.py'
+      - 'scripts/v33_verify.py'
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v33-release
+  cancel-in-progress: true
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Apply retained V28-V32 fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v28_patch.py
+          python scripts/v29_regression_recovery.py
+          python scripts/v29_remove_visibility_gates.py
+          python scripts/v30_complete_fixes.py
+          python scripts/v30_post_patch.py
+          python scripts/v31_patch.py
+          python scripts/v32_patch.py
+      - name: Apply V33 MT5 and WhatsApp fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v33_patch.py
+          gofmt -w updater.go license_auth.go main.go chrome_host.go webview2_host.go records_mt5_local.go mt5_prefill.go ea_signal_bridge.go
+      - name: Full V33 regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v32_verify.py
+          python scripts/v33_verify.py
+          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
+          node --check web/auth.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V33 tests failed'}
+      - name: Build V33 Windows EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V33 EXE build failed'}
+      - name: Build and verify V33 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=33.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V33'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V33.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V33.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V33.exe')){throw 'V33 installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV33Verify'; $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V33.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait; if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V33 installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V33.exe' -Algorithm SHA256).Hash.ToLower(); "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V33.exe"|Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+      - name: Publish V33 release
+        shell: powershell
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v33 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v33 'dist/MH-Analysis-Setup-V33.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.33' --notes 'V.33 focused runtime fix: installed/running broker MT5 is detected and forcibly re-parented inside MH Analysis; WhatsApp New Analysis/Re-evaluate queue injects the exact organized signal text into the selected group composer and sends it. Retains verified V32 behavior.'; if($LASTEXITCODE -ne 0){throw 'V33 release publish failed'}
+      - name: Publish V33 mandatory updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $release=Join-Path $env:RUNNER_TEMP 'v33-release'; New-Item -ItemType Directory -Force $release|Out-Null; Copy-Item 'dist\MH Analysis.exe' (Join-Path $release 'MH Analysis.exe'); Copy-Item 'dist\MH-Analysis-Setup-V33.exe' (Join-Path $release 'MH-Analysis-Setup-V33.exe'); Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $release 'SHA256SUMS.txt'); git checkout --orphan __v33_release; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $release '*') .; Set-Content VERSION 'V.33' -Encoding ascii; git add .; git commit -m 'Publish verified MH Analysis V.33'; git push --force origin HEAD:v33-release
+          $exeSource=Join-Path $release 'MH Analysis.exe'; $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower(); $upd=Join-Path $env:RUNNER_TEMP 'v33-update'; New-Item -ItemType Directory -Force $upd|Out-Null; Copy-Item $exeSource (Join-Path $upd 'MH Analysis.exe'); $manifest=[ordered]@{version='V.33';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.33 - MT5 in-app embed and WhatsApp automatic organized signal delivery.'}|ConvertTo-Json -Compress; [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.33'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); git checkout --orphan __v33_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $upd '*') .; git add .; git commit -m 'Publish MH Analysis V.33 mandatory update'; git push --force origin HEAD:mh-analysis-update-channel
