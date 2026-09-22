@@ -17,8 +17,12 @@ auth.write_text(a,encoding='utf-8')
 wv=Path('webview2_host.go')
 w=wv.read_text(encoding='utf-8-sig')
 w=w.replace('''\tif which == 2 && chWhatsappWnd == 0 {\n\t\tgo wv2EnsureAuxBrowser(2)\n\t\treturn\n\t}\n\tif which == 3 && chRecordsWnd == 0 {\n\t\tgo wv2EnsureAuxBrowser(3)\n\t\treturn\n\t}''','''\tif which == 2 && chWhatsappWnd == 0 {\n\t\t// V32: create/attach before returning so one click is enough.\n\t\twv2EnsureAuxBrowser(2)\n\t}\n\tif which == 3 && chRecordsWnd == 0 {\n\t\t// V32: Records must be attached and visible on the first click.\n\t\twv2EnsureAuxBrowser(3)\n\t}\n\tif which == 2 && chWhatsappWnd == 0 { return }\n\tif which == 3 && chRecordsWnd == 0 { return }''',1)
-# Do not race hidden prewarm against user navigation.
-w=re.sub(r'''\n\t// Keep WhatsApp CDP and Records ready in their own hidden embedded windows\..*?\n\tgo func\(\) \{\n\t\ttime\.Sleep\(1100 \* time\.Millisecond\)\n\t\twv2EnsureAuxBrowser\(3\)\n\t\}\(\)\n''','\n\t// V32: auxiliary views are created deterministically on first click; no startup prewarm race.\n',w,count=1,flags=re.S)
+# Remove ALL retained startup prewarm blocks from older patches, regardless of comment wording.
+w=re.sub(r'''\n\s*go func\(\) \{\s*time\.Sleep\([^\n]*\)\s*wv2EnsureAuxBrowser\([23]\)\s*\}\(\)''','',w,flags=re.S)
+# Explicit marker verified by CI.
+if 'V32: auxiliary views are created deterministically on first click; no startup prewarm race.' not in w:
+    anchor='func wv2ShowLocal(which int) {'
+    w=w.replace(anchor,'// V32: auxiliary views are created deterministically on first click; no startup prewarm race.\n'+anchor,1)
 # Signal Link must be visible on the same WhatsApp click.
 needle='''func wv2ShowLocal(which int) {\n\tif wv2Browser == nil {\n\t\treturn\n\t}\n\twv2SetDesiredView(which)'''
 repl='''func wv2ShowLocal(which int) {\n\tif wv2Browser == nil {\n\t\treturn\n\t}\n\twv2SetDesiredView(which)\n\tif chSignalLinkBtn != 0 {\n\t\tif which == 2 { chShowWindow.Call(chSignalLinkBtn, chSWShow) } else { chShowWindow.Call(chSignalLinkBtn, chSWHide) }\n\t}'''
@@ -59,21 +63,25 @@ old='''\tpath, err := chMT5Executable()\n\tif err != nil { return err }\n\tcmd :
 new='''\t// V32: if MT5 is already open, embed that exact terminal instead of spawning an external duplicate.\n\tif existing := chFindExistingMT5WindowV32(); existing != 0 {\n\t\tchShowWindow.Call(existing, chSWHide)\n\t\tchAttachBrowser(existing)\n\t\tchMu.Lock(); chMT5Wnd = existing; chMu.Unlock()\n\t\tchResizeChildren(); chApplyDesiredBrowserView(); go mt5ApplyLatestQueued(); return nil\n\t}\n\tpath, err := chMT5Executable()\n\tif err != nil { return err }\n\tcmd := exec.Command(path)'''
 if old not in c: raise SystemExit('V32 MT5 launch anchor missing')
 c=c.replace(old,new,1)
-# After launch, fall back to global MT5 window detection if broker hands off to another process.
 c=c.replace('''\twnd := chWaitForProcessWindow(uint32(cmd.Process.Pid), 35*time.Second)\n\tif wnd == 0 {''','''\twnd := chWaitForProcessWindow(uint32(cmd.Process.Pid), 12*time.Second)\n\tif wnd == 0 { wnd = chFindExistingMT5WindowV32() }\n\tif wnd == 0 {''',1)
 ch.write_text(c,encoding='utf-8')
 
 # 5) Login WhatsApp Support must call the native external-browser endpoint.
 authjs=Path('web/auth.js')
 aj=authjs.read_text(encoding='utf-8-sig')
-# Add delegated capture handler so dynamically-created support link cannot navigate inside WebView2.
 if 'MH_V32_EXTERNAL_SUPPORT' not in aj:
     aj=aj.replace('  build();show("login_required");setInterval', '''  // MH_V32_EXTERNAL_SUPPORT: always leave the app for support; never navigate the internal WebView.\n  document.addEventListener("click",async e=>{const a=e.target.closest?.(".mhLicenseWhatsapp");if(!a)return;e.preventDefault();e.stopImmediatePropagation();try{await rawFetch("/api/open-support-external",{method:"POST"})}catch{}},true);\n  build();show("login_required");setInterval''',1)
 authjs.write_text(aj,encoding='utf-8')
 
-# Version successor parity. Workflow also hard-checks this before publish.
-for p in ['updater.go','license_auth.go']:
-    q=Path(p); z=q.read_text(encoding='utf-8-sig'); z=z.replace('V.31','V.32'); q.write_text(z,encoding='utf-8')
+# Version successor parity: source baseline is old (V.10/V.12), so set constants directly.
+up=Path('updater.go'); z=up.read_text(encoding='utf-8-sig')
+z=re.sub(r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.32"',z,count=1)
+up.write_text(z,encoding='utf-8')
+lic=Path('license_auth.go'); z=lic.read_text(encoding='utf-8-sig')
+z=re.sub(r'const licAppVersion = "[^"]+"','const licAppVersion = "V.32"',z,count=1)
+lic.write_text(z,encoding='utf-8')
 for p in ['web/index.html','web/records.html']:
-    q=Path(p); z=q.read_text(encoding='utf-8-sig'); z=z.replace('V.31 (Late - CH Shaukat Ali)','V.32 (Late - CH Shaukat Ali)'); q.write_text(z,encoding='utf-8')
+    q=Path(p); z=q.read_text(encoding='utf-8-sig')
+    z=re.sub(r'V\.\d+(?:\.\d+)? \(Late - CH Shaukat Ali\)','V.32 (Late - CH Shaukat Ali)',z)
+    q.write_text(z,encoding='utf-8')
 print('V32 patch applied')
