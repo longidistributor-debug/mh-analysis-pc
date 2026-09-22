@@ -1,0 +1,98 @@
+name: Publish MH Analysis V32 Verified Fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [v31-ui-navigation-security-hotfix]
+    paths:
+      - '.github/workflows/publish-v32.yml'
+      - 'scripts/v32_patch.py'
+      - 'scripts/v32_verify.py'
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v32-release
+  cancel-in-progress: true
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Apply retained V28-V31 fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v28_patch.py
+          python scripts/v29_regression_recovery.py
+          python scripts/v29_remove_visibility_gates.py
+          python scripts/v30_complete_fixes.py
+          python scripts/v30_post_patch.py
+          python scripts/v31_patch.py
+      - name: Apply V32 requested fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v32_patch.py
+          gofmt -w updater.go license_auth.go main.go chrome_host.go webview2_host.go records_mt5_local.go mt5_prefill.go ea_signal_bridge.go
+      - name: Full V32 no-regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v32_verify.py
+          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
+          node --check web/auth.js
+          node --check web/v31.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V32 tests failed'}
+          $u=Get-Content -Raw updater.go; $l=Get-Content -Raw license_auth.go
+          if($u -notmatch 'V\.32' -or $l -notmatch 'V\.32'){throw 'V32 compiled version parity failed'}
+      - name: Build V32 Windows EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V32 EXE build failed'}
+      - name: Build and silent-verify V32 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'
+          $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=32.0.0'
+          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V32'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V32.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V32.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V32.exe')){throw 'V32 installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV32Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V32.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V32 installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V32.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V32.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+      - name: Publish V32 GitHub release
+        shell: powershell
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v32 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v32 'dist/MH-Analysis-Setup-V32.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.32' --notes 'V.32 verified recovery: centered single-column login and credits; WhatsApp and Records deterministic first-click embedded loading; Signal Link on same WhatsApp click; installed/running broker MT5 detected and re-parented inside MH Analysis with broker handoff fallback; WhatsApp Support forced to external browser. Retains V28-V31 identity, signal, updater, security and automation protections.'
+          if($LASTEXITCODE -ne 0){throw 'V32 release publish failed'}
+      - name: Publish V32 mandatory updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $release=Join-Path $env:RUNNER_TEMP 'v32-release'; New-Item -ItemType Directory -Force $release|Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $release 'MH Analysis.exe'); Copy-Item 'dist\MH-Analysis-Setup-V32.exe' (Join-Path $release 'MH-Analysis-Setup-V32.exe'); Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $release 'SHA256SUMS.txt')
+          git checkout --orphan __v32_release; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $release '*') .; Set-Content VERSION 'V.32' -Encoding ascii; git add .; git commit -m 'Publish verified MH Analysis V.32'; git push --force origin HEAD:v32-release
+          $exeSource=Join-Path $release 'MH Analysis.exe'; $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower(); $upd=Join-Path $env:RUNNER_TEMP 'v32-update'; New-Item -ItemType Directory -Force $upd|Out-Null; Copy-Item $exeSource (Join-Path $upd 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.32';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.32 - login/navigation/embedded MT5/support recovery with retained V28-V31 protections.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.32'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v32_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $upd '*') .; git add .; git commit -m 'Publish MH Analysis V.32 mandatory update'; git push --force origin HEAD:mh-analysis-update-channel
