@@ -1,0 +1,147 @@
+name: Publish MH Analysis V37 Final Regression Lock
+on:
+  push:
+    branches: [v37-final-regression-lock]
+    paths:
+      - 'updater.go'
+      - 'license_auth.go'
+      - 'VERSION'
+      - '.github/workflows/publish-v37-final.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v37-release
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+
+      - name: Verify V37 regression locks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $wv=Get-Content -Raw webview2_host.go
+          $ch=Get-Content -Raw chrome_host.go
+          $app=Get-Content -Raw web/app.js
+          $upd=Get-Content -Raw updater.go
+          $lic=Get-Content -Raw license_auth.go
+          $ver=(Get-Content -Raw VERSION).Trim()
+
+          if($ver -ne 'V.37'){throw "VERSION is $ver, expected V.37"}
+          if($upd -notmatch 'const mhPublicVersionV001 = "V\.37"'){throw 'updater current version is not V.37'}
+          if($lic -notmatch 'const licAppVersion = "V\.37"'){throw 'license client version is not V.37'}
+          if($upd -match 'const mhPublicVersionV001 = "V\.(34|35|36)"'){throw 'stale updater version regression'}
+          if($lic -match 'const licAppVersion = "V\.(34|35|36)"'){throw 'stale license version regression'}
+
+          if($wv -notmatch 'V36_TRUE_PERSISTENT_WEBVIEWS'){throw 'persistent embedded WhatsApp/Records WebViews missing'}
+          if($wv -notmatch 'wv2Whatsapp \*edge\.Chromium'){throw 'embedded WhatsApp controller missing'}
+          if($wv -notmatch 'wv2Records \*edge\.Chromium'){throw 'embedded Records controller missing'}
+          if($wv -notmatch 'wmWhatsAppSend'){throw 'WhatsApp queue event missing'}
+          if($wv -notmatch 'V36_WA_FANOUT'){throw 'WhatsApp signal fanout missing'}
+
+          if($ch -notmatch 'func chFindInstalledMT5WindowV33\(\) uintptr'){throw 'MT5 installed-window detection missing'}
+          if($ch -notmatch 'func chEmbedMT5V33\(hwnd uintptr\) bool'){throw 'MT5 embed routine missing'}
+          if($ch -notmatch 'chSetParent\.Call\(hwnd, hostHWND\)'){throw 'MT5 internal SetParent embedding missing'}
+          if($ch -notmatch 'func chEnsureMT5Terminal\(\) error'){throw 'MT5 entrypoint missing'}
+          if($ch -notmatch 'if existing := chFindInstalledMT5WindowV33\(\); existing != 0'){throw 'existing MT5 is not preferred before launch'}
+          if($ch -notmatch 'go mt5ApplyLatestQueued\(\)'){throw 'MT5 queued signal apply missing'}
+
+          if($app -notmatch 'V36_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
+          if($app -match "Promise\.allSettled\(\[captureSignalRecordV30"){throw 'old racing fanout returned'}
+          if($app -match "void captureSignalRecordV796\(d,state\)"){throw 'legacy record writer returned'}
+
+          node --check web/app.js
+          gofmt -w webview2_host.go chrome_host.go updater.go license_auth.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V37 source verification failed'}
+
+      - name: Build and verify V37 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows'; $env:GOARCH='amd64'; $env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V37 EXE build failed'}
+
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'
+          $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=37.0.0'
+          $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V37'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V37.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V37.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V37.exe')){throw 'V37 installer build failed'}
+
+          $target=Join-Path $env:RUNNER_TEMP 'MHV37Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V37.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V37 silent installer verification failed'}
+
+      - name: Publish V37 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v37 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          $target=$env:GITHUB_SHA
+          if([string]::IsNullOrWhiteSpace($target)){throw 'GITHUB_SHA missing'}
+          gh release create v37 'dist/MH-Analysis-Setup-V37.exe' 'dist/MH Analysis.exe' --target $target --title 'MH Analysis V.37' --notes 'V.37 final regression-lock build. Keeps persistent embedded WhatsApp/Records, internal MT5 embedding and canonical signal fanout; fixes stale V.34 updater/license version constants that caused repeated mandatory-update loops.'
+          if($LASTEXITCODE -ne 0){throw 'V37 release publish failed'}
+
+      - name: Publish V37 auto-update channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $updDir=Join-Path $env:RUNNER_TEMP 'v37-update'
+          New-Item -ItemType Directory -Force $updDir | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $updDir 'MH Analysis.exe')
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $manifest=[ordered]@{
+            version='V.37'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes='MANDATORY V.37 - final regression lock; fixes repeated update loop and retains embedded WhatsApp, Records, MT5 and canonical signal delivery.'
+          } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $updDir 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $updDir 'VERSION'),'V.37'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+
+          git checkout --orphan __v37_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | ?{$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $updDir '*') .
+          git add .
+          git commit -m 'Publish MH Analysis V.37 update channel'
+          git push --force origin HEAD:mh-analysis-update-channel
+
+      - name: Verify live V37 update channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 3
+          $stamp=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $manifestUrl="https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json?verify=$stamp"
+          $raw=(Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri $manifestUrl).Content
+          $m=$raw | ConvertFrom-Json
+          if($m.version -ne 'V.37'){throw "live manifest version is $($m.version)"}
+          if(-not $m.mandatory){throw 'live V37 manifest is not mandatory'}
+          if($m.download_url -notlike 'https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/*'){throw 'live V37 download URL is not trusted raw GitHub'}
+          $exeUrl=$m.download_url + '?verify=' + $stamp
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-Analysis-V37-live.exe'
+          Invoke-WebRequest -UseBasicParsing -Headers @{'Cache-Control'='no-cache'} -Uri $exeUrl -OutFile $tmp
+          $liveSha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($liveSha -ne $m.sha256.ToLower()){throw 'live V37 EXE SHA does not match manifest'}
+          Write-Host "LIVE V37 VERIFIED: $liveSha"
