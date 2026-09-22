@@ -29,10 +29,10 @@ func TestV27RecordsAndEABridgeShareSignalID(t *testing.T) {
  capture:=`{"signal_id":"MH-test-27","symbol":"XAUUSD","timeframe":"15m","direction":"BUY","entry":2490,"sl":2480,"tp1":2510,"tp2":2520,"action":"NEW"}`
  if got:=post("/api/records-v2/capture",capture);got["saved"]!=true {t.Fatal(got)}
  if got:=post("/api/records-v2/capture",capture);got["duplicate"]!=true {t.Fatal(got)}
- post("/api/mt5/ea/send",`{"signal_id":"MH-test-27","symbol":"XAUUSD","type":"BUY_LIMIT","entry":2490,"sl":2480,"tp":2510,"lot":0}`)
+ post("/api/mt5/ea/send",`{"signal_id":"MH-test-27","symbol":"XAUUSD","type":"BUY","entry":2490,"sl":2480,"tp":2510,"lot":0.02}`)
  dir,err:=mt5CommonBridgeDir();if err!=nil {t.Fatal(err)}
  b,err:=os.ReadFile(filepath.Join(dir,"signal.txt"));if err!=nil {t.Fatal(err)}
- if !strings.HasPrefix(string(b),"MH-test-27|XAUUSD|BUY_LIMIT|") {t.Fatal(string(b))}
+ if !strings.HasPrefix(string(b),"MH-test-27|XAUUSD|BUY|") {t.Fatal(string(b))}
  w:=httptest.NewRecorder();mux.ServeHTTP(w,httptest.NewRequest("GET","/api/records-v2",nil))
  if !strings.Contains(w.Body.String(),"MH-test-27") {t.Fatal(w.Body.String())}
 }

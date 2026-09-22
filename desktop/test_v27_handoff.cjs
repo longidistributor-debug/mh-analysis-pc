@@ -15,7 +15,7 @@ async function run(saved,signal=true){
 (async()=>{
  const good=await run({ok:true,saved:true});assert.equal(good.error,undefined);assert.equal(good.calls.length,2);
  assert.equal(good.calls[0].url,'/api/records-v2/capture');assert.equal(good.calls[1].url,'/api/mt5/ea/send');
- assert.equal(good.calls[0].data.signal_id,good.calls[1].data.signal_id);assert.equal(good.calls[1].data.type,'BUY_LIMIT');
+ assert.equal(good.calls[0].data.signal_id,good.calls[1].data.signal_id);assert.equal(good.calls[1].data.type,'BUY');assert.equal(good.calls[1].data.lot,0.02);
  const failed=await run({ok:true,saved:false});assert.ok(failed.error);assert.equal(failed.calls.length,1);
  const empty=await run({ok:true},false);assert.equal(empty.calls.length,0);
  const reevaluate=source.slice(source.indexOf('async function executeReevaluate'),source.indexOf('async function runAnalyze'));

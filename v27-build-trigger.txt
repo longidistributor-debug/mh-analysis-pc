@@ -1,1 +1,1 @@
-V.27 build 2: align persistent-view regression guard
+V.27 build 3: preserve attached EA protocol and 0.02 lot

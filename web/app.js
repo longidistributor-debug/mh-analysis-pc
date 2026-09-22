@@ -518,8 +518,6 @@ async function runScheduledAutoAction(action){
 async function handoffNewSignalV27(d){
   const sig=d?.signal;if(!sig)return;
   const signal_id=sig.signal_id||(sig.signal_id='MH'+crypto.randomUUID());
-  const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c);
-  if(!Number.isFinite(market)||market<=0)throw new Error('MT5 handoff: market price unavailable');
   const post=async(url,payload)=>{
     const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     const j=await r.json();if(!r.ok||j.ok===false)throw new Error(j.error||`HTTP ${r.status}`);return j;
@@ -529,8 +527,9 @@ async function handoffNewSignalV27(d){
     score:sig.score,setup:d.bestFamily||sig.setupReason||'',action:'NEW'
   });
   if(!saved.saved&&!saved.duplicate)throw new Error('Signal record was not saved; EA handoff stopped');
-  const type=sig.direction==='BUY'?(sig.entry<=market?'BUY_LIMIT':'BUY_STOP'):(sig.entry>=market?'SELL_LIMIT':'SELL_STOP');
-  await post('/api/mt5/ea/send',{signal_id,symbol,type,entry:sig.entry,sl:sig.sl,tp:sig.tp1,lot:0,expiry:0});
+  // Preserve the existing EA protocol: the EA resolves pending order type from live broker price.
+  const type=sig.direction;
+  await post('/api/mt5/ea/send',{signal_id,symbol,type,entry:sig.entry,sl:sig.sl,tp:sig.tp1,lot:0.02,expiry:0});
 }
 
 async function executeNewAnalysis(fromAuto=false){
