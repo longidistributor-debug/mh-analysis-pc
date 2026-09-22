@@ -26,6 +26,18 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          @'
+          from pathlib import Path
+          p=Path('.github/scripts/v544_patch.py')
+          s=p.read_text(encoding='utf-8')
+          old='''s=s.replace('<div><div class="brandName">MH ANALYSIS</div><div class="version">V.34 (Late - CH Shaukat Ali)</div></div>', '<div><div class="brandName">MH ANALYSIS</div><div class="version">CH Shaukat Ali</div></div>',1)'''
+          new='''s,n=re.subn(r'<div><div class="brandName">MH ANALYSIS</div><div class="version">[^<]*</div></div>', '<div><div class="brandName">MH ANALYSIS</div><div class="version">CH Shaukat Ali</div></div>', s, count=1)\nif n!=1: raise SystemExit('subtitle replacement failed')'''
+          if old not in s:
+              raise SystemExit('subtitle patch anchor missing')
+          p.write_text(s.replace(old,new,1),encoding='utf-8',newline='\n')
+          '@ | Set-Content -Encoding utf8 .v544_guardfix.py
+          python .v544_guardfix.py
+          if($LASTEXITCODE -ne 0){throw 'V54.4 guard fix failed'}
           python .github/scripts/v544_patch.py
           if($LASTEXITCODE -ne 0){throw 'V54.4 patch failed'}
           gofmt -w main.go calendar3d.go ea_signal_bridge.go webview2_host.go updater.go license_auth.go
