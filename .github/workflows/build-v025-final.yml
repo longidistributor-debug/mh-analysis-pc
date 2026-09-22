@@ -22,17 +22,20 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          # Correct the damaged Arabic Bismillah in the embedded HTML without touching layout.
+          # Keep this patch ASCII-only so Windows PowerShell cannot corrupt Arabic UTF-8.
           $p='web/index.html'; $s=Get-Content -Raw -Encoding UTF8 $p
-          $s=[regex]::Replace($s,'<div class="bismillah">.*?</div>','<div class="bismillah">بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ</div>',1)
+          $bismillah='&#1576;&#1616;&#1587;&#1618;&#1605;&#1616; &#1575;&#1604;&#1604;&#1617;&#1614;&#1607;&#1616; &#1575;&#1604;&#1585;&#1617;&#1614;&#1581;&#1618;&#1605;&#1614;&#1606;&#1616; &#1575;&#1604;&#1585;&#1617;&#1614;&#1581;&#1616;&#1610;&#1605;&#1616;'
+          $replacement='<div class="bismillah">'+$bismillah+'</div>'
+          $s=[regex]::Replace($s,'<div class="bismillah">.*?</div>',$replacement,1)
           Set-Content -Encoding UTF8 $p $s
-          # WhatsApp 24/7 Support must open the user support destination in the normal external browser, not switch embedded WhatsApp.
-          $p='main.go'; $s=Get-Content -Raw $p
+          # Only the dashboard support endpoint opens external WhatsApp support; native WhatsApp tab remains embedded.
+          $p='main.go'; $s=Get-Content -Raw -Encoding UTF8 $p
           $old='postMessage(hostHWND, wmSwitchWhatsApp, 0, 0)'
           $new='_ = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", "https://wa.me/923434824609").Start()'
           if(-not $s.Contains($old)){throw 'WhatsApp support route target missing'}
-          $s=$s.Replace($old,$new)
-          if(-not $s.Contains('"os/exec"')){$s=$s.Replace('"os"','"os"`r`n`t"os/exec"')}
+          $idx=$s.IndexOf($old)
+          $s=$s.Substring(0,$idx)+$new+$s.Substring($idx+$old.Length)
+          if(-not $s.Contains('"os/exec"')){$s=$s.Replace('"os"', '"os"' + [Environment]::NewLine + [char]9 + '"os/exec"')}
           Set-Content -Encoding UTF8 $p $s
       - name: Regression guards and tests
         shell: powershell
@@ -42,11 +45,12 @@ jobs:
           $h=Get-Content -Raw chrome_host.go
           foreach($m in @('chSignalLinkBtn','chShowNativeSettingsDialog(2)','chEnsureMT5Terminal','licAuthorized')){if(-not $h.Contains($m)){throw "Regression: $m"}}
           $f=Get-Content -Raw v24_targeted_fix.go
-          foreach($m in @('chBringWindowToTop','QueryFullProcessImageNameW','terminal64.exe')){if(-not $f.Contains($m)){throw "V.25 fix missing: $m"}}
+          foreach($m in @('chBringWindowToTop','QueryFullProcessImageNameW','terminal64.exe','view == 2','view == 4')){if(-not $f.Contains($m)){throw "V.25 fix missing: $m"}}
           $i=Get-Content -Raw -Encoding UTF8 web/index.html
-          if(-not $i.Contains('بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ')){throw 'Bismillah correction missing'}
+          if(-not $i.Contains('&#1576;&#1616;&#1587;&#1618;&#1605;&#1616;')){throw 'Bismillah correction missing'}
           $m=Get-Content -Raw main.go
           if(-not $m.Contains('https://wa.me/923434824609')){throw 'External WhatsApp support missing'}
+          if(-not $m.Contains('"os/exec"')){throw 'External browser launcher import missing'}
           node --check web/app.js
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
