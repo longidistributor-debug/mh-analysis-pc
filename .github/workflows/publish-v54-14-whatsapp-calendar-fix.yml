@@ -27,7 +27,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          python .github/scripts/v5414_patch.py
+          python .github/scripts/v5414b_patch.py
           if($LASTEXITCODE -ne 0){throw 'V54.14 patch failed'}
           gofmt -w webview2_host.go calendar3d.go main.go updater.go license_auth.go
           node --check web/app.js
