@@ -1,0 +1,145 @@
+name: Publish MH Analysis V27.1 Hotfix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [v27-analysis-persistence-fix]
+    paths:
+      - 'desktop/v271_hotfix.py'
+      - '.github/workflows/publish-v271-hotfix.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v271-hotfix
+  cancel-in-progress: true
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V27.1 hotfix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python desktop/v271_hotfix.py
+          if($LASTEXITCODE -ne 0){throw 'V27.1 hotfix patch failed'}
+          $u=Get-Content -Raw updater.go
+          $u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.27.1"'
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $i=Get-Content -Raw web/index.html
+          $i=$i -replace '<div class="version">[^<]*</div>','<div class="version">V.27.1 AUTO CYCLE (HAMMAD & SOMI)</div>'
+          $i=$i -replace '<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.27.1</div>'
+          [IO.File]::WriteAllText((Join-Path $PWD 'web/index.html'),$i,(New-Object Text.UTF8Encoding($false)))
+          $iss=Get-Content -Raw installer/MH-Analysis-V27.iss
+          $iss=$iss -replace '#define MyAppVersion "27"','#define MyAppVersion "27.1"'
+          $iss=$iss -replace 'MH-Analysis-Setup-V27','MH-Analysis-Setup-V27.1'
+          $iss=$iss -replace 'VersionInfoVersion=27\.0\.0\.0','VersionInfoVersion=27.1.0.0'
+          [IO.File]::WriteAllText((Join-Path $PWD 'installer/MH-Analysis-V27.1.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+
+      - name: V27.1 regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $lic=Get-Content -Raw license_auth.go
+          $wv=Get-Content -Raw webview2_host.go
+          if(-not $lic.Contains('`SOFTWARE\Microsoft\Cryptography`')){throw 'Correct MachineGuid registry path missing'}
+          if($lic.Contains('`SOFTWARE\\Microsoft\\Cryptography`')){throw 'Malformed MachineGuid registry path still present'}
+          if(-not $lic.Contains('licDeviceMu')){throw 'Device identity creation mutex missing'}
+          if($wv.Contains('time.Sleep(700 * time.Millisecond)') -or $wv.Contains('time.Sleep(1100 * time.Millisecond)')){throw 'Startup auxiliary-browser prewarm still present'}
+          if(-not $wv.Contains('do not pre-launch WhatsApp/Records at startup')){throw 'V27.1 no-prewarm marker missing'}
+          node --check web/app.js
+          node --check web/v03.js
+          gofmt -w license_auth.go webview2_host.go updater.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V27.1 tests failed'}
+
+      - name: Build V27.1 Windows EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V27.1 EXE build failed'}
+
+      - name: Build and verify V27.1 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          if(-not(Test-Path $iscc)){throw 'Inno Setup unavailable'}
+          & $iscc 'installer\MH-Analysis-V27.1.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V27.1.exe')){throw 'V27.1 installer failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV271Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V27.1.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V27.1 installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V27.1.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V27.1.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - name: Publish V27.1 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release create v27.1 'dist/MH-Analysis-Setup-V27.1.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.27.1' --notes 'Hotfix: fixes secure device identity MachineGuid lookup and removes WhatsApp/Records startup pre-launch flicker while retaining V.27 persistent analysis automation.'
+          if($LASTEXITCODE -ne 0){throw 'V27.1 release publish failed'}
+
+      - name: Publish V27.1 installer branch
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $tmp=Join-Path $env:RUNNER_TEMP 'v271-files'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          Copy-Item 'dist\MH-Analysis-Setup-V27.1.exe' (Join-Path $tmp 'MH-Analysis-Setup-V27.1.exe')
+          Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $tmp 'SHA256SUMS.txt')
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v271_release
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'MH-Analysis-Setup-V27.1.exe') '.\MH-Analysis-Setup-V27.1.exe'
+          Copy-Item (Join-Path $tmp 'SHA256SUMS.txt') '.\SHA256SUMS.txt'
+          Set-Content VERSION 'V.27.1' -Encoding ascii
+          git add .
+          git commit -m 'Publish verified MH Analysis V.27.1 hotfix'
+          git push --force origin HEAD:v271-release
+          if($LASTEXITCODE -ne 0){throw 'V27.1 direct release publish failed'}
+
+      - name: Publish mandatory V27.1 updater manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $exeSource=Join-Path $env:RUNNER_TEMP 'v271-files\MH Analysis.exe'
+          $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v271-update'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item $exeSource (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.27.1';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MH Analysis V.27.1 - secure device identity and startup flicker hotfix'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.27.1'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v271_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .
+          git commit -m 'Publish MH Analysis V.27.1 mandatory hotfix'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'V27.1 updater publish failed'}
