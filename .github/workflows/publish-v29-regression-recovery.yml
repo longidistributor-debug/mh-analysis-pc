@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/publish-v29-regression-recovery.yml'
       - 'scripts/v29_regression_recovery.py'
+      - 'scripts/v29_verify.py'
 
 permissions:
   contents: write
@@ -48,33 +49,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $idx=Get-Content -Raw -Encoding UTF8 web/index.html
-          $wv=Get-Content -Raw webview2_host.go
-          $ch=Get-Content -Raw chrome_host.go
-          $lic=Get-Content -Raw license_auth.go
-          $upd=Get-Content -Raw updater.go
-
-          if(-not $idx.Contains('بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ')){throw 'Arabic Bismillah regression'}
-          if($idx.Contains('Ø¨Ù') -or $idx.Contains('â—') -or $idx.Contains('â€”')){throw 'Visible mojibake remains in main UI'}
-
-          foreach($m in @('Signal Link','chSignalLinkBtn','case chIDSignalLink:','chShowNativeSettingsDialog(2)','V29: restore the proven V26 Signal Link control')){
-            if(-not $wv.Contains($m)){throw "Signal Link regression guard missing: $m"}
-          }
-          if(-not $wv.Contains('if which == 2')){throw 'Signal Link WhatsApp-only visibility guard missing'}
-
-          foreach($m in @('HideWindow: true','CreationFlags: 0x08000000','V29: launch auxiliary browser hidden')){
-            if(-not $ch.Contains($m)){throw "Taskbar flicker guard missing: $m"}
-          }
-          if($ch.Contains('vis, _, _ := chIsWindowVisible.Call(hwnd)')){throw 'Hidden browser discovery still requires visible top-level window'}
-
-          if(-not $lic.Contains('registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`')){throw 'V28 MachineGuid fix lost'}
-          if(-not $lic.Contains('V28 recovery: old/broken DPAPI blob')){throw 'V28 device self-heal lost'}
-          if(-not $wv.Contains('V28: keep the native host hidden until WebView2 gets its first paint.')){throw 'V28 startup first-paint fix lost'}
-          if($wv.Contains('time.Sleep(700 * time.Millisecond)') -or $wv.Contains('time.Sleep(1100 * time.Millisecond)')){throw 'Auxiliary startup prewarm returned'}
-
-          if(-not $upd.Contains('const mhPublicVersionV001 = "V.29"')){throw 'Updater V29 stamp missing'}
-          if(-not $lic.Contains('const licAppVersion = "V.29"')){throw 'License V29 stamp missing'}
-
+          python scripts/v29_verify.py
+          if($LASTEXITCODE -ne 0){throw 'V29 regression guards failed'}
           node --check web/app.js
           node --check web/v03.js
           node --check web/records.js
