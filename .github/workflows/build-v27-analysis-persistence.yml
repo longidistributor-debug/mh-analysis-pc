@@ -2,8 +2,6 @@ name: Build and Publish MH Analysis V27
 
 on:
   workflow_dispatch:
-  push:
-    branches: [v27-analysis-persistence-fix]
 
 permissions:
   contents: write
@@ -122,36 +120,4 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           gh release delete v27 --yes --cleanup-tag 2>$null
-          gh release create v27 'dist/MH-Analysis-Setup-V27.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.27' --notes 'V.27 restores persistent MH Analysis state and fixed 15-minute automation while navigating between MH Analysis, WhatsApp, Records and MT5; restores NEW signal fan-out to Records and MT5; and hides MT5 PowerShell automation windows.'
-          if($LASTEXITCODE -ne 0){throw 'V27 release publish failed'}
-
-      - name: Publish mandatory V27 update channel
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          $exeSource=Join-Path $PWD 'dist\MH Analysis.exe'
-          $tmp=Join-Path $env:RUNNER_TEMP 'mh-v27-publish'
-          New-Item -ItemType Directory -Force $tmp | Out-Null
-          Copy-Item $exeSource (Join-Path $tmp 'MH Analysis.exe') -Force
-          $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower()
-          $manifest=[ordered]@{
-            version='V.27'
-            mandatory=$true
-            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
-            sha256=$sha
-            notes='MH Analysis V.27 - persistent analysis runtime, restored WhatsApp/Records/MT5 automation, hidden MT5 PowerShell windows'
-          } | ConvertTo-Json -Compress
-          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
-          Set-Content -Path (Join-Path $tmp 'VERSION') -Value 'V.27' -Encoding ascii
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout --orphan __mh_v27_update
-          git rm -rf . 2>$null
-          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
-          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
-          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
-          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
-          git add 'MH Analysis.exe' update.json VERSION
-          git commit -m 'Publish MH Analysis V.27 mandatory update'
-          git push --force origin HEAD:mh-analysis-update-channel
-          if($LASTEXITCODE -ne 0){throw 'Update channel publish failed'}
+          gh release create v27 'dist/MH-Analysis-Setup-V27.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.27' --notes 'Manual legacy V.27 build only. Does not publish to the active update channel.'
