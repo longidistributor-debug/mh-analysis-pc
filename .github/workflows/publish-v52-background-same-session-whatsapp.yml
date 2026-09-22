@@ -1,0 +1,63 @@
+name: Publish MH Analysis V52 Background Same Session WhatsApp
+on:
+  push:
+    branches: [v52-background-same-session-whatsapp]
+    paths: ['.github/workflows/publish-v52-background-same-session-whatsapp.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Apply V52 background same-session link handling
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='webview2_host.go'
+          $s=Get-Content -Raw $p
+          $old="if(preferred){preferred.click();return 'opening-group';}"
+          $new="if(preferred){const href=preferred.href||preferred.closest('a')?.href||preferred.querySelector?.('a')?.href;if(href){location.assign(href);return 'opening-group-same-view';}preferred.click();return 'opening-group';}"
+          if(-not $s.Contains($old)){throw 'Expected group landing transition not found'}
+          $s=$s.Replace($old,$new)
+          $s=$s.Replace("const sentKey='mh-v47-sent-'","const sentKey='mh-v52-sent-'")
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $u=Get-Content -Raw updater.go
+          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.52"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go
+          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.52"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          gofmt -w webview2_host.go updater.go license_auth.go
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V52 build failed'}
+      - name: Upload V52 installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V52-Installer
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
+      - name: Publish mandatory V52 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $d=Join-Path $env:RUNNER_TEMP 'v52';New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $m=[ordered]@{version='V.52';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.52 - New Analysis and Re-evaluate process the original saved WhatsApp group link in the same persistent logged-in embedded WhatsApp session while it remains hidden. The group landing transition is forced into that same WebView, then the organized signal is typed and sent automatically. EA remains independent.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.52'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v52_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .
+          git add .;git commit -m 'Publish MH Analysis V.52 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
