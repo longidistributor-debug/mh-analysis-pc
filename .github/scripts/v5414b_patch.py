@@ -15,7 +15,7 @@ if focus not in seg:
 seg = seg.replace(focus, focus + '; chRedrawWindowV5414.Call(wv2WhatsappContainer,0,0,0x0001|0x0080|0x0100); chUpdateWindow.Call(wv2WhatsappContainer)', 1)
 s = s[:case2] + seg + s[case3:]
 '''
-patched, n = re.subn(pat, repl, src, count=1, flags=re.S)
+patched, n = re.subn(pat, lambda _m: repl, src, count=1, flags=re.S)
 if n != 1:
     raise SystemExit('Could not make V54.14 repaint patch resilient')
 tmp = Path('.github/scripts/.v5414_runtime.py')
