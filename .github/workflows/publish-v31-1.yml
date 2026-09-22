@@ -1,0 +1,83 @@
+name: Publish MH Analysis V31.1 Update Loop Hotfix
+on:
+  push:
+    branches: [v31-1-loopfix-build]
+    paths: ['.github/workflows/publish-v31-1.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v31-1-release
+  cancel-in-progress: true
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Reapply all retained fixes and V31
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v28_patch.py
+          python scripts/v29_regression_recovery.py
+          python scripts/v29_remove_visibility_gates.py
+          python scripts/v30_complete_fixes.py
+          python scripts/v30_post_patch.py
+          python scripts/v31_patch.py
+          if($LASTEXITCODE -ne 0){throw 'Retained/V31 patch failed'}
+      - name: Apply V31.1 version-parity loop fix
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.31.1"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "[^"]+"','const licAppVersion = "V.31.1"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=$s.Replace('V.31 (Late - CH Shaukat Ali)','V.31.1 (Late - CH Shaukat Ali)');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/records.html';$s=Get-Content -Raw $p;$s=$s.Replace('V.31 (Late - CH Shaukat Ali)','V.31.1 (Late - CH Shaukat Ali)');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          gofmt -w updater.go license_auth.go main.go chrome_host.go webview2_host.go records_mt5_local.go mt5_prefill.go ea_signal_bridge.go
+      - name: Version parity and no-regression guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v30_verify.py
+          if($LASTEXITCODE -ne 0){throw 'V30 retained regression guard failed'}
+          $u=Get-Content -Raw updater.go;$l=Get-Content -Raw license_auth.go;$i=Get-Content -Raw web/index.html;$r=Get-Content -Raw web/records.html
+          if($u -notmatch 'mhPublicVersionV001 = "V\.31\.1"'){throw 'Updater compiled version mismatch'}
+          if($l -notmatch 'licAppVersion = "V\.31\.1"'){throw 'License compiled version mismatch'}
+          if($i -notmatch 'V\.31\.1 \(Late - CH Shaukat Ali\)'){throw 'MH UI version mismatch'}
+          if($r -notmatch 'V\.31\.1 \(Late - CH Shaukat Ali\)'){throw 'Records UI version mismatch'}
+          node --check web/app.js; node --check web/v03.js; node --check web/records.js; node --check web/auth.js; node --check web/v31.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+      - name: Build EXE and verify embedded version
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'EXE build failed'}
+      - name: Build and silent verify installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss';$iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=31.1.0';$iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V31.1';[IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V31.1.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V31.1.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V31.1.exe')){throw 'Installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV311Verify';$p=Start-Process 'dist\MH-Analysis-Setup-V31.1.exe' -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait;if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower();$setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V31.1.exe' -Algorithm SHA256).Hash.ToLower();"${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V31.1.exe"|Set-Content -Encoding ascii 'dist\SHA256SUMS.txt';"MH_EXE_SHA=$exeSha"|Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Publish V31.1 release
+        shell: powershell
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          $ErrorActionPreference='Continue';gh release delete v31.1 --yes --cleanup-tag 2>$null;$global:LASTEXITCODE=0;$ErrorActionPreference='Stop'
+          gh release create v31.1 'dist/MH-Analysis-Setup-V31.1.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.31.1' --notes 'V.31.1 updater loop hotfix. Compiled updater, license, UI and manifest versions are locked to the same release version. Retains V28-V31 fixes.'
+      - name: Publish mandatory V31.1 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop';git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          $d=Join-Path $env:RUNNER_TEMP 'upd311';New-Item -ItemType Directory -Force $d|Out-Null;Copy-Item 'dist\MH Analysis.exe' (Join-Path $d 'MH Analysis.exe');$sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower();$m=[ordered]@{version='V.31.1';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.31.1 - updater loop hotfix with strict version parity.'}|ConvertTo-Json -Compress;[IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)));[IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.31.1'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git checkout --orphan __v311_update;git rm -rf . 2>$null;Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force;Copy-Item (Join-Path $d '*') .;git add .;git commit -m 'Publish MH Analysis V.31.1 updater loop hotfix';git push --force origin HEAD:mh-analysis-update-channel
