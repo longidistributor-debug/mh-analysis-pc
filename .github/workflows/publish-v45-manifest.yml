@@ -1,0 +1,40 @@
+name: Publish V45 Mandatory Manifest
+on:
+  push:
+    branches: [v45-three-fixes-only]
+    paths: ['.github/workflows/publish-v45-manifest.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Build verified V45 update executable
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'MH Analysis.exe' .
+          if(-not(Test-Path 'MH Analysis.exe')){throw 'V45 executable missing'}
+      - name: Publish mandatory V45 manifest channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $d=Join-Path $env:RUNNER_TEMP 'v45-manifest';New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $m=[ordered]@{version='V.45';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.45 - reliable MT5 signal handoff, WhatsApp group background send, and single MH Analysis taskbar fix.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.45'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v45_manifest
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .
+          git add .;git commit -m 'Publish MH Analysis V.45 mandatory manifest';git push --force origin HEAD:mh-analysis-update-channel
