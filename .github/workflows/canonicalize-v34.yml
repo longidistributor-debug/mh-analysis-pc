@@ -1,0 +1,70 @@
+name: Canonicalize MH Analysis V34 Source
+on:
+  workflow_dispatch:
+  push:
+    branches: [v34-canonical-single-source]
+    paths: ['.github/workflows/canonicalize-v34.yml']
+permissions:
+  contents: write
+  actions: write
+concurrency:
+  group: mh-v34-canonicalize
+  cancel-in-progress: false
+jobs:
+  canonicalize:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0, ref: v34-canonical-single-source}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Consolidate historical fixes exactly once
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v28_patch.py
+          python scripts/v29_regression_recovery.py
+          python scripts/v29_remove_visibility_gates.py
+          python scripts/v30_complete_fixes.py
+          python scripts/v30_post_patch.py
+          python scripts/v31_patch.py
+          python scripts/v32_patch.py
+          python scripts/v33_patch.py
+          python scripts/v34_canonical_fix.py
+          gofmt -w updater.go license_auth.go main.go chrome_host.go webview2_host.go records_mt5_local.go mt5_prefill.go ea_signal_bridge.go
+      - name: Verify canonical source before commit
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v32_verify.py
+          python scripts/v33_verify.py
+          node --check web/app.js
+          node --check web/v03.js
+          node --check web/records.js
+          node --check web/auth.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Canonical V34 tests failed'}
+          $ch=Get-Content -Raw chrome_host.go
+          if($ch -match 'Get-Process -Id'){throw 'PowerShell MT5 polling still exists'}
+          if($ch -notmatch 'V34_SINGLE_FLIGHT_MT5'){throw 'MT5 single-flight guard missing'}
+          $wv=Get-Content -Raw webview2_host.go
+          if($wv -notmatch 'V34_ONE_CLICK_VIEW'){throw 'one-click view recovery missing'}
+          $app=Get-Content -Raw web/app.js
+          if($app -notmatch 'V34_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
+          $main=Get-Content -Raw main.go
+          if($main -notmatch 'V34_WA_RETRY'){throw 'WhatsApp delivery retry missing'}
+      - name: Commit canonical source tree
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Canonical V34 source: consolidate all retained fixes; remove runtime patch layering'
+          git push origin HEAD:v34-canonical-single-source
+      - name: Start clean V34 release build
+        shell: powershell
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          gh workflow run publish-v34.yml --ref v34-canonical-single-source
