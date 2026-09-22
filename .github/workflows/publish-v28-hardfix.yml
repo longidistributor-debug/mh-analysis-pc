@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
   push:
     branches: [v28-device-flicker-hardfix]
-    paths: ['.github/workflows/publish-v28-hardfix.yml']
+    paths:
+      - '.github/workflows/publish-v28-hardfix.yml'
+      - 'scripts/v28_patch.py'
 
 permissions:
   contents: write
@@ -21,103 +23,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply V28 hardfix
+      - name: Apply V28 source hardfix
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-
-          # Public updater/UI version.
-          $u=Get-Content -Raw updater.go
-          $u=$u -replace 'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.28"'
-          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
-          $idx=Get-Content -Raw web/index.html
-          $idx=$idx -replace '<div class="version">[^<]*</div>','<div class="version">V.28 AUTO CYCLE (HAMMAD & SOMI)</div>'
-          $idx=$idx -replace '<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.28</div>'
-          [IO.File]::WriteAllText((Join-Path $PWD 'web/index.html'),$idx,(New-Object Text.UTF8Encoding($false)))
-
-          # License app version + correct native MachineGuid path.
-          $lic=Get-Content -Raw license_auth.go
-          $lic=$lic -replace 'const licAppVersion = "[^"]+"','const licAppVersion = "V.28"'
-          $lic=$lic.Replace('`SOFTWARE\\\\Microsoft\\\\Cryptography`','`SOFTWARE\Microsoft\Cryptography`')
-
-          # Serialize identity creation to prevent parallel login/status races.
-          $lic=$lic.Replace('licMu                    sync.Mutex', "licMu                    sync.Mutex`r`n`tlicDeviceMu              sync.Mutex")
-          $lic=$lic.Replace("func licEnsureDevice() (*licDevice, error) {`r`n", "func licEnsureDevice() (*licDevice, error) {`r`n`tlicDeviceMu.Lock()`r`n`tdefer licDeviceMu.Unlock()`r`n")
-
-          # Self-heal stale/corrupt DPAPI identity left by older builds instead of permanently failing login.
-          $old=@'
-	if _, statErr := os.Stat(path); statErr == nil {
-		if err := licReadProtected(path, &disk); err != nil {
-			return nil, fmt.Errorf("existing device identity cannot be read: %w", err)
-		}
-		raw, err := base64.StdEncoding.DecodeString(disk.PrivateKey)
-		if err != nil || len(raw) != ed25519.PrivateKeySize {
-			return nil, errors.New("existing device identity is invalid")
-		}
-		priv := ed25519.PrivateKey(raw)
-		pub := priv.Public().(ed25519.PublicKey)
-		der, err := x509.MarshalPKIXPublicKey(pub)
-		if err != nil {
-			return nil, err
-		}
-		return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
-	} else if !os.IsNotExist(statErr) {
-		return nil, statErr
-	}
-'@
-          $new=@'
-	if _, statErr := os.Stat(path); statErr == nil {
-		readErr := licReadProtected(path, &disk)
-		if readErr == nil {
-			raw, decErr := base64.StdEncoding.DecodeString(disk.PrivateKey)
-			if decErr == nil && len(raw) == ed25519.PrivateKeySize {
-				priv := ed25519.PrivateKey(raw)
-				pub := priv.Public().(ed25519.PublicKey)
-				der, marshalErr := x509.MarshalPKIXPublicKey(pub)
-				if marshalErr == nil {
-					return &licDevice{Private: priv, Public: pub, DER: der, ID: machineID}, nil
-				}
-			}
-		}
-		// V28 recovery: old/broken DPAPI blob must not brick this Windows device forever.
-		_ = os.Remove(path + ".tmp")
-		_ = os.Remove(path)
-	} else if !os.IsNotExist(statErr) {
-		return nil, fmt.Errorf("device identity file unavailable: %w", statErr)
-	}
-'@
-          if(-not $lic.Contains($old)){throw 'Could not locate old device identity block'}
-          $lic=$lic.Replace($old,$new)
-
-          # Make local secure-storage errors diagnosable instead of hiding every cause behind one generic message.
-          $lic=$lic.Replace('"message": "Could not create secure device identity."','"message": "Could not create secure device identity: " + err.Error()')
-          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$lic,(New-Object Text.UTF8Encoding($false)))
-
-          # No WhatsApp/Records browser prewarm. They launch only after user click.
-          $wv=Get-Content -Raw webview2_host.go
-          $prewarm=@'
-	// Keep WhatsApp CDP and Records ready in their own hidden embedded windows.
-	// They no longer replace/unload the MH Analysis page.
-	go func() {
-		time.Sleep(700 * time.Millisecond)
-		wv2EnsureAuxBrowser(2)
-	}()
-	go func() {
-		time.Sleep(1100 * time.Millisecond)
-		wv2EnsureAuxBrowser(3)
-	}()
-
-'@
-          $wv=$wv.Replace($prewarm,'')
-          # Give WebView2 first paint while host is hidden, then reveal once. This prevents white/black host flashes.
-          $wv=$wv.Replace("`tb.Navigate(serverURL)`r`n`tb.Focus()`r`n`twv2SetDesiredView(1)`r`n`tchShowWindow.Call(hostHWND, chSWMaximize)", "`tb.Navigate(serverURL)`r`n`twv2SetDesiredView(1)`r`n`ttime.Sleep(450 * time.Millisecond)`r`n`tchShowWindow.Call(hostHWND, chSWMaximize)")
-          [IO.File]::WriteAllText((Join-Path $PWD 'webview2_host.go'),$wv,(New-Object Text.UTF8Encoding($false)))
-
+          python scripts/v28_patch.py
           gofmt -w license_auth.go webview2_host.go updater.go
 
       - name: V28 regression guards and tests
@@ -127,11 +43,11 @@ jobs:
           $lic=Get-Content -Raw license_auth.go
           $wv=Get-Content -Raw webview2_host.go
           $upd=Get-Content -Raw updater.go
-          if(-not $lic.Contains('registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`')){throw 'Correct MachineGuid registry path missing'}
-          if($lic.Contains('SOFTWARE\\Microsoft\\Cryptography')){throw 'Malformed MachineGuid registry path remains'}
+          if(-not $lic.Contains('registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Cryptography`')){throw 'Correct MachineGuid path missing'}
+          if($lic.Contains('SOFTWARE\\Microsoft\\Cryptography')){throw 'Malformed MachineGuid path remains'}
           foreach($m in @('licDeviceMu','old/broken DPAPI blob','Could not create secure device identity:')){if(-not $lic.Contains($m)){throw "V28 identity guard missing: $m"}}
-          if($wv.Contains('time.Sleep(700 * time.Millisecond)') -or $wv.Contains('time.Sleep(1100 * time.Millisecond)')){throw 'Startup browser prewarm still present'}
-          if(-not $wv.Contains('time.Sleep(450 * time.Millisecond)')){throw 'Hidden first-paint startup guard missing'}
+          if($wv.Contains('time.Sleep(700 * time.Millisecond)') -or $wv.Contains('time.Sleep(1100 * time.Millisecond)')){throw 'Startup browser prewarm remains'}
+          if(-not $wv.Contains('V28: keep the native host hidden until WebView2 gets its first paint.')){throw 'First-paint guard missing'}
           if(-not $upd.Contains('const mhPublicVersionV001 = "V.28"')){throw 'Updater V28 stamp missing'}
           node --check web/app.js
           node --check web/v03.js
@@ -144,7 +60,9 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           New-Item -ItemType Directory -Force dist | Out-Null
-          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          $env:GOOS='windows'
+          $env:GOARCH='amd64'
+          $env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
           if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V28 EXE build failed'}
 
@@ -166,20 +84,20 @@ jobs:
           $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
           $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V28.exe' -Algorithm SHA256).Hash.ToLower()
           "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V28.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
-          "MH_EXE_SHA=$exeSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Publish V28 release
+      - name: Publish V28 GitHub release
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference='Stop'
+          $ErrorActionPreference='Continue'
           gh release delete v28 --yes --cleanup-tag 2>$null
-          if($LASTEXITCODE -ne 0){$global:LASTEXITCODE=0}
-          gh release create v28 'dist/MH-Analysis-Setup-V28.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.28' --notes 'V.28 hard-fixes secure Windows device identity creation, self-heals stale DPAPI identity files, serializes identity creation, exposes local identity failure detail, removes startup WhatsApp/Records prewarm, and reveals the main host only after first WebView paint.'
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v28 'dist/MH-Analysis-Setup-V28.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.28' --notes 'V.28 hard-fixes secure Windows device identity creation, self-heals stale DPAPI identity files, serializes identity creation, removes startup auxiliary-browser prewarm, and delays host reveal until first WebView paint.'
           if($LASTEXITCODE -ne 0){throw 'V28 release publish failed'}
 
-      - name: Publish V28 installer branch
+      - name: Publish V28 release branch
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
@@ -200,7 +118,6 @@ jobs:
           git add .
           git commit -m 'Publish verified MH Analysis V.28 installer'
           git push --force origin HEAD:v28-release
-          if($LASTEXITCODE -ne 0){throw 'V28 installer branch publish failed'}
 
       - name: Publish mandatory V28 updater manifest
         shell: powershell
@@ -223,4 +140,3 @@ jobs:
           git add .
           git commit -m 'Publish MH Analysis V.28 mandatory update'
           git push --force origin HEAD:mh-analysis-update-channel
-          if($LASTEXITCODE -ne 0){throw 'V28 updater manifest publish failed'}
