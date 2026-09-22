@@ -1,0 +1,58 @@
+name: Publish MH Analysis V48 Independent WhatsApp EA
+on:
+  push:
+    branches: [v48-independent-whatsapp-ea]
+    paths: ['.github/workflows/publish-v48-independent-whatsapp-ea.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+      - name: Set V48 identity and verify independent dispatch
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $u=Get-Content -Raw updater.go
+          $u=[regex]::Replace($u,'const mhPublicVersionV001 = "V\.[^"]+"','const mhPublicVersionV001 = "V.48"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go
+          $l=[regex]::Replace($l,'const licAppVersion = "[^"]+"','const licAppVersion = "V.48"',1)
+          [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          $rf=Get-Content -Raw web/runtime-fixes.js
+          if($rf -notmatch 'EA handoff is fire-and-forget'){throw 'V48 independent EA/WhatsApp dispatch fix missing'}
+          if($rf -notmatch '/api/mt5/ea/send'){throw 'V48 EA background interceptor missing'}
+          gofmt -w updater.go license_auth.go
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V48 build failed'}
+      - name: Upload V48 installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V48-Installer
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
+      - name: Publish mandatory V48 manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist/MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $d=Join-Path $env:RUNNER_TEMP 'v48';New-Item -ItemType Directory -Force $d|Out-Null
+          Copy-Item 'dist/MH Analysis.exe' (Join-Path $d 'MH Analysis.exe')
+          $m=[ordered]@{version='V.48';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.48 - generated signals send to WhatsApp independently and immediately; EA handoff runs in background and cannot block WhatsApp on reject, offline state, or timeout. V.47 group-send behavior remains intact.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $d 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $d 'VERSION'),'V.48'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]';git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v48_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force|Where-Object{$_.Name -ne '.git'}|Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $d '*') .
+          git add .;git commit -m 'Publish MH Analysis V.48 mandatory update';git push --force origin HEAD:mh-analysis-update-channel
