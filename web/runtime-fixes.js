@@ -1,6 +1,23 @@
 (()=>{
 'use strict';
 const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
+
+// V48: EA handoff is fire-and-forget. A generated signal must continue to
+// WhatsApp immediately even when MT5/EA is offline, slow, rejects, or times out.
+// The real EA request still runs in the background; only its response is no
+// longer allowed to gate the rest of the signal fanout.
+const mhNativeFetch=window.fetch.bind(window);
+window.fetch=function(input,init){
+  const url=typeof input==='string'?input:String(input?.url||'');
+  if(url==='/api/mt5/ea/send'||url.endsWith('/api/mt5/ea/send')){
+    mhNativeFetch(input,init).then(async r=>{
+      if(!r.ok){let detail='';try{detail=await r.text()}catch(_){}console.warn('MT5 EA background handoff failed',r.status,detail)}
+    }).catch(e=>console.warn('MT5 EA background handoff unavailable',e));
+    return Promise.resolve(new Response(JSON.stringify({ok:true,queued:true,background:true}),{status:202,headers:{'Content-Type':'application/json'}}));
+  }
+  return mhNativeFetch(input,init);
+};
+
 function ensureLegacyTargets(){if(!$('#mapDiv')){const el=document.createElement('span');el.id='mapDiv';el.hidden=true;document.body.appendChild(el)}}
 function activateAnalysisTab(name){$$('#analysisTabs button').forEach(btn=>btn.classList.toggle('activeTab',btn.dataset.tab===name));$$('.tabPane').forEach(p=>p.classList.toggle('activePane',p.dataset.pane===name))}
 function installAnalysisTabs(){const tabs=$('#analysisTabs');if(!tabs)return;$$('#analysisTabs button').forEach(btn=>btn.type='button');tabs.addEventListener('click',e=>{const btn=e.target.closest('button[data-tab]');if(btn)activateAnalysisTab(btn.dataset.tab)})}
