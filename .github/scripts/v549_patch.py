@@ -28,7 +28,7 @@ repl="""function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   }else{
     lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*Entry:* —`,`*SL:* —`,`*TP1:* —`,`*TP2:* —`,`*Score:* —`,`*Setup:* No clear edge`);
   }
-  return lines.join('\\n');
+  return lines.join('\n');
 }"""
 s,n=re.subn(pat,lambda _m:repl,s,count=1,flags=re.S)
 if n!=1: raise SystemExit('V54.9 WhatsApp template replacement failed')
@@ -63,27 +63,21 @@ function primeTickerV549(){
 idx=s.find('async function refreshPublicTicker(){')
 if idx<0: raise SystemExit('public ticker function missing')
 s=s[:idx]+ticker_helper+s[idx:]
-# Store every successful public ticker response for instant next startup.
 needle="if(r.ok){\n      if(Number.isFinite(Number(j.gold_usd))"
 if needle not in s: raise SystemExit('public ticker success anchor missing')
 s=s.replace(needle,"if(r.ok){\n      try{localStorage.setItem('mh-public-ticker-stable',JSON.stringify(j));applyTickerCacheV549(j)}catch(e){}\n      if(Number.isFinite(Number(j.gold_usd))",1)
 
-# Run ticker before chart/history work so it is not delayed by the heavier startup path.
 startup='primeMovingTickerV547();setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();refreshPublicTicker();loadEconomicCalendarV545();'
 if startup not in s: raise SystemExit('V54.8 startup anchor missing')
 s=s.replace(startup,'primeMovingTickerV547();primeTickerV549();refreshPublicTicker();loadEconomicCalendarV545();setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();',1)
-
-# Ensure Recent Signals are painted from persisted local data at startup, before any network call.
 startup2='primeMovingTickerV547();primeTickerV549();refreshPublicTicker();loadEconomicCalendarV545();setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();'
 s=s.replace(startup2,'renderRecentSignals();'+startup2,1)
 p.write_text(s,encoding='utf-8',newline='\n')
 
 # -----------------------------------------------------------------------------
-# 2) WhatsApp background: the 2x2 container was the real regression because
-# WhatsApp renders a different DOM at that tiny size. Keep a FULL-SIZE WebView
-# clipped to a 1px edge of the parent. It stays rendered/logged-in but invisible.
-# Always navigate the exact saved Signal Link for each queued send; never depend
-# on a stale "resolved target" cache. No user tab opening and no MH Analysis wait.
+# 2) WhatsApp background: keep a FULL-SIZE renderer clipped to a 1px edge so
+# WhatsApp stays in desktop-chat layout while remaining invisible to the user.
+# Always navigate the exact saved Signal Link for every queued send.
 # -----------------------------------------------------------------------------
 p=Path('webview2_host.go')
 s=p.read_text(encoding='utf-8')
@@ -94,8 +88,6 @@ park='''func wv2ParkWhatsAppV547() {
 \tchGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
 \tw:=int32(r.R-r.L); h:=int32(r.B-r.T-int32(barH))
 \tif w<1 { w=1 }; if h<1 { h=1 }
-\t// Full-size renderer, clipped by the parent to one pixel at the far right.
-\t// This preserves WhatsApp's desktop chat DOM while remaining invisible.
 \tx:=w-1; if x<0 { x=0 }
 \tchMoveWindow.Call(wv2WhatsappContainer, uintptr(x), uintptr(barH), uintptr(w), uintptr(h), 1)
 \tchShowWindow.Call(wv2WhatsappContainer, chSWShow)
@@ -105,7 +97,6 @@ park='''func wv2ParkWhatsAppV547() {
 s,n=re.subn(pat,lambda _m:park,s,count=1,flags=re.S)
 if n!=1: raise SystemExit('WhatsApp park function replacement failed')
 
-# Always open the exact saved target in the same persistent session before sending.
 navpat=r"\twv2ParkWhatsAppV547\(\)\n\t_ = wv2Whatsapp.Show\(\)\n\twv2Whatsapp.Focus\(\)\n\tif wv2WAResolvedTarget == target \{\n\t\tpostMessage\(hostHWND, wmWhatsAppEvalV54, token, 0\)\n\t\} else \{\n\t\twv2Whatsapp.Navigate\(target\)\n\t\}"
 navnew='''\twv2ParkWhatsAppV547()
 \t_ = wv2Whatsapp.Show()
@@ -114,26 +105,13 @@ navnew='''\twv2ParkWhatsAppV547()
 s,n=re.subn(navpat,lambda _m:navnew,s,count=1)
 if n!=1: raise SystemExit('WhatsApp navigation block replacement failed')
 
-# Do not steal native focus from MH Analysis during hidden retries; JS focuses the compose box itself.
 s=s.replace('\twv2ParkWhatsAppV547()\n\t_ = wv2Whatsapp.Show()\n\twv2Whatsapp.Focus()\n\twv2Whatsapp.Eval(script)',
             '\twv2ParkWhatsAppV547()\n\t_ = wv2Whatsapp.Show()\n\twv2Whatsapp.Eval(script)',1)
-
-# If send button is temporarily absent, Enter is a safe WhatsApp compose fallback.
-old="""if(!send)return 'waiting-send';
-send.click();
-sessionStorage.setItem(sentKey,'1');
-return 'sent';"""
-new="""if(send){send.click();sessionStorage.setItem(sentKey,'1');return 'sent'}
-try{box.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}));box.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true}))}catch(e){}
-return 'waiting-send';"""
-if old not in s: raise SystemExit('WhatsApp send-button anchor missing')
-s=s.replace(old,new,1)
 p.write_text(s,encoding='utf-8',newline='\n')
 
 # -----------------------------------------------------------------------------
-# 3) Calendar: restore the public embedded calendar as immediate primary display.
-# It is independent of the user's FCS/API key. Keep local endpoint only as fallback
-# logic in code, but do not make the visible calendar wait for it.
+# 3) Calendar: public embedded calendar is immediate primary display and does
+# not depend on the user's FCS key. Local endpoint remains background fallback.
 # -----------------------------------------------------------------------------
 p=Path('web/index.html')
 s=p.read_text(encoding='utf-8')
@@ -148,7 +126,6 @@ css=p.read_text(encoding='utf-8')
 css+='''\n/* V54.9 immediate public calendar */\n#economicCalendarImmediateV549{display:block!important;width:100%!important;height:340px!important;border:0!important;background:#fff!important;transform:translateY(-30px)!important}#economicCalendarLocal{display:none!important}\n'''
 p.write_text(css,encoding='utf-8',newline='\n')
 
-# V54.9 version stamps.
 for path,pat,val in [
  ('updater.go',r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.54.9"'),
  ('license_auth.go',r'const licAppVersion = "[^"]+"','const licAppVersion = "V.54.9"')]:
@@ -159,7 +136,6 @@ Path('VERSION').write_text('V.54.9\n',encoding='ascii')
 p=Path('web/index.html'); z=p.read_text(encoding='utf-8'); z=re.sub(r'<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54.9</div>',z,count=1); p.write_text(z,encoding='utf-8',newline='\n')
 p=Path('webview2_host.go'); z=p.read_text(encoding='utf-8').replace('Version: V.54.8','Version: V.54.9'); p.write_text(z,encoding='utf-8',newline='\n')
 
-# Hard guards: fail instead of shipping the same regressions.
 a=Path('web/app.js').read_text(encoding='utf-8'); wa=Path('webview2_host.go').read_text(encoding='utf-8'); html=Path('web/index.html').read_text(encoding='utf-8')
 checks=[
  ('real newline join', "return lines.join('\\n');" in a and "return lines.join('\\\\n');" not in a),
