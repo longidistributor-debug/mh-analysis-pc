@@ -1,0 +1,108 @@
+name: Publish MH Analysis V54.8 Final Four Regressions
+
+on:
+  push:
+    branches:
+      - v54-8-final-four-regressions
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V54.8 exact fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python .github/scripts/v548_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.8 patch failed'}
+          gofmt -w webview2_host.go mt5_embed_v36.go calendar3d.go main.go updater.go license_auth.go records_mt5_local.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'V54.8 JS validation failed'}
+
+      - name: Test and build V54.8
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+
+      - name: Build and verify V54.8 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $src='installer\MH-Analysis-V54.1.iss'
+          $dst='installer\MH-Analysis-V54.8.iss'
+          (Get-Content -Raw $src).Replace('V54.1','V54.8').Replace('V.54.1','V.54.8').Replace('54.1.0.0','54.8.0.0') | Set-Content -Encoding utf8 $dst
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc $dst
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.8.exe')){throw 'Installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV548Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V54.8.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Silent installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.8.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.8.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.8-Final-Four-Regressions
+          path: |
+            dist/MH-Analysis-Setup-V54.8.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish V54.8 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v54.8 -y 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v54.8 'dist/MH-Analysis-Setup-V54.8.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.8' --notes 'Only four regressions addressed: restore original seamless moving-pairs loop; same embedded WhatsApp auto-navigates/sends in background with exact bold-label template and Re-Evaluate reason; calendar keeps cache immediately and uses reliable fetch budget; MT5 standalone window is hidden on a 2ms loop until direct embedding completes.'
+          if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
+
+      - name: Publish mandatory V54.8 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v548-update'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.54.8';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V54.8: restore ticker loop, background WhatsApp auto-send + exact template, reliable fast calendar, direct MT5 embed hide loop.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54.8'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v548_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .
+          git commit -m 'Publish MH Analysis V.54.8 final four-regression update'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}
