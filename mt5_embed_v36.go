@@ -18,9 +18,12 @@ var (
     v36CloseHandle = chKernel32.NewProc("CloseHandle")
     v36QueryFullProcessImageName = chKernel32.NewProc("QueryFullProcessImageNameW")
     v36GetParent = chUser32.NewProc("GetParent")
+    v41GetWindowRect = chUser32.NewProc("GetWindowRect")
 )
 
-// V36_MT5_NATIVE_PROCESS: broker window titles are irrelevant; identify the real terminal process.
+// V41: identify MT5 by its real process image. Do NOT reject a terminal window merely
+// because GetParent is non-zero: for top-level owned windows Win32 GetParent can return
+// the owner HWND, which was the V40 false-negative that sent the app down the wrong path.
 func v36ProcessImage(pid uint32) string {
     const processQueryLimitedInformation = 0x1000
     h, _, _ := v36OpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
@@ -35,16 +38,26 @@ func v36ProcessImage(pid uint32) string {
 
 func v36FindRunningMT5() uintptr {
     var found uintptr
+    var bestArea int64
     cb := syscall.NewCallback(func(hwnd, _ uintptr) uintptr {
         if hwnd == 0 || hwnd == hostHWND { return 1 }
-        parent, _, _ := v36GetParent.Call(hwnd)
-        if parent != 0 { return 1 }
         var pid uint32
         chGetWindowThreadPID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
         image := v36ProcessImage(pid)
-        if image == "terminal64.exe" || image == "terminal.exe" {
+        if image != "terminal64.exe" && image != "terminal.exe" { return 1 }
+
+        // EnumWindows already enumerates top-level windows. Pick the largest real terminal
+        // surface instead of an arbitrary broker splash/dialog/owned helper window.
+        var r chRect
+        ok, _, _ := v41GetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
+        if ok == 0 { return 1 }
+        w := int64(r.R - r.L)
+        h := int64(r.B - r.T)
+        if w < 300 || h < 200 { return 1 }
+        area := w * h
+        if area > bestArea {
+            bestArea = area
             found = hwnd
-            return 0
         }
         return 1
     })
@@ -52,34 +65,51 @@ func v36FindRunningMT5() uintptr {
     return found
 }
 
-// V36_VERIFIED_EMBED: never report success unless SetParent actually made MT5 a child of MH Analysis.
+// V41_VERIFIED_TRUE_CHILD: success means GetParent(MT5)==MH Analysis host, not merely
+// that MT5 was moved over the same screen coordinates.
 func v36EmbedMT5(hwnd uintptr) bool {
     if hwnd == 0 || hostHWND == 0 { return false }
+
     chShowWindow.Call(hwnd, chSWHide)
+
+    // Parent first, then normalize the terminal into a genuine child window.
+    chSetParent.Call(hwnd, hostHWND)
+    parent, _, _ := v36GetParent.Call(hwnd)
+    if parent != hostHWND { return false }
+
     style, _, _ := chGetWindowLongPtr.Call(hwnd, ^uintptr(15))
     style &^= chWSPopup | chWSCaption | chWSBorder | chWSDlgFrame | chWSThickFrame | chWSMinBox | chWSMaxBox | chWSSysMenu
     style |= chWSChild | chWSVisible
     chSetWindowLongPtr.Call(hwnd, ^uintptr(15), style)
-    chSetParent.Call(hwnd, hostHWND)
-    parent, _, _ := v36GetParent.Call(hwnd)
-    if parent != hostHWND { return false }
-    chMu.Lock(); chMT5Wnd = hwnd; chMu.Unlock()
+
+    // Force non-client recalculation after changing parent/style.
+    chSetWindowPos.Call(hwnd, 0, 0, uintptr(barH), 1, 1, chSWPNoZOrder|chSWPNoActivate|chSWPFrame)
+
+    // Verify again after style mutation. Never cache/show an external terminal as embedded.
+    parent, _, _ = v36GetParent.Call(hwnd)
+    if parent != hostHWND {
+        chShowWindow.Call(hwnd, chSWHide)
+        return false
+    }
+
+    chMu.Lock()
+    chMT5Wnd = hwnd
+    chMu.Unlock()
     chResizeChildren()
     chApplyDesiredBrowserView()
     return true
 }
 
-// chEnsureMT5TerminalV36 first attaches an already-running installed MT5 and only launches
-// a terminal when none exists. A launched terminal is hidden until verified as embedded.
 func chEnsureMT5TerminalV36() error {
-    // V39_MT5_RESHOW: if MT5 is already embedded, re-show/re-parent/resize/focus the same HWND.
+    // Re-use the exact embedded HWND on every later MT5 System click.
     chMu.Lock()
     existingEmbedded := chMT5Wnd
     chMu.Unlock()
     if existingEmbedded != 0 {
-        if v36EmbedMT5(existingEmbedded) {
-            chShowWindow.Call(existingEmbedded, chSWShow)
+        parent, _, _ := v36GetParent.Call(existingEmbedded)
+        if parent == hostHWND {
             chResizeChildren()
+            chShowWindow.Call(existingEmbedded, chSWShow)
             chFocusEmbeddedBrowser(existingEmbedded)
             go mt5ApplyLatestQueued()
             return nil
@@ -96,7 +126,7 @@ func chEnsureMT5TerminalV36() error {
     defer func(){ chMu.Lock(); chMT5StartingV34=false; chMu.Unlock() }()
 
     if hwnd := v36FindRunningMT5(); hwnd != 0 {
-        if !v36EmbedMT5(hwnd) { return errors.New("Installed MT5 was found but Windows refused to embed it inside MH Analysis") }
+        if !v36EmbedMT5(hwnd) { return errors.New("Installed MT5 was detected, but Windows did not allow it to become a child of MH Analysis") }
         go mt5ApplyLatestQueued()
         return nil
     }
@@ -115,8 +145,8 @@ func chEnsureMT5TerminalV36() error {
         if hwnd != 0 { break }
         time.Sleep(120*time.Millisecond)
     }
-    if hwnd == 0 { return errors.New("MT5 started but its main window could not be detected for embedding") }
-    if !v36EmbedMT5(hwnd) { return errors.New("MT5 started but could not be embedded inside MH Analysis") }
+    if hwnd == 0 { return errors.New("MT5 started but its main terminal window could not be detected") }
+    if !v36EmbedMT5(hwnd) { return errors.New("MT5 started, but Windows did not allow it to become a child of MH Analysis") }
     go mt5ApplyLatestQueued()
     return nil
 }
