@@ -18,58 +18,12 @@ jobs:
         with: {fetch-depth: 0}
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.2', cache: false}
-      - name: Canonicalize V36 signal fanout in source
-        shell: python
-        run: |
-          from pathlib import Path
-          p=Path('web/app.js'); s=p.read_text(encoding='utf-8')
-          # The legacy records writer shares the same JSON path with Records V2 but a different schema.
-          # Never let addRecent write through that old route in V36.
-          s=s.replace("  if(sig&&String(state).toUpperCase()==='NEW')void captureSignalRecordV796(d,state);\n", "  // V36: Records are written only by the canonical V2 fanout.\n")
-          old="""    if(d.signal&&!d._sameActiveSignal){Promise.allSettled([captureSignalRecordV30(d),sendUniqueSignalToEAV30(d),prepareMT5SignalV796(d,'NEW')]).then(()=>{});} // V34_CANONICAL_SIGNAL_FANOUT"""
-          new="""    if(d.signal&&!d._sameActiveSignal){await dispatchUniqueSignalV36(d);} // V36_CANONICAL_SIGNAL_FANOUT"""
-          if old not in s: raise SystemExit('old V34 fanout not found')
-          s=s.replace(old,new)
-          anchor="async function executeNewAnalysis(fromAuto=false){"
-          helper=r'''// V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
-          async function dispatchUniqueSignalV36(d){
-            const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
-            const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
-            const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
-            const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
-            const recordPayload={signal_id:signalId,symbol,timeframe,direction:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp1:Number(sig.tp1),tp2:Number(sig.tp2),score:Number(sig.score)||0,setup:d.bestFamily||sig.setupReason||'',action:'NEW'};
-            const rr=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recordPayload)});
-            let rj={};try{rj=await rr.json()}catch(_){}
-            if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`);
-            if(rj.duplicate||rj.same_signal){d._sameActiveSignal=true;d._sameSignalStatus=rj.existing_status||'';setAutoStatus('Same signal still active • no duplicate Record / MT5 pending','warn');return rj;}
-            const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0})});
-            let ej={};try{ej=await er.json()}catch(_){}
-            if(!er.ok)throw new Error(ej.error||`EA bridge HTTP ${er.status}`);
-            try{await prepareMT5SignalV796(d,'NEW')}catch(_){}
-            setAutoStatus(`Signal recorded • MT5 pending sent • ${pending}`,'good');
-            return {record:rj,ea:ej,signal_id:signalId};
-          }
-          '''
-          if anchor not in s: raise SystemExit('executeNewAnalysis anchor missing')
-          s=s.replace(anchor,helper+anchor,1)
-          p.write_text(s,encoding='utf-8')
-          for fn in ['updater.go','license_auth.go']:
-            q=Path(fn); t=q.read_text(encoding='utf-8'); t=t.replace('V.35','V.36'); q.write_text(t,encoding='utf-8')
-          Path('VERSION').write_text('V.36\n',encoding='utf-8')
-      - name: Persist canonical V36 source before build
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web/app.js updater.go license_auth.go VERSION
-          if(-not (git diff --cached --quiet)){ git commit -m 'V36 canonical source: deterministic records MT5 signal fanout'; git push origin HEAD:v36-direct-source-runtime-fix }
       - name: Verify V36 source invariants
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
           $wv=Get-Content -Raw webview2_host.go; $ch=Get-Content -Raw chrome_host.go; $app=Get-Content -Raw web/app.js
-          if($wv -notmatch 'V36_EMBEDDED_AUX'){throw 'embedded persistent views missing'}
+          if(($wv -notmatch 'V36_PREWARM_PERSISTENT') -and ($wv -notmatch 'V36_DIRECT_SOURCE_AUX')){throw 'persistent embedded auxiliary views missing'}
           if($wv -notmatch 'wmWhatsAppSend'){throw 'WhatsApp queue event missing from active host'}
           if($ch -notmatch 'V36_MT5_PROCESS_IMAGE'){throw 'native MT5 process embedding missing'}
           if($app -notmatch 'V36_CANONICAL_SIGNAL_FANOUT'){throw 'canonical signal fanout missing'}
@@ -106,7 +60,7 @@ jobs:
       - name: Publish V36 auto-update channel
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'; $upd=Join-Path $env:RUNNER_TEMP 'v36-update'; New-Item -ItemType Directory -Force $upd|Out-Null
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $upd=Join-Path $env:RUNNER_TEMP 'v36-update'; New-Item -ItemType Directory -Force $upd|Out-Null
           Copy-Item 'dist\MH Analysis.exe' (Join-Path $upd 'MH Analysis.exe'); $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
           $manifest=[ordered]@{version='V.36';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.36 - persistent embedded views, internal MT5, deterministic Records/WhatsApp/MT5 signal flow.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.36'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
