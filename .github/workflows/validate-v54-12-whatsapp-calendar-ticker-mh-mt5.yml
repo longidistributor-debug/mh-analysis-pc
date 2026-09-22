@@ -1,0 +1,51 @@
+name: Validate MH Analysis V54.12 Runtime Fixes
+
+on:
+  push:
+    branches:
+      - v54-12-whatsapp-calendar-ticker-mh-mt5
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V54.12 runtime fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python .github/scripts/v5412_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.12 patch failed'}
+          gofmt -w webview2_host.go mt5_embed_v36.go calendar3d.go main.go ui_cache_v5411.go updater.go license_auth.go records_mt5_local.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'V54.12 JavaScript validation failed'}
+
+      - name: Test and build
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.12-Validation
+          path: dist/MH Analysis.exe
+          if-no-files-found: error
