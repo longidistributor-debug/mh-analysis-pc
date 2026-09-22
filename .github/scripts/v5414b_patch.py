@@ -21,3 +21,16 @@ if n != 1:
 tmp = Path('.github/scripts/.v5414_runtime.py')
 tmp.write_text(patched, encoding='utf-8', newline='\n')
 runpy.run_path(str(tmp), run_name='__main__')
+
+# v5414_patch intentionally stores the native helper in a Python raw string.
+# Normalize only that generated helper block so Go receives real tabs instead of
+# literal backslash-t characters.
+go = Path('webview2_host.go')
+z = go.read_text(encoding='utf-8')
+start = z.find('func wv2WhatsAppInputHWNDV5414() uintptr {')
+end = z.find('func wv2WhatsAppAckV542(token uintptr) {', start)
+if start < 0 or end < 0:
+    raise SystemExit('V54.14 generated native WhatsApp helper block missing')
+block = z[start:end].replace('\\t', '\t')
+z = z[:start] + block + z[end:]
+go.write_text(z, encoding='utf-8', newline='\n')
