@@ -20,7 +20,7 @@ p=Path('webview2_host.go')
 s=p.read_text(encoding='utf-8')
 
 anchor='func wv2HideAll() {'
-park=r'''func wv2ParkWhatsAppV547() {
+park='''func wv2ParkWhatsAppV547() {
 \tif wv2Whatsapp == nil || wv2WhatsappContainer == 0 || hostHWND == 0 { return }
 \tvar r chRect
 \tchGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
