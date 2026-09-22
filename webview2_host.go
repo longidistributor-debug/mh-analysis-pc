@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/jchv/go-webview2/pkg/edge"
@@ -41,8 +42,89 @@ func wv2Resize() {
 		wv2Browser.Resize()
 		_ = wv2Browser.NotifyParentWindowPositionChanged()
 	}
+	for _, child := range []uintptr{chWhatsappWnd, chRecordsWnd, chMT5Wnd} {
+		if child != 0 {
+			chMoveWindow.Call(child, 0, uintptr(barH), uintptr(w), uintptr(h), 1)
+		}
+	}
+}
+
+// V.27: MH Analysis must never be navigated away from after startup. The analysis
+// WebView2 controller stays alive (including JS timers, lastDecision and auto-cycle)
+// while WhatsApp/Records are separate embedded browser children that are only
+// shown/hidden. This restores the original persistent runtime behaviour.
+func wv2SetDesiredView(which int) {
+	chViewMu.Lock()
+	chDesiredView = which
+	chViewMu.Unlock()
+}
+
+func wv2HideAuxViews() {
+	if chWhatsappWnd != 0 {
+		chShowWindowAsync.Call(chWhatsappWnd, chSWHide)
+	}
+	if chRecordsWnd != 0 {
+		chShowWindowAsync.Call(chRecordsWnd, chSWHide)
+	}
 	if chMT5Wnd != 0 {
-		chMoveWindow.Call(chMT5Wnd, 0, uintptr(barH), uintptr(w), uintptr(h), 1)
+		chShowWindowAsync.Call(chMT5Wnd, chSWHide)
+	}
+}
+
+func wv2EnsureAuxBrowser(which int) {
+	if hostHWND == 0 {
+		return
+	}
+	chMu.Lock()
+	if chStopping {
+		chMu.Unlock()
+		return
+	}
+	if which == 2 && (chWhatsappWnd != 0 || chWhatsappCmd != nil) {
+		chMu.Unlock()
+		return
+	}
+	if which == 3 && (chRecordsWnd != 0 || chRecordsCmd != nil) {
+		chMu.Unlock()
+		return
+	}
+	chMu.Unlock()
+
+	profile, target, debugPort := "", "", 0
+	if which == 2 {
+		profile, target, debugPort = "WhatsAppProfile", "https://web.whatsapp.com/", 17879
+	} else if which == 3 {
+		profile, target = "RecordsProfile", serverURL+"records.html"
+	} else {
+		return
+	}
+	cmd, wnd, err := chLaunchBrowser(profile, target, debugPort)
+	if err != nil {
+		return
+	}
+	chMu.Lock()
+	if chStopping {
+		chMu.Unlock()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		return
+	}
+	if which == 2 {
+		chWhatsappCmd, chWhatsappWnd = cmd, wnd
+	} else {
+		chRecordsCmd, chRecordsWnd = cmd, wnd
+	}
+	chAttachBrowser(wnd)
+	chShowWindowAsync.Call(wnd, chSWHide)
+	chMu.Unlock()
+	wv2Resize()
+
+	chViewMu.Lock()
+	wanted := chDesiredView
+	chViewMu.Unlock()
+	if wanted == which {
+		wv2ShowLocal(which)
 	}
 }
 
@@ -50,20 +132,39 @@ func wv2ShowLocal(which int) {
 	if wv2Browser == nil {
 		return
 	}
-	if chMT5Wnd != 0 {
-		chShowWindow.Call(chMT5Wnd, chSWHide)
+	wv2SetDesiredView(which)
+	wv2HideAuxViews()
+
+	if which == 1 {
+		chShowWindow.Call(wv2Container, chSWShow)
+		_ = wv2Browser.Show()
+		wv2Resize()
+		wv2Browser.Focus()
+		return
 	}
-	chShowWindow.Call(wv2Container, chSWShow)
-	_ = wv2Browser.Show()
-	wv2Resize()
+
+	_ = wv2Browser.Hide()
+	chShowWindow.Call(wv2Container, chSWHide)
+
 	if which == 2 {
-		wv2Browser.Navigate("https://web.whatsapp.com/")
-	} else if which == 3 {
-		wv2Browser.Navigate(serverURL + "records.html")
-	} else {
-		wv2Browser.Navigate(serverURL)
+		if chWhatsappWnd == 0 {
+			go wv2EnsureAuxBrowser(2)
+			return
+		}
+		chShowWindowAsync.Call(chWhatsappWnd, chSWShow)
+		chFocusEmbeddedBrowser(chWhatsappWnd)
+		wv2Resize()
+		return
 	}
-	wv2Browser.Focus()
+	if which == 3 {
+		if chRecordsWnd == 0 {
+			go wv2EnsureAuxBrowser(3)
+			return
+		}
+		chShowWindowAsync.Call(chRecordsWnd, chSWShow)
+		chFocusEmbeddedBrowser(chRecordsWnd)
+		wv2Resize()
+	}
 }
 
 func wv2ButtonAllowed(id int) bool {
@@ -85,6 +186,23 @@ func wv2ButtonAllowed(id int) bool {
 	return false
 }
 
+func wv2ShowMT5() {
+	wv2SetDesiredView(4)
+	_ = wv2Browser.Hide()
+	chShowWindow.Call(wv2Container, chSWHide)
+	if chWhatsappWnd != 0 {
+		chShowWindowAsync.Call(chWhatsappWnd, chSWHide)
+	}
+	if chRecordsWnd != 0 {
+		chShowWindowAsync.Call(chRecordsWnd, chSWHide)
+	}
+	go func() {
+		if err := chEnsureMT5Terminal(); err != nil {
+			messageBox(hostHWND, err.Error(), "MT5 System", 0x10)
+		}
+	}()
+}
+
 func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 	switch msg {
 	case chWMSize:
@@ -103,13 +221,7 @@ func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		case idRecords:
 			wv2ShowLocal(3)
 		case idMT5:
-			_ = wv2Browser.Hide()
-			chShowWindow.Call(wv2Container, chSWHide)
-			go func() {
-				if err := chEnsureMT5Terminal(); err != nil {
-					messageBox(hostHWND, err.Error(), "MT5 System", 0x10)
-				}
-			}()
+			wv2ShowMT5()
 		}
 		return 0
 	case wmSwitchAnalysis:
@@ -137,9 +249,7 @@ func wv2WndProc(hwnd uintptr, msg uint32, wp, lp uintptr) uintptr {
 		if wv2Browser != nil {
 			_ = wv2Browser.Hide()
 		}
-		if chMT5Wnd != 0 {
-			chShowWindow.Call(chMT5Wnd, chSWHide)
-		}
+		wv2HideAuxViews()
 		chDestroyWindow.Call(hwnd)
 		return 0
 	case chWMDestroy:
@@ -156,7 +266,7 @@ func runWebView2Host() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	inst, _, _ := chGetModuleHandle.Call(0)
-	className := chWstr("MHAnalysisWebView2HostV10")
+	className := chWstr("MHAnalysisWebView2HostV27")
 	icon, _, _ := chLoadIcon.Call(inst, 1)
 	if icon == 0 {
 		icon, _, _ = chLoadIcon.Call(0, 32512)
@@ -188,8 +298,6 @@ func runWebView2Host() {
 		chDestroyWindow.Call(hostHWND)
 		return
 	}
-	// Critical V.10 fix: Embed creates the controller but does not make it visible.
-	// Explicitly show and size the controller before navigating or exposing the host.
 	if err := b.Show(); err != nil {
 		messageBox(hostHWND, "Could not display the embedded MH Analysis view.", "MH Analysis", 0x10)
 		chDestroyWindow.Call(hostHWND)
@@ -198,10 +306,23 @@ func runWebView2Host() {
 	wv2Resize()
 	b.Navigate(serverURL)
 	b.Focus()
+	wv2SetDesiredView(1)
 	chShowWindow.Call(hostHWND, chSWMaximize)
 	chUpdateWindow.Call(hostHWND)
 	wv2Resize()
 	b.Focus()
+
+	// Keep WhatsApp CDP and Records ready in their own hidden embedded windows.
+	// They no longer replace/unload the MH Analysis page.
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		wv2EnsureAuxBrowser(2)
+	}()
+	go func() {
+		time.Sleep(1100 * time.Millisecond)
+		wv2EnsureAuxBrowser(3)
+	}()
+
 	var m chMsg
 	for {
 		r, _, _ := chGetMessage.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
