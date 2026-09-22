@@ -1,0 +1,169 @@
+name: Publish MH Analysis V54.1 Update Loop Hotfix
+
+on:
+  push:
+    branches:
+      - v54-1-update-loop-hotfix
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply locked V54 fixes plus V54.1 updater loop guard
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          from pathlib import Path
+          import re
+
+          def sub1(path, pattern, repl, flags=0, required=True):
+              p=Path(path); s=p.read_text(encoding='utf-8')
+              ns,n=re.subn(pattern,repl,s,count=1,flags=flags)
+              if required and n!=1:
+                  raise SystemExit(f'Expected one match in {path}, got {n}: {pattern}')
+              if n:
+                  p.write_text(ns,encoding='utf-8',newline='\n')
+              return n
+
+          # Keep V54 WhatsApp behavior: exactly one Signal Link in backend sender/settings.
+          sub1('main.go', r'"has_whatsapp": strings\.TrimSpace\(v\.WhatsAppLink\) != "" \|\| strings\.TrimSpace\(v\.WhatsAppLink2\) != "", "whatsapp_link": v\.WhatsAppLink, "whatsapp_link2": v\.WhatsAppLink2', '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "", "whatsapp_link": v.WhatsAppLink')
+          sub1('main.go', r'"has_whatsapp": strings\.TrimSpace\(v\.WhatsAppLink\) != "" \|\| strings\.TrimSpace\(v\.WhatsAppLink2\) != ""\}', '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != ""}')
+          sub1('main.go', r'saved := \[\]string\{strings\.TrimSpace\(v\.WhatsAppLink\), strings\.TrimSpace\(v\.WhatsAppLink2\)\}', 'saved := []string{strings.TrimSpace(v.WhatsAppLink)}')
+          sub1('main.go', r'targets := make\(\[\]string, 0, 2\)', 'targets := make([]string, 0, 1)')
+          sub1('main.go', r'Each Signal Link must be a WhatsApp group/chat link or phone number\.', 'Signal Link must be a WhatsApp group/chat link or phone number.')
+
+          # Keep WhatsApp independent from duplicate/EA/MT5 outcomes.
+          p=Path('web/app.js'); s=p.read_text(encoding='utf-8')
+          s,n=re.subn(r"\s*if\(d\?\._sameActiveSignal\)\{setAutoStatus\('Same signal still active[^\n]+?return;\}\n",'\n',s,count=1)
+          if n!=1: raise SystemExit(f'auto same-signal gate removal failed: {n}')
+          s,n=re.subn(r'if\(backendSettings\.has_whatsapp&&!d\._sameActiveSignal\)\{','if(backendSettings.has_whatsapp){',s,count=1)
+          if n!=1: raise SystemExit(f'manual WhatsApp gate replacement failed: {n}')
+          s,n=re.subn(r'if\(d\.signal&&!d\._sameActiveSignal\)\{await dispatchUniqueSignalV36\(d\);\}', "if(d.signal&&!d._sameActiveSignal){try{await dispatchUniqueSignalV36(d)}catch(e){console.warn('Record/MT5 fan-out failed; WhatsApp continues independently',e)}}", s, count=1)
+          if n!=1: raise SystemExit(f'EA independence patch failed: {n}')
+          p.write_text(s,encoding='utf-8',newline='\n')
+
+          # V54.1 version stamps. updater.go is already source-fixed with the hash loop guard.
+          sub1('updater.go', r'const mhPublicVersionV001 = "[^"]+"', 'const mhPublicVersionV001 = "V.54.1"')
+          sub1('license_auth.go', r'const licAppVersion = "[^"]+"', 'const licAppVersion = "V.54.1"')
+          Path('VERSION').write_text('V.54.1\n',encoding='ascii')
+          p=Path('web/index.html'); s=p.read_text(encoding='utf-8')
+          s=re.sub(r'<div class="version">[^<]*</div>','<div class="version">V.54.1 AUTO CYCLE (HAMMAD & SOMI)</div>',s,count=1)
+          s=re.sub(r'<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54.1</div>',s,count=1)
+          p.write_text(s,encoding='utf-8',newline='\n')
+          '@ | Set-Content -Encoding utf8 .v541_patch.py
+          python .v541_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.1 source patch failed'}
+
+          gofmt -w main.go native_settings.go webview2_host.go mt5_embed_v36.go updater.go license_auth.go
+          node --check web/app.js
+          node --check web/v03.js
+          if($LASTEXITCODE -ne 0){throw 'V54.1 JS validation failed'}
+
+          $u=Get-Content -Raw updater.go
+          if($u -notmatch 'const mhPublicVersionV001 = "V\.54\.1"'){throw 'V54.1 updater version stamp missing'}
+          if($u -notmatch 'mhManifestMatchesCurrentExecutableV001'){throw 'Running EXE hash loop guard missing'}
+          if($u -notmatch 'binaryCurrent := mhManifestMatchesCurrentExecutableV001'){throw 'Update status hash guard missing'}
+          if($u -notmatch 'mhManifestMatchesCurrentExecutableV001\(m\) \|\| !m\.Mandatory'){throw 'Update start hash guard missing'}
+
+          $wa=Get-Content -Raw webview2_host.go
+          if($wa -notmatch 'wmWhatsAppEvalV54'){throw 'V54 WhatsApp UI-thread bridge missing'}
+          if($wa -notmatch 'WhatsAppWebView2'){throw 'Persistent embedded WhatsApp session missing'}
+          if($wa -notmatch 'opening-group-same-view'){throw 'Same-view group navigation missing'}
+          if($wa -match 'time\.AfterFunc\([^\n]*wv2Whatsapp\.Eval'){throw 'Cross-thread WhatsApp Eval regression'}
+
+          $mt=Get-Content -Raw mt5_embed_v36.go
+          if($mt -notmatch 'v54EmbedMT5WithRetry'){throw 'MT5 first-click retry regression'}
+
+          $m=Get-Content -Raw main.go
+          if($m -notmatch 'saved := \[\]string\{strings\.TrimSpace\(v\.WhatsAppLink\)\}'){throw 'Sender is not locked to one Signal Link'}
+
+          $a=Get-Content -Raw web/app.js
+          if($a -match "Same signal still active • no new signal sent"){throw 'WhatsApp duplicate gate regression'}
+          if($a -match 'backendSettings\.has_whatsapp&&!d\._sameActiveSignal'){throw 'Manual WhatsApp duplicate gate regression'}
+          if($a -notmatch 'WhatsApp continues independently'){throw 'EA-independent WhatsApp behavior missing'}
+
+      - name: Build and test V54.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+
+      - name: Build and verify V54.1 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc 'installer\MH-Analysis-V54.1.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.1.exe')){throw 'Installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV541Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V54.1.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'Silent installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.1.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.1.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.1-Hotfix
+          path: |
+            dist/MH-Analysis-Setup-V54.1.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish V54.1 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v54.1 -y 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v54.1 'dist/MH-Analysis-Setup-V54.1.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.1' --notes 'V.54.1 fixes the mandatory updater loop with a running-EXE SHA256 identity guard while preserving the V.54 WhatsApp same-session background group send, one Signal Link, EA-independent WhatsApp dispatch, and MT5 first-click auto-retry.'
+          if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
+
+      - name: Publish mandatory V54.1 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v541-update'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.54.1';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MH Analysis V.54.1 - permanent update-loop guard by running EXE SHA256; preserves V.54 WhatsApp/MT5 fixes.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54.1'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v541_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .
+          git commit -m 'Publish MH Analysis V.54.1 mandatory update loop hotfix'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}
