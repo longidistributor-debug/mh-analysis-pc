@@ -1,0 +1,135 @@
+name: Publish MH Analysis V54.2 Confirmed WhatsApp Send
+
+on:
+  push:
+    branches:
+      - v54-2-whatsapp-confirmed-send
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply confirmed same-session WhatsApp sender
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          from pathlib import Path
+          import re
+          p=Path('webview2_host.go')
+          s=p.read_text(encoding='utf-8')
+
+          s=s.replace('wmWhatsAppNextV54          = 0x8F55','wmWhatsAppNextV54          = 0x8F55\n\twmWhatsAppAckV542          = 0x8F56')
+          s=s.replace('wv2WAProcessing        bool\n)', 'wv2WAProcessing        bool\n\twv2WALastAckToken      uintptr\n\twv2WALastAckStatus     string\n)')
+
+          old='''\tb := edge.NewChromium()\n\tb.DataPath = data\n\tif !b.Embed(*c)'''
+          new='''\tb := edge.NewChromium()\n\tb.DataPath = data\n\tif which == 2 {\n\t\tb.MessageCallback = func(m string) {\n\t\t\tif !strings.HasPrefix(m, "MHWA|") { return }\n\t\t\tparts := strings.SplitN(m, "|", 3)\n\t\t\tif len(parts) != 3 { return }\n\t\t\tvar tok uintptr\n\t\t\tfor _, ch := range parts[1] {\n\t\t\t\tif ch < '0' || ch > '9' { return }\n\t\t\t\ttok = tok*10 + uintptr(ch-'0')\n\t\t\t}\n\t\t\twv2WALastAckToken = tok\n\t\t\twv2WALastAckStatus = parts[2]\n\t\t\tpostMessage(hostHWND, wmWhatsAppAckV542, tok, 0)\n\t\t}\n\t\tb.NavigationCompletedCallback = func(_ *edge.ICoreWebView2, _ *edge.ICoreWebView2NavigationCompletedEventArgs) {\n\t\t\tif wv2WAProcessing && wv2WAActiveToken != 0 {\n\t\t\t\tpostMessage(hostHWND, wmWhatsAppEvalV54, wv2WAActiveToken, 0)\n\t\t\t}\n\t\t}\n\t}\n\tif !b.Embed(*c)'''
+          if old not in s: raise SystemExit('WhatsApp Chromium creation anchor not found')
+          s=s.replace(old,new,1)
+
+          start=s.index('\tscript := fmt.Sprintf(`(()=>{', s.index('func wv2EvalWhatsAppV54'))
+          end=s.index('\twv2Whatsapp.Eval(script)', start)
+          end2=end+len('\twv2Whatsapp.Eval(script)')
+          replacement=r'''\tscript := fmt.Sprintf(`(()=>{\nconst msg=%s,isGroup=%s,token=%d;\nconst ack=(st)=>{try{window.external.invoke('MHWA|'+token+'|'+st)}catch(e){};return st};\nconst sentKey='mh-v542-sent-'+token;\nif(sessionStorage.getItem(sentKey)==='1')return ack('sent');\nconst host=(location.hostname||'').toLowerCase();\ntry{window.open=(u)=>{if(u)location.assign(String(u));return window}}catch(e){}\nif(isGroup&&host!=='web.whatsapp.com'){\n  const nodes=[...document.querySelectorAll('a,button,[role="button"]')];\n  const preferred=nodes.find(el=>{\n    const txt=((el.innerText||el.textContent||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();\n    const href=(el.href||el.getAttribute('href')||'').toLowerCase();\n    return /continue to chat|open chat|use whatsapp web|whatsapp web|continue|join chat/.test(txt)||href.includes('web.whatsapp.com');\n  });\n  if(preferred){\n    const a=preferred.tagName==='A'?preferred:preferred.closest('a');\n    const href=(a&&a.href)||preferred.href||preferred.getAttribute('href');\n    if(a){a.target='_self';a.removeAttribute('target')}\n    if(preferred.removeAttribute)preferred.removeAttribute('target');\n    ack('opening-group-same-view');\n    if(href&&/^https?:/i.test(href)){location.assign(href);return 'opening-group-same-view'}\n    preferred.click();return 'opening-group-same-view';\n  }\n  return ack('waiting-group-link');\n}\nif(host!=='web.whatsapp.com')return ack('waiting-whatsapp');\nconst box=document.querySelector('footer [contenteditable="true"][role="textbox"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('footer div[role="textbox"]');\nif(!box)return ack('waiting-chat');\nbox.focus();\nconst current=(box.innerText||box.textContent||'').trim();\nif(current!==msg.trim()){\n  try{document.execCommand('selectAll',false,null)}catch(e){}\n  let inserted=false;\n  try{inserted=document.execCommand('insertText',false,msg)}catch(e){}\n  if(!inserted){box.textContent=msg}\n  try{box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:msg}))}catch(e){box.dispatchEvent(new Event('input',{bubbles:true}))}\n}\nconst send=document.querySelector('footer [data-icon="send"]')?.closest('button,[role="button"]')||document.querySelector('button[aria-label="Send"]')||document.querySelector('[aria-label="Send"][role="button"]')||document.querySelector('[data-testid="compose-btn-send"]');\nif(!send)return ack('waiting-send');\nsend.click();\nsessionStorage.setItem(sentKey,'1');\nreturn ack('sent');\n})()`, string(msgJSON), string(groupJSON), token)\n\twv2Whatsapp.Eval(script)'''
+          s=s[:start]+replacement+s[end2:]
+
+          anchor='''func wv2FinishWhatsAppV54(token uintptr) {'''
+          ackfn='''func wv2WhatsAppAckV542(token uintptr) {\n\tif token == 0 || token != wv2WAActiveToken || token != wv2WALastAckToken { return }\n\tif wv2WALastAckStatus == "sent" {\n\t\twv2FinishWhatsAppV54(token)\n\t}\n}\n\n'''
+          if anchor not in s: raise SystemExit('finish anchor not found')
+          s=s.replace(anchor,ackfn+anchor,1)
+          s=s.replace('''\tcase wmWhatsAppNextV54:\n\t\twv2FinishWhatsAppV54(wp); return 0''','''\tcase wmWhatsAppNextV54:\n\t\twv2FinishWhatsAppV54(wp); return 0\n\tcase wmWhatsAppAckV542:\n\t\twv2WhatsAppAckV542(wp); return 0''',1)
+
+          p.write_text(s,encoding='utf-8',newline='\n')
+
+          # V54.2 version stamps; preserve updater hash-loop guard and all V54.1 fixes.
+          for path,pat,repl in [
+              ('updater.go',r'const mhPublicVersionV001 = "[^"]+"','const mhPublicVersionV001 = "V.54.2"'),
+              ('license_auth.go',r'const licAppVersion = "[^"]+"','const licAppVersion = "V.54.2"')]:
+              q=Path(path); z=q.read_text(encoding='utf-8'); z,n=re.subn(pat,repl,z,count=1); 
+              if n!=1: raise SystemExit(f'version stamp failed {path}')
+              q.write_text(z,encoding='utf-8',newline='\n')
+          Path('VERSION').write_text('V.54.2\n',encoding='ascii')
+          q=Path('web/index.html'); z=q.read_text(encoding='utf-8'); z=re.sub(r'<div class="version">[^<]*</div>','<div class="version">V.54.2 AUTO CYCLE (HAMMAD & SOMI)</div>',z,count=1); z=re.sub(r'<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>','<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54.2</div>',z,count=1); q.write_text(z,encoding='utf-8',newline='\n')
+          '@ | Set-Content -Encoding utf8 .v542_patch.py
+          python .v542_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V54.2 WhatsApp patch failed'}
+          gofmt -w webview2_host.go updater.go license_auth.go
+
+          $wa=Get-Content -Raw webview2_host.go
+          if($wa -notmatch 'MessageCallback'){throw 'WhatsApp acknowledgement callback missing'}
+          if($wa -notmatch 'NavigationCompletedCallback'){throw 'Navigation-complete trigger missing'}
+          if($wa -notmatch "MHWA\|"){throw 'WhatsApp JS acknowledgement missing'}
+          if($wa -notmatch 'wv2WALastAckStatus == "sent"'){throw 'Confirmed-send completion guard missing'}
+          if($wa -notmatch 'WhatsAppWebView2'){throw 'Persistent same-session WhatsApp profile missing'}
+          if($wa -match 'NewChromium\(\).*NewChromium\(\)'){throw 'Unexpected extra WhatsApp Chromium creation'}
+
+      - name: Test and build V54.2
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0){throw 'Windows build failed'}
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $src='installer\MH-Analysis-V54.1.iss'
+          $dst='installer\MH-Analysis-V54.2.iss'
+          (Get-Content -Raw $src).Replace('V54.1','V54.2').Replace('V.54.1','V.54.2') | Set-Content -Encoding utf8 $dst
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}
+          & $iscc $dst
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.2.exe')){throw 'Installer build failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.2.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.2.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54.2-Confirmed-WhatsApp
+          path: |
+            dist/MH-Analysis-Setup-V54.2.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+
+      - name: Publish V54.2 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v54.2 -y 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'
+          gh release create v54.2 'dist/MH-Analysis-Setup-V54.2.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54.2' --notes 'Same logged-in embedded WhatsApp session only. Background group-link navigation now re-evaluates on NavigationCompleted and only marks a WhatsApp task complete after the embedded WhatsApp page acknowledges that Send was clicked. Preserves V54.1 updater-loop fix and MT5 retry.'
+          if($LASTEXITCODE -ne 0){throw 'Release publish failed'}
+
+      - name: Publish mandatory V54.2 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v542-update'; New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{version='V.54.2';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V54.2 confirmed same-session background WhatsApp send; preserves V54.1 fixes.'} | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54.2'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v542_update; git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'; Copy-Item (Join-Path $tmp 'update.json') '.\update.json'; Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .; git commit -m 'Publish MH Analysis V.54.2 confirmed WhatsApp sender'; git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}
