@@ -1,0 +1,55 @@
+name: Publish MH Analysis V35 Runtime Fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [v35-runtime-navigation-fix]
+    paths: ['scripts/v35_runtime_fix.py','.github/workflows/publish-v35.yml']
+permissions:
+  contents: write
+concurrency:
+  group: mh-analysis-v35-release
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Apply V35 directly to canonical V34 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v35_runtime_fix.py
+          gofmt -w webview2_host.go chrome_host.go updater.go license_auth.go
+      - name: Verify retained behavior and V35 runtime architecture
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $wv=Get-Content -Raw webview2_host.go; $ch=Get-Content -Raw chrome_host.go; $app=Get-Content -Raw web/app.js; $main=Get-Content -Raw main.go
+          if($wv -notmatch 'V35_PREWARM_AUX'){throw 'persistent aux prewarm missing'}
+          if($ch -notmatch 'V35_MT5_PROCESS_IMAGE'){throw 'native MT5 process detection missing'}
+          if($ch -match 'Get-Process -Id'){throw 'PowerShell polling regression'}
+          if($ch -notmatch 'V34_SINGLE_FLIGHT_MT5'){throw 'MT5 single-flight regressed'}
+          if($app -notmatch 'V34_CANONICAL_SIGNAL_FANOUT'){throw 'signal fanout regressed'}
+          if($main -notmatch 'V34_WA_RETRY'){throw 'WhatsApp delivery retry regressed'}
+          if((Get-Content -Raw updater.go) -notmatch 'V\.35'){throw 'updater version mismatch'}
+          if((Get-Content -Raw license_auth.go) -notmatch 'V\.35'){throw 'license version mismatch'}
+          node --check web/app.js; node --check web/records.js; go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V35 tests failed'}
+      - name: Build V35 EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'; go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0){throw 'EXE build failed'}
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=35.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V35'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V35.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V35.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V35.exe')){throw 'installer failed'}
+      - name: Publish V35
+        shell: powershell
+        env: {GH_TOKEN: '${{ github.token }}'}
+        run: |
+          $ErrorActionPreference='Continue'; gh release delete v35 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v35 'dist/MH-Analysis-Setup-V35.exe' 'dist/MH Analysis.exe' --target '${{ github.sha }}' --title 'MH Analysis V.35' --notes 'Runtime navigation fix: auxiliary views are pre-created for deterministic first-click switching; MT5 is detected natively by terminal64.exe process image before any launch; retained V34 signal fanout and WhatsApp retry.'
