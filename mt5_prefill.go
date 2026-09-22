@@ -10,11 +10,12 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf16"
 )
 
-// MH_NATIVE_MT5_PREFILL_V796
+// MH_NATIVE_MT5_PREFILL_V27
 // This bridge only prepares the native MT5 pending-order ticket. It deliberately
 // stops before the final Place/Submit action so the user reviews the order in MT5.
 type mt5OrderPrep struct {
@@ -88,8 +89,6 @@ func mt5PrepareHandler(w http.ResponseWriter, r *http.Request) {
 	mt5PrepQueued = true
 	mt5PrepMu.Unlock()
 
-	// If the user is already on the MT5 tab, prepare immediately. Otherwise keep
-	// the latest NEW ANALYZE signal queued and apply it when MT5 System is opened.
 	if mt5ReadyAndVisible() {
 		go mt5ApplyLatestQueued()
 	}
@@ -126,8 +125,6 @@ func mt5ReadyAndVisible() bool {
 	return wnd != 0 && cmd != nil && cmd.Process != nil && view == 4
 }
 
-// Called by the MT5 tab after the native terminal is embedded, and by the NEW
-// ANALYZE endpoint when the MT5 tab is already visible.
 func mt5ApplyLatestQueued() {
 	mt5AutomationMu.Lock()
 	defer mt5AutomationMu.Unlock()
@@ -150,7 +147,6 @@ func mt5ApplyLatestQueued() {
 	if err != nil {
 		mt5LastPrep.Status = "MT5 PREFILL WAITING"
 		mt5LastPrep.Error = err.Error()
-		// Keep it queued so clicking MT5 System again can retry safely.
 		mt5PrepQueued = true
 		return
 	}
@@ -253,7 +249,6 @@ $hwnd=[IntPtr]([long]$env:MH_MT5_HWND)
 [MHMT5U32]::ShowWindow($hwnd,5) | Out-Null
 [MHMT5U32]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Milliseconds 180
-# F9 opens MT5's native New Order ticket. No submit key/button is ever invoked.
 [MHMT5U32]::PostMessage($hwnd,0x0100,[UIntPtr]0x78,[IntPtr]0) | Out-Null
 [MHMT5U32]::PostMessage($hwnd,0x0101,[UIntPtr]0x78,[IntPtr]0) | Out-Null
 
@@ -276,8 +271,6 @@ for($try=0;$try -lt 35 -and $null -eq $dialog;$try++){
 if($null -eq $dialog){ Out-Result $false 'ORDER TICKET NOT FOUND' 'MT5 did not expose the native order dialog'; exit 0 }
 try{$dialog.SetFocus()}catch{}
 
-# Verify the order ticket is on the same asset family. Broker suffixes such as
-# BTCUSDm / XAUUSD.a are accepted; a different asset is not modified.
 $family = if(([string]$p.symbol).ToUpperInvariant().StartsWith('BTC')){'BTC'}else{'XAU|GOLD'}
 $parts=New-Object System.Collections.Generic.List[string]
 $parts.Add((N $dialog))
@@ -304,12 +297,13 @@ if(-not ($okEntry -and $okSL -and $okTP)){
   Out-Result $false 'PARTIAL MT5 PREFILL' ("Entry="+$okEntry+", SL="+$okSL+", TP="+$okTP); exit 0
 }
 
-# Deliberately stop here. The Place button remains untouched for user review.
 Out-Result $true 'READY FOR USER CONFIRMATION' ("$($p.pending_type) • Entry $($p.entry) • SL $($p.sl) • TP1 $($p.tp1)")
 `
 
 	enc := encodePowerShellCommand(ps)
-	psCmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc)
+	psCmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-EncodedCommand", enc)
+	// V.27: prevent both powershell.exe and its console host from flashing on every MT5 click.
+	psCmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	psCmd.Env = append(os.Environ(),
 		"MH_MT5_PREFILL="+payload64,
 		"MH_MT5_PID="+strconv.Itoa(cmd.Process.Pid),
