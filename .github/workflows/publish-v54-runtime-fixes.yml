@@ -1,0 +1,179 @@
+name: Publish MH Analysis V54 Runtime Fixes
+
+on:
+  push:
+    branches:
+      - v54-runtime-fixes
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Finalize V54 source and verify guards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          @'
+          from pathlib import Path
+
+          def replace_required(path, old, new, count=None):
+              p=Path(path)
+              s=p.read_text(encoding='utf-8')
+              n=s.count(old)
+              if n == 0:
+                  raise SystemExit(f'missing required pattern in {path}: {old[:120]}')
+              if count is not None and n != count:
+                  raise SystemExit(f'unexpected pattern count in {path}: {n}, expected {count}')
+              p.write_text(s.replace(old,new), encoding='utf-8', newline='\n')
+
+          # One Signal Link only in backend dispatch/settings exposure.
+          replace_required('main.go',
+              '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "" || strings.TrimSpace(v.WhatsAppLink2) != "", "whatsapp_link": v.WhatsAppLink, "whatsapp_link2": v.WhatsAppLink2',
+              '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "", "whatsapp_link": v.WhatsAppLink', 1)
+          replace_required('main.go',
+              '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != "" || strings.TrimSpace(v.WhatsAppLink2) != ""',
+              '"has_whatsapp": strings.TrimSpace(v.WhatsAppLink) != ""', 1)
+          replace_required('main.go',
+              'saved := []string{strings.TrimSpace(v.WhatsAppLink), strings.TrimSpace(v.WhatsAppLink2)}',
+              'saved := []string{strings.TrimSpace(v.WhatsAppLink)}', 1)
+          replace_required('main.go', 'targets := make([]string, 0, 2)', 'targets := make([]string, 0, 1)', 1)
+          replace_required('main.go', 'Each Signal Link must be a WhatsApp group/chat link or phone number.', 'Signal Link must be a WhatsApp group/chat link or phone number.', 1)
+
+          # WhatsApp is independent: SAME active signal can still publish status on NEW/RE-EVALUATE.
+          replace_required('web/app.js',
+              "  if(d?._sameActiveSignal){setAutoStatus('Same signal still active • no new signal sent','warn');scheduleFixedAfterDecision(d,action,triggerAt);return;}\n",
+              '', 1)
+          replace_required('web/app.js',
+              'if(backendSettings.has_whatsapp&&!d._sameActiveSignal){',
+              'if(backendSettings.has_whatsapp){', 1)
+
+          # Version stamp.
+          replace_required('updater.go', 'const mhPublicVersionV001 = "V.45"', 'const mhPublicVersionV001 = "V.54"', 1)
+          replace_required('license_auth.go', 'const licAppVersion = "V.39"', 'const licAppVersion = "V.54"', 1)
+          Path('VERSION').write_text('V.54\n', encoding='ascii')
+
+          idx=Path('web/index.html')
+          s=idx.read_text(encoding='utf-8')
+          import re
+          s=re.sub(r'<div class="version">[^<]*</div>', '<div class="version">V.54 AUTO CYCLE (HAMMAD & SOMI)</div>', s, count=1)
+          s=re.sub(r'<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">[^<]*</div>', '<div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54</div>', s, count=1)
+          idx.write_text(s, encoding='utf-8', newline='\n')
+          '@ | Set-Content -Encoding utf8 .v54_finalize.py
+          python .v54_finalize.py
+
+          gofmt -w main.go native_settings.go webview2_host.go mt5_embed_v36.go updater.go license_auth.go
+          node --check web/app.js
+          node --check web/v03.js
+
+          $wa=Get-Content -Raw webview2_host.go
+          if($wa -notmatch 'wmWhatsAppEvalV54'){throw 'V54 WhatsApp UI-thread message bridge missing'}
+          if($wa -notmatch 'opening-group-same-view'){throw 'V54 same-view group navigation missing'}
+          if($wa -match 'time\.AfterFunc\([^\n]*wv2Whatsapp\.Eval'){throw 'Cross-thread WhatsApp Eval still present'}
+          if($wa -notmatch 'WhatsAppWebView2'){throw 'Persistent embedded WhatsApp profile missing'}
+          if($wa -match 'wv2ShowLocal\(2\).*wmWhatsAppSend'){throw 'Background sender must not force WhatsApp foreground'}
+
+          $ns=Get-Content -Raw native_settings.go
+          if($ns -match 'Signal Link / Number 2'){throw 'Second Signal Link UI still present'}
+          if($ns -notmatch 'cfg\.WhatsAppLink2 = ""'){throw 'Legacy second Signal Link is not cleared on save'}
+
+          $m=Get-Content -Raw main.go
+          if($m -notmatch 'saved := \[\]string\{strings\.TrimSpace\(v\.WhatsAppLink\)\}'){throw 'WhatsApp sender is not locked to one saved Signal Link'}
+
+          $mt=Get-Content -Raw mt5_embed_v36.go
+          if($mt -notmatch 'v54EmbedMT5WithRetry'){throw 'MT5 first-click retry fix missing'}
+
+      - name: Test and build Windows V54
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'V54 Go tests failed'}
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $env:GOOS='windows'
+          $env:GOARCH='amd64'
+          $env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V54 Windows build failed'}
+
+      - name: Build and verify V54 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){
+            choco install innosetup --no-progress -y
+          }
+          & $iscc 'installer\MH-Analysis-V54.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V54.exe')){throw 'V54 installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV54Verify'
+          $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V54.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V54 silent installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V54.exe' -Algorithm SHA256).Hash.ToLower()
+          "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V54.exe" | Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+
+      - name: Upload V54 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V54-Installer
+          path: |
+            dist/MH-Analysis-Setup-V54.exe
+            dist/MH Analysis.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub V54 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release view v54 *> $null
+          if($LASTEXITCODE -eq 0){gh release delete v54 -y}
+          $global:LASTEXITCODE=0
+          gh release create v54 'dist/MH-Analysis-Setup-V54.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target '${{ github.sha }}' --title 'MH Analysis V.54' --notes 'V.54 fixes MT5 first-click embedding with automatic retry and fixes WhatsApp signal dispatch to use the same logged-in embedded WhatsApp session in the background without blocking MH Analysis. One Signal Link only. WhatsApp dispatch is independent from EA acceptance.'
+          if($LASTEXITCODE -ne 0){throw 'V54 GitHub release publish failed'}
+
+      - name: Publish mandatory V54 updater manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $tmp=Join-Path $env:RUNNER_TEMP 'v54-update-channel'
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
+          $manifest=[ordered]@{
+            version='V.54'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes='MH Analysis V.54 - same logged-in embedded WhatsApp background group-link sending; no MH Analysis UI blocking; one Signal Link; MT5 first-click auto-retry.'
+          } | ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.54'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v54_update
+          git rm -rf . 2>$null
+          Get-ChildItem -Force | Where-Object {$_.Name -ne '.git'} | Remove-Item -Recurse -Force
+          Copy-Item (Join-Path $tmp 'MH Analysis.exe') '.\MH Analysis.exe'
+          Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
+          Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
+          git add .
+          git commit -m 'Publish MH Analysis V.54 mandatory update'
+          git push --force origin HEAD:mh-analysis-update-channel
+          if($LASTEXITCODE -ne 0){throw 'V54 updater manifest publish failed'}
