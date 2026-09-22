@@ -27,6 +27,18 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          @'
+          from pathlib import Path
+          p=Path('.github/scripts/v545_patch.py')
+          s=p.read_text(encoding='utf-8')
+          bad="""# Robustly declare label/font anywhere inside the var block after V54.3 adds its own vars.\nif 'wv2VersionLabel' not in s:\n    raise SystemExit('unexpected precheck')\n# References may already exist after later replacements, so inspect declaration specifically.\n"""
+          good="""# Robustly declare label/font anywhere inside the var block after V54.3 adds its own vars.\n# References may already exist after later replacements, so inspect declaration specifically.\n"""
+          if bad not in s:
+              raise SystemExit('V54.5 inherited precheck anchor missing')
+          p.write_text(s.replace(bad,good,1),encoding='utf-8',newline='\n')
+          '@ | Set-Content -Encoding utf8 .fix_v545_precheck.py
+          python .fix_v545_precheck.py
+          if($LASTEXITCODE -ne 0){throw 'V54.5 inherited precheck fix failed'}
           python .github/scripts/v546_patch.py
           if($LASTEXITCODE -ne 0){throw 'V54.6 patch failed'}
           gofmt -w webview2_host.go mt5_embed_v36.go calendar3d.go main.go updater.go license_auth.go records_mt5_local.go
