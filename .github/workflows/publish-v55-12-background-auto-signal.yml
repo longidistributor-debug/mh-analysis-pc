@@ -1,0 +1,142 @@
+name: Publish MH Analysis V.55.12 Background Auto Signal
+
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'vercel-auth/trigger-v5512'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply only background automation fix and V.55.12 version
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('chrome_host.go')
+          s=p.read_text(encoding='utf-8')
+          anchor='\t\t"--disable-background-mode",\n'
+          add='\t\t"--disable-background-mode",\n\t\t"--disable-background-timer-throttling",\n\t\t"--disable-renderer-backgrounding",\n\t\t"--disable-backgrounding-occluded-windows",\n'
+          if anchor not in s:
+              raise SystemExit('browser background anchor missing')
+          if '--disable-background-timer-throttling' not in s:
+              s=s.replace(anchor,add,1)
+          p.write_text(s,encoding='utf-8')
+          Path('VERSION').write_text('V.55.12\n',encoding='utf-8')
+          for fn in ['updater.go','license_auth.go','web/index.html']:
+              q=Path(fn); t=q.read_text(encoding='utf-8')
+              if 'V.55.11' not in t:
+                  raise SystemExit(f'version anchor missing in {fn}')
+              q.write_text(t.replace('V.55.11','V.55.12'),encoding='utf-8')
+
+      - name: Verify only requested background behavior
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.55.12'){throw 'VERSION mismatch'}
+          $c=Get-Content -Raw chrome_host.go
+          foreach($m in @('--disable-background-timer-throttling','--disable-renderer-backgrounding','--disable-backgrounding-occluded-windows')){if(-not $c.Contains($m)){throw "background flag missing: $m"}}
+          $u=Get-Content -Raw updater.go
+          $l=Get-Content -Raw license_auth.go
+          if(-not $u.Contains('mhPublicVersionV001 = "V.55.12"')){throw 'updater mismatch'}
+          if(-not $l.Contains('licAppVersion = "V.55.12"')){throw 'license mismatch'}
+          node --check web/app.js
+          gofmt -w chrome_host.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'tests failed'}
+
+      - name: Commit isolated V.55.12 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add chrome_host.go VERSION updater.go license_auth.go web/index.html
+          git commit -m 'V.55.12 keep auto signal active while minimized or background' || true
+          git pull --rebase origin records-mt5-local-build
+          git push origin HEAD:records-mt5-local-build
+
+      - name: Build EXE and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          printf 'V.55.12\n' > dist/VERSION
+          cat > dist/update.json <<EOF
+          {"version":"V.55.12","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.12 keeps MH Analysis auto-signal timers running while the app is minimized, covered, or in the background so signals are sent at their scheduled time instead of accumulating and sending when the app returns to the foreground. No analysis, trade, EA, MT5, WhatsApp message format, or other behavior is changed."}
+          EOF
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}
+          if(-not(Test-Path $iscc)){throw 'ISCC unavailable'}
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          New-Item -ItemType Directory -Force dist-installer|Out-Null
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.12' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.12' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'ISCC failed'}
+          if(-not(Test-Path 'dist-installer\MH-Analysis-Setup-V.55.12.exe')){throw 'installer missing'}
+
+      - name: Package
+        shell: powershell
+        run: Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.12.exe' -DestinationPath 'dist\MH-Analysis-V.55.12.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.12
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.12.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.12.exe
+          if-no-files-found: error
+
+      - name: Publish mandatory updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.12.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.12.exe"
+          git checkout --orphan __v5512
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/update.json" update.json
+          cp "$RUNNER_TEMP/VERSION" VERSION
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.12.exe" './MH-Analysis-Setup-V.55.12.exe'
+          git add .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'MH Analysis V.55.12 background auto-signal release'
+          git push --force origin HEAD:mh-analysis-update-channel
