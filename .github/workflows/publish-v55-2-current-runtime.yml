@@ -1,0 +1,139 @@
+name: Publish MH Analysis V.55.2 Current Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'vercel-auth/trigger-v552'
+      - '.github/workflows/publish-v55-2-current-runtime.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v552-current-runtime
+  cancel-in-progress: true
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Validate current V.55.2 source without legacy patch replay
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.55.2'){ throw 'VERSION must be V.55.2' }
+          $updater=Get-Content -Raw updater.go
+          $license=Get-Content -Raw license_auth.go
+          $index=Get-Content -Raw web/index.html
+          $app=Get-Content -Raw web/app.js
+          $runtime=Get-Content -Raw web/runtime-fixes.js
+          if(-not $updater.Contains('const mhPublicVersionV001 = "V.55.2"')){ throw 'Updater runtime version mismatch' }
+          if(-not $license.Contains('licAppVersion = "V.55.2"')){ throw 'License runtime version mismatch' }
+          if(-not $index.Contains('id="lotSizeToggle"')){ throw 'Left Lot Size control missing' }
+          if(-not $index.Contains('id="partialTpToggle"')){ throw 'Left Partial TP control missing' }
+          if($runtime.Contains('mhLotSizeToggle') -or $runtime.Contains('mhPartialTPToggle')){ throw 'Duplicate right-side trade controls still present' }
+          foreach($m in @('lotSizeEnabled','partialTpEnabled','lotForSignalScore','fixedPhaseInfo','nextFixedAutoEvent')){
+            if(-not $app.Contains($m)){ throw "Runtime control regression: $m" }
+          }
+          node --check web/app.js
+          node --check web/runtime-fixes.js
+          node --check web/records.js
+          node --check web/auth.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){ throw 'Go tests failed' }
+
+      - name: Build Windows x64 V.55.2 EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          gofmt -w main.go chrome_host.go records.go records_mt5_local.go ea_signal_bridge.go license_auth.go license_support_external.go dpi_windows.go updater.go
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {
+            "version": "V.55.2",
+            "mandatory": true,
+            "download_url": "https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe",
+            "sha256": "$HASH",
+            "notes": "MH Analysis V.55.2 keeps the existing runtime working and removes the duplicate right-side Lot Size and Partial TP controls so the left-side controls are the single authoritative controls."
+          }
+          EOF
+          printf 'V.55.2\n' > dist/VERSION
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not (Test-Path $iscc)){ choco install innosetup -y --no-progress }
+          if(-not (Test-Path $iscc)){ throw 'Inno Setup compiler unavailable' }
+
+      - name: Build V.55.2 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          New-Item -ItemType Directory -Force -Path dist-installer | Out-Null
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path 'dist-installer').Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.2' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.2' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){ throw "ISCC failed $LASTEXITCODE" }
+          $setup=Join-Path $out 'MH-Analysis-Setup-V.55.2.exe'
+          if(-not (Test-Path $setup)){ throw 'V.55.2 installer output missing' }
+          Get-FileHash $setup -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower()) *MH-Analysis-Setup-V.55.2.exe" } | Add-Content -Encoding ascii dist\SHA256SUMS.txt
+
+      - name: Package V.55.2
+        shell: powershell
+        run: |
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.2.exe' -DestinationPath 'dist\MH-Analysis-V.55.2.zip' -Force
+
+      - name: Upload verified V.55.2
+        uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.2
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.2.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.2.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish mandatory V.55.2 updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          cp 'dist/SHA256SUMS.txt' "$RUNNER_TEMP/SHA256SUMS.txt"
+          cp 'dist/update.json' "$RUNNER_TEMP/update.json"
+          cp 'dist/VERSION' "$RUNNER_TEMP/VERSION"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.2.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.2.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __mh_v552_update
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" './SHA256SUMS.txt'
+          cp "$RUNNER_TEMP/update.json" './update.json'
+          cp "$RUNNER_TEMP/VERSION" './VERSION'
+          cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.2.exe" './MH-Analysis-Setup-V.55.2.exe'
+          git add 'MH Analysis.exe' SHA256SUMS.txt update.json VERSION 'MH-Analysis-Setup-V.55.2.exe'
+          git commit -m 'MH Analysis V.55.2 mandatory updater release'
+          git push --force origin HEAD:mh-analysis-update-channel
