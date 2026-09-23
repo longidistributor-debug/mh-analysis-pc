@@ -976,27 +976,21 @@ function resetViewForContext(){
   $('#reasons').className='detailText';$('#reasons').textContent='—';$('#topSetups').textContent='No ranking yet.';
   chartDecision=null;updateSignalHeadline(null);clearSignalLevels();
 }
-function syncPairTimeframeAvailabilityV553(){
-  const btc=symbol==='BTCUSDT';
-  const twenty=document.querySelector('.nativeTfButtons button[data-chart-tf="20m"]');
-  if(twenty)twenty.style.display=btc?'none':'';
-  if(btc&&timeframe==='20m'){
+function normalizeSupportedTimeframeV554(){
+  if(timeframe==='20m'){
     timeframe='15m';
     const sel=$('#timeframe');if(sel)sel.value='15m';
   }
 }
 async function contextChanged(){
-  syncPairTimeframeAvailabilityV553();
+  normalizeSupportedTimeframeV554();
   loadChart();
   resetViewForContext();
+  const selectedSymbol=symbol,selectedTimeframe=timeframe;
   const feed=$('#nativeFeedStatus');
-  if(symbol==='BTCUSDT'){
-    if(feed)feed.textContent='Loading BTC candles…';
-    await loadContextChart();
-    refreshMarketCap();
-    return;
-  }
-  if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
+  if(feed)feed.textContent=`Loading ${selectedSymbol} ${selectedTimeframe} candles…`;
+  await loadContextChart();
+  if(symbol===selectedSymbol&&timeframe===selectedTimeframe)refreshMarketCap();
 }
 
 async function saveBackendSetting(payload){const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Could not save setting.');await refreshBackendSettings();return backendSettings}
