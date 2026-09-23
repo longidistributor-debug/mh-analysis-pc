@@ -1,0 +1,81 @@
+name: Publish MH Analysis V.55.6 Dynamic Version
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v556']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Set V.55.6 source version
+        shell: python
+        run: |
+          from pathlib import Path
+          Path('VERSION').write_text('V.55.6\n', encoding='utf-8')
+          for fn in ['updater.go','license_auth.go','web/index.html']:
+            p=Path(fn); s=p.read_text(encoding='utf-8'); s=s.replace('V.55.5','V.55.6'); p.write_text(s,encoding='utf-8')
+      - name: Verify source
+        shell: powershell
+        run: |
+          node --check web/app.js
+          node --check web/runtime-fixes.js
+          node --check web/update-v001.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'tests failed'}
+      - name: Commit source version
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION updater.go license_auth.go web/index.html
+          git commit -m 'V.55.6 dynamic current/update version release' || true
+          git push origin HEAD:records-mt5-local-build
+      - name: Build EXE and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          printf 'V.55.6\n' > dist/VERSION
+          cat > dist/update.json <<EOF
+          {"version":"V.55.6","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.6 makes version display dynamic: the running app shows its installed/current version while the updater shows the incoming manifest version. Existing MT5 embed and EA bridge behavior are retained; user-managed MQ5 remains external."}
+          EOF
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}; if(-not(Test-Path $iscc)){throw 'ISCC unavailable'}
+      - name: Build installer
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; New-Item -ItemType Directory -Force dist-installer|Out-Null; $src=(Resolve-Path 'dist\MH Analysis.exe').Path; $out=(Resolve-Path dist-installer).Path; & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.6' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.6' 'installer\MHAnalysis-V01.iss'; if($LASTEXITCODE -ne 0){throw 'ISCC failed'}
+      - name: Package
+        shell: powershell
+        run: Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.6.exe' -DestinationPath 'dist\MH-Analysis-V.55.6.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.6
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.6.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.6.exe
+      - name: Publish update channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"; cp dist/update.json "$RUNNER_TEMP/update.json"; cp dist/VERSION "$RUNNER_TEMP/VERSION"; cp dist/SHA256SUMS.txt "$RUNNER_TEMP/SHA256SUMS.txt"; cp 'dist-installer/MH-Analysis-Setup-V.55.6.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.6.exe"
+          git checkout --orphan __v556; git rm -rf . || true; find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'; cp "$RUNNER_TEMP/update.json" update.json; cp "$RUNNER_TEMP/VERSION" VERSION; cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt; cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.6.exe" './MH-Analysis-Setup-V.55.6.exe'
+          git add .; git commit -m 'MH Analysis V.55.6 updater release'; git push --force origin HEAD:mh-analysis-update-channel
