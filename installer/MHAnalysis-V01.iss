@@ -3,6 +3,9 @@
   #define MyAppVersion "V.01"
 #endif
 #define MyAppPublisher "Muhammad Hammad Shaukat"
+#ifndef MyOutputBaseFilename
+  #define MyOutputBaseFilename "MH-Analysis-Setup-V.01"
+#endif
 #define MyAppExeName "MH Analysis.exe"
 #ifndef MySourceExe
   #define MySourceExe "..\MH Analysis.exe"
@@ -24,7 +27,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 OutputDir={#MyOutputDir}
-OutputBaseFilename=MH-Analysis-Setup-V.01
+OutputBaseFilename={#MyOutputBaseFilename}
 SetupIconFile=..\web\mh-analysis.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
