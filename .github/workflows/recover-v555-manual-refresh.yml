@@ -1,0 +1,65 @@
+name: Recover and fix V.55.5 manual refresh
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v555-recover']
+permissions:
+  contents: write
+jobs:
+  recover-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Restore app.js and remove selection auto-fetch only
+        shell: python
+        run: |
+          import subprocess
+          from pathlib import Path
+          subprocess.run(['git','checkout','429eb081a555eec4d7569efc0a2478f00285b285','--','web/app.js'],check=True)
+          p=Path('web/app.js'); s=p.read_text(encoding='utf-8')
+          old="""async function contextChanged(){
+            normalizeSupportedTimeframeV554();
+            loadChart();
+            resetViewForContext();
+            const selectedSymbol=symbol,selectedTimeframe=timeframe;
+            const feed=$('#nativeFeedStatus');
+            if(feed)feed.textContent=`Loading ${selectedSymbol} ${selectedTimeframe} candles…`;
+            await loadContextChart();
+            if(symbol===selectedSymbol&&timeframe===selectedTimeframe)refreshMarketCap();
+          }"""
+          new="""async function contextChanged(){
+            normalizeSupportedTimeframeV554();
+            loadChart();
+            resetViewForContext();
+            const feed=$('#nativeFeedStatus');
+            if(feed)feed.textContent=`${symbol} ${timeframe} selected • press NEW ANALYZE or RE-EVALUATE`;
+          }"""
+          if old not in s: raise SystemExit('contextChanged anchor missing')
+          s=s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+      - name: Verify exact behavior
+        shell: bash
+        run: |
+          node --check web/app.js
+          python - <<'PY'
+          from pathlib import Path
+          s=Path('web/app.js').read_text()
+          block=s[s.index('async function contextChanged()'):s.index('async function saveBackendSetting')]
+          assert 'loadContextChart' not in block
+          assert 'fetchCandles' not in block
+          assert 'candlesForAnalysis' in s
+          assert 'executeNewAnalysis' in s and 'executeReevaluate' in s
+          assert "'20m'" in s  # internal profile may remain; UI is separately removed
+          h=Path('web/index.html').read_text()
+          assert 'data-chart-tf="20m"' not in h
+          print('manual-only selection verified')
+          PY
+      - name: Commit recovery
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js
+          git commit -m 'Restore app.js and enforce manual-only chart refresh'
+          git push origin HEAD:records-mt5-local-build
