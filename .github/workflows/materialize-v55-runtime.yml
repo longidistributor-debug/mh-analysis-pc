@@ -1,0 +1,52 @@
+name: Materialize V55 Runtime Source
+
+on:
+  push:
+    branches:
+      - v55-clean-runtime
+    paths:
+      - '.github/workflows/materialize-v55-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply exact shipped V54.14 runtime once
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python .github/scripts/v5414b_patch.py
+          if($LASTEXITCODE -ne 0){throw 'Could not materialize V54.14 runtime'}
+          Remove-Item '.github/scripts/.v5414_runtime.py' -Force -ErrorAction SilentlyContinue
+          gofmt -w *.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'Generated JavaScript is invalid'}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Generated runtime tests failed'}
+
+      - name: Commit generated runtime as normal source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -u
+          $status=git status --porcelain
+          if(-not $status){throw 'Materialization produced no source changes'}
+          git commit -m 'Materialize shipped V54.14 runtime as direct source'
+          git push origin HEAD:v55-clean-runtime
+          if($LASTEXITCODE -ne 0){throw 'Could not commit materialized runtime'}
