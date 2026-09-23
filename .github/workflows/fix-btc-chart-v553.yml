@@ -1,0 +1,75 @@
+name: Fix BTC chart V.55.3
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-btc-v553']
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Patch BTC chart loading and BTC timeframe rules
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('web/app.js')
+          s=p.read_text()
+          old="""async function contextChanged(){
+  // IMPORTANT: manual context selection must be API-silent. Do not call
+  // fetchCandles/loadContextChart/refreshMarketCap or any history endpoint here.
+  loadChart();
+  resetViewForContext();
+  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
+}"""
+          new="""function syncPairTimeframeAvailabilityV553(){
+  const btc=symbol==='BTCUSDT';
+  const twenty=document.querySelector('.nativeTfButtons button[data-chart-tf=\"20m\"]');
+  if(twenty)twenty.style.display=btc?'none':'';
+  if(btc&&timeframe==='20m'){
+    timeframe='15m';
+    const sel=$('#timeframe');if(sel)sel.value='15m';
+  }
+}
+async function contextChanged(){
+  syncPairTimeframeAvailabilityV553();
+  loadChart();
+  resetViewForContext();
+  const feed=$('#nativeFeedStatus');
+  if(symbol==='BTCUSDT'){
+    if(feed)feed.textContent='Loading BTC candles…';
+    await loadContextChart();
+    refreshMarketCap();
+    return;
+  }
+  if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
+}"""
+          if old not in s: raise SystemExit('contextChanged anchor not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          # Version bump for a clean updater build.
+          Path('VERSION').write_text('V.55.3\n')
+          for fn,oldv,newv in [
+            ('updater.go','const mhPublicVersionV001 = "V.55.2"','const mhPublicVersionV001 = "V.55.3"'),
+            ('license_auth.go','licAppVersion = "V.55.2"','licAppVersion = "V.55.3"'),
+            ('web/index.html','id="mhUpdateVersionV001">V.55.2</div>','id="mhUpdateVersionV001">V.55.3</div>')]:
+            q=Path(fn); t=q.read_text()
+            if oldv not in t: raise SystemExit(f'version anchor missing in {fn}')
+            q.write_text(t.replace(oldv,newv,1))
+      - name: Verify
+        run: |
+          node --check web/app.js
+          grep -q 'syncPairTimeframeAvailabilityV553' web/app.js
+          grep -q 'data-chart-tf="20m" data-gold-only="1"' web/index.html
+          go test ./...
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js web/index.html VERSION updater.go license_auth.go
+          git commit -m 'Fix BTC chart loading and hide 20m for BTC'
+          git push origin HEAD:records-mt5-local-build
