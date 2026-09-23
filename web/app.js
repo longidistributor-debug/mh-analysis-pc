@@ -635,7 +635,28 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   }
   return lines.join('\n');
 }
+let mhWhatsAppLastDispatchKeyV5511='',mhWhatsAppLastDispatchAtV5511=0;
+function mhWhatsAppDispatchKeyV5511(d,action,status=''){
+  const sig=d?.signal||d?.originalSignal||null;
+  return JSON.stringify({
+    action:String(action||'').toUpperCase(),
+    symbol:String(symbol||'').toUpperCase(),
+    timeframe:String(timeframe||'').toUpperCase(),
+    status:String(status||''),
+    direction:String(sig?.direction||''),
+    entry:Number(sig?.entry)||0,
+    sl:Number(sig?.sl)||0,
+    tp1:Number(sig?.tp1)||0,
+    tp2:Number(sig?.tp2)||0,
+    explanation:String(d?.explanation||'')
+  });
+}
 async function sendDecisionWhatsApp(d,action,status=''){
+  const now=Date.now(),dispatchKey=mhWhatsAppDispatchKeyV5511(d,action,status);
+  if(dispatchKey===mhWhatsAppLastDispatchKeyV5511 && now-mhWhatsAppLastDispatchAtV5511<10000){
+    return {ok:true,deduped:true};
+  }
+  mhWhatsAppLastDispatchKeyV5511=dispatchKey;mhWhatsAppLastDispatchAtV5511=now;
   const message=decisionWhatsAppMessage(d,action,status);
   await refreshBackendSettings();
   if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
