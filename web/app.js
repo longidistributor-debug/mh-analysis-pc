@@ -615,8 +615,8 @@ function updateTradeModeButtons(){
   if(lot){lot.className=`autoSignalToggle ${lotSizeEnabled?'on':'off'}`;lot.textContent=`Lot Size: ${lotSizeEnabled?'ON':'OFF'}`;}
   if(pt){pt.className=`autoSignalToggle ${partialTpEnabled?'on':'off'}`;pt.textContent=`Partial TP: ${partialTpEnabled?'ON':'OFF'}`;}
 }
-function setLotSizeEnabled(on){lotSizeEnabled=!!on;localStorage.setItem(STORAGE_LOT_SIZE,lotSizeEnabled?'1':'0');updateTradeModeButtons();}
-function setPartialTpEnabled(on){partialTpEnabled=!!on;localStorage.setItem(STORAGE_PARTIAL_TP,partialTpEnabled?'1':'0');updateTradeModeButtons();}
+function setLotSizeEnabled(on){lotSizeEnabled=!!on;localStorage.setItem(STORAGE_LOT_SIZE,lotSizeEnabled?'1':'0');updateTradeModeButtons();/* V.55.13: execution preference only; never touch market/history connection */}
+function setPartialTpEnabled(on){partialTpEnabled=!!on;localStorage.setItem(STORAGE_PARTIAL_TP,partialTpEnabled?'1':'0');updateTradeModeButtons();/* V.55.13: execution preference only; never touch market/history connection */}
 function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   const sig=d?.signal||d?.originalSignal||null;
@@ -745,7 +745,7 @@ async function setAutoSignalEnabled(on){
     const ev=nextFixedAutoEvent(Date.now(),true);
     if(ev.catchup){setAutoStatus(`${ev.info.label} • Catch-up NEW ANALYZE now, then fixed RE-EVALUATE at +05`,'good');scheduleAutoAt('NEW',Date.now()+120);}
     else scheduleAutoAt(ev.action,ev.at<=Date.now()?Date.now()+120:ev.at);
-  }else{stopAutoTimers();autoSignalNextAt=0;updateAutoButton()}
+  }else{stopAutoTimers();autoSignalNextAt=0;updateAutoButton();/* V.55.13: manual mode only; data/history stays independent */}
 }
 async function runScheduledAutoAction(action){
   if(!autoSignalEnabled)return;
@@ -1057,6 +1057,7 @@ async function contextChanged(){
   resetViewForContext();
   const feed=$('#nativeFeedStatus');
   if(feed)feed.textContent=`${symbol} ${timeframe} selected • press NEW ANALYZE or RE-EVALUATE`;
+  /* V.55.13: intentionally no fetchCandles/loadContextChart here. Chart loads only on explicit analysis action. */
 }
 
 async function saveBackendSetting(payload){const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Could not save setting.');await refreshBackendSettings();return backendSettings}
