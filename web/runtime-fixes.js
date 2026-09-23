@@ -51,22 +51,11 @@ async function refreshMovingPrices(){
 // Pair/timeframe selection is API-silent. app.js may request a chart refresh on
 // context change; suppress exactly that first history request. NEW ANALYZE and
 // RE-EVALUATE remain untouched and therefore fetch fresh candles normally.
-let suppressNextContextHistory=false;
 function installManualAnalysisOnlyGuard(){
-  const nativeFetch=window.fetch.bind(window);
-  window.fetch=(input,init)=>{
-    const url=typeof input==='string'?input:String(input?.url||'');
-    if(suppressNextContextHistory&&url.includes('/api/history')){
-      suppressNextContextHistory=false;
-      return Promise.reject(new Error('Manual selection: fresh candles wait for NEW ANALYZE or RE-EVALUATE'));
-    }
-    return nativeFetch(input,init);
-  };
-  document.addEventListener('click',e=>{
-    if(e.target.closest('.pair')||e.target.closest('.nativeTfButtons button[data-chart-tf]'))suppressNextContextHistory=true;
-  },true);
-  const tf=$('#timeframe');
-  if(tf)tf.addEventListener('change',()=>{suppressNextContextHistory=true},{capture:true});
+  // V.55.15: app.js contextChanged() is already API-silent.
+  // Do NOT intercept /api/history here: the old one-shot suppression flag
+  // stayed armed after pair/timeframe selection and incorrectly blocked the
+  // next MANUAL NEW ANALYZE / RE-EVALUATE request when Get Signal was OFF.
 }
 function installChartControlCleanup(){
   // 20m is unsupported by the history feed and must stay unavailable for all pairs.
