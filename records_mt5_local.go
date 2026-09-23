@@ -358,6 +358,30 @@ func findRecordForEvent(s *mt5LocalStore, ev mt5LifecycleEvent) int {
 	return -1
 }
 
+func classifyStopExitV5511(r *mt5LocalRecord, ev mt5LifecycleEvent) string {
+	entry := r.Entry
+	price := ev.Price
+	if !recordNumberOK(entry) || !recordNumberOK(price) {
+		return "LOSS"
+	}
+	tol := math.Max(1e-6, math.Abs(entry)*0.00005)
+	dir := strings.ToUpper(strings.TrimSpace(r.Direction))
+	favorable := false
+	nearEntry := math.Abs(price-entry) <= tol
+	if dir == "BUY" {
+		favorable = price > entry+tol
+	} else if dir == "SELL" {
+		favorable = price < entry-tol
+	}
+	if favorable {
+		return "PROTECTED"
+	}
+	if nearEntry {
+		return "BE"
+	}
+	return "LOSS"
+}
+
 func applyLifecycleEvent(r *mt5LocalRecord, ev mt5LifecycleEvent) {
 	if ev.OrderTicket > 0 {
 		r.OrderTicket = ev.OrderTicket
@@ -423,12 +447,27 @@ func applyLifecycleEvent(r *mt5LocalRecord, ev mt5LifecycleEvent) {
 		r.RealizedProfit = ev.NetProfit
 		r.Status = "TP HIT"
 	case "SL_HIT":
-		r.SLHit = true
 		r.SLAt = ev.Time
 		r.ClosedAt = ev.Time
 		r.ClosePrice = ev.Price
 		r.RealizedProfit = ev.NetProfit
-		r.Status = "SL HIT"
+		switch classifyStopExitV5511(r, ev) {
+		case "BE":
+			r.BreakEvenHit = true
+			r.BreakEvenAt = ev.Time
+			r.SLHit = false
+			r.Status = "BREAK EVEN"
+			r.Note = "MT5: STOP EXIT • BREAK EVEN / ENTRY PROTECTED"
+		case "PROTECTED":
+			r.BreakEvenHit = true
+			r.BreakEvenAt = ev.Time
+			r.SLHit = false
+			r.Status = "CLOSED +POSITIVE"
+			r.Note = "MT5: STOP EXIT • PROFIT PROTECTED"
+		default:
+			r.SLHit = true
+			r.Status = "SL HIT"
+		}
 	case "BREAK_EVEN":
 		r.BreakEvenHit = true
 		r.BreakEvenAt = ev.Time
