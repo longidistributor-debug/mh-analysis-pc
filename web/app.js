@@ -55,6 +55,27 @@ function calcAdaptiveVwap(c){const w=c.slice(-Math.min(120,c.length));if(!w.leng
 function marketMap(c){const d=calcDMI(c),fvg=recentFvg(c),bullOb=orderBlock(c,true),bearOb=orderBlock(c,false),eqh=equalLevel(c,true),eql=equalLevel(c,false),div=divergence(c);return{adx:d.adx,plusDi:d.plus,minusDi:d.minus,vwap:calcAdaptiveVwap(c),fvgType:fvg?.type||null,fvgLow:fvg?.low??null,fvgHigh:fvg?.high??null,fvgFillPct:fvg?.fillPct||0,bullObLow:bullOb?.low??null,bullObHigh:bullOb?.high??null,bearObLow:bearOb?.low??null,bearObHigh:bearOb?.high??null,equalHigh:eqh,equalLow:eql,divergence:div}}
 
 function stats(c){const trs=trueRanges(c),med=Math.max(median(trs),1e-9),mad=Math.max(median(trs.map(x=>Math.abs(x-med))),1e-9);const ranges=c.map(x=>Math.max(x.h-x.l,1e-9)),bodies=c.map(x=>Math.abs(x.c-x.o));const bodyRank=Math.round(rank01(bodies.at(-1),bodies)*100),rangeRank=Math.round(rank01(ranges.at(-1),ranges)*100);const pressure=[];for(let i=1;i<c.length;i++)pressure.push((c[i].c-c[i-1].c)/med);const pMed=median(pressure),pMad=median(pressure.map(x=>Math.abs(x-pMed)));const uncertainty=Math.max(.35,pMad*100/Math.sqrt(Math.max(1,pressure.length)));const root=Math.round(Math.sqrt(c.length)),fast=Math.max(8,Math.min(Math.max(8,Math.floor(c.length/4)),root)),slow=Math.max(fast+2,Math.min(Math.max(fast+2,Math.floor(c.length/2)),root*2+Math.round(mad/med)));return{trMedian:med,trMad:mad,bodyRank,rangeRank,pressureUncertainty:uncertainty,fastWindow:fast,slowWindow:slow}}
+function timeframeRiskProfile(tf,s){
+  const profiles={
+    '1m': {riskMin:.55,riskMax:1.35,tp1Min:.90,tp1Max:2.20,tp2Min:1.40,tp2Max:3.20},
+    '5m': {riskMin:.60,riskMax:1.50,tp1Min:1.00,tp1Max:2.50,tp2Min:1.60,tp2Max:3.60},
+    '15m':{riskMin:.70,riskMax:1.70,tp1Min:1.10,tp1Max:2.80,tp2Min:1.80,tp2Max:4.00},
+    '20m':{riskMin:.72,riskMax:1.80,tp1Min:1.15,tp1Max:3.00,tp2Min:1.90,tp2Max:4.20},
+    '30m':{riskMin:.75,riskMax:1.90,tp1Min:1.20,tp1Max:3.20,tp2Min:2.00,tp2Max:4.50},
+    '1h': {riskMin:.80,riskMax:2.10,tp1Min:1.25,tp1Max:3.50,tp2Min:2.10,tp2Max:5.00}
+  };
+  const p=profiles[String(tf||'').toLowerCase()]||profiles['15m'],tr=Math.max(Number(s?.trMedian)||0,1e-9);
+  return{...p,tr,riskFloor:tr*p.riskMin,riskCap:tr*p.riskMax,tp1Floor:tr*p.tp1Min,tp1Cap:tr*p.tp1Max,tp2Floor:tr*p.tp2Min,tp2Cap:tr*p.tp2Max};
+}
+function clampDistance(v,lo,hi){return Math.min(Math.max(Number(v)||0,Math.max(Number(lo)||0,1e-9)),Math.max(Number(hi)||0,Math.max(Number(lo)||0,1e-9)))}
+function chooseObjectiveBounded(entry,objs,desired,dir,minDist,maxDist){
+  const valid=[...new Set(objs.filter(Number.isFinite))].filter(x=>{
+    const dist=Math.abs(x-entry);
+    return (dir==='BUY'?x>entry+minDist:x<entry-minDist)&&dist<=maxDist;
+  });
+  if(!valid.length)return null;
+  return valid.sort((a,b)=>Math.abs(Math.abs(a-entry)-desired)-Math.abs(Math.abs(b-entry)-desired))[0];
+}
 function fam(direction,name,score,reasons){return{direction,name,score:smooth(score),reasons}}
 function trendFamilies(c,m,s){const close=c.map(x=>x.c),fast=ema(close,s.fastWindow).at(-1),slow=ema(close,s.slowWindow).at(-1),cut=Math.min(s.fastWindow,Math.max(2,Math.floor(s.fastWindow/3))),prevFast=ema(close.slice(0,-cut),s.fastWindow).at(-1)??fast;const trend=Math.max(-4,Math.min(4,(fast-slow)/s.trMedian)),slope=Math.max(-4,Math.min(4,(fast-prevFast)/s.trMedian)),den=Math.max(m.plusDi+m.minusDi,1e-9),dmi=Math.max(-1,Math.min(1,(m.plusDi-m.minusDi)/den));return[fam('BUY','Trend / pullback continuation',50+trend*9+slope*6+dmi*22,[`Adaptive fast-vs-slow strength ${two(trend)}`,`DMI balance ${(dmi*100).toFixed(1)}`]),fam('SELL','Trend / pullback continuation',50-trend*9-slope*6-dmi*22,[`Adaptive fast-vs-slow strength ${two(-trend)}`,`DMI balance ${(-dmi*100).toFixed(1)}`])];}
 function structureFamilies(c,m,s){const sp=adaptiveSpan(c.length),hs=pivots(c,true,sp),ls=pivots(c,false,sp),h=hs.at(-1)?.price,l=ls.at(-1)?.price,last=c.at(-1);const pos=h!=null&&l!=null&&h>l?Math.max(0,Math.min(1,(last.c-l)/(h-l))):.5,up=h!=null?Math.max(0,last.c-h)/s.trMedian:0,dn=l!=null?Math.max(0,l-last.c)/s.trMedian:0;return[fam('BUY','Adaptive market structure',35+pos*38+up*18-dn*22,[`Swing position ${Math.round(pos*100)}%`,`Same-timeframe adaptive pivots`]),fam('SELL','Adaptive market structure',35+(1-pos)*38+dn*18-up*22,[`Bearish swing position ${Math.round((1-pos)*100)}%`,`Same-timeframe adaptive pivots`])];}
@@ -110,25 +131,58 @@ function chooseObjective(entry,objs,desired,dir,minDist=0){const valid=[...new S
 function structuralInvalidation(entry,dir,lows,highs,m,model){if(dir==='BUY'){const vals=[lows.filter(x=>x<entry).at(-1),m.bullObLow,m.fvgType==='BULLISH'?m.fvgLow:null].filter(x=>x!=null&&x<entry);return vals.length?Math.max(...vals):entry-model.riskTypical}else{const vals=[highs.filter(x=>x>entry)[0],m.bearObHigh,m.fvgType==='BEARISH'?m.fvgHigh:null].filter(x=>x!=null&&x>entry);return vals.length?Math.min(...vals):entry+model.riskTypical}}
 
 function buildSignal(sym,tf,c,m,s,dir,buyScore,sellScore,ranked){
-  const last=c.at(-1),sp=adaptiveSpan(c.length),highs=[...new Set(pivots(c,true,sp).map(x=>x.price))].sort((a,b)=>a-b),lows=[...new Set(pivots(c,false,sp).map(x=>x.price))].sort((a,b)=>a-b),model=empiricalDistanceModel(c,dir,s),candidates=[];
+  const last=c.at(-1),sp=adaptiveSpan(c.length),highs=[...new Set(pivots(c,true,sp).map(x=>x.price))].sort((a,b)=>a-b),lows=[...new Set(pivots(c,false,sp).map(x=>x.price))].sort((a,b)=>a-b),model=empiricalDistanceModel(c,dir,s),profile=timeframeRiskProfile(tf,s),candidates=[];
   const add=(reason,p,bonus=0)=>{if(Number.isFinite(p)&&(dir==='BUY'?p<=last.c+model.entryTolerance:p>=last.c-model.entryTolerance))candidates.push({reason,p,bonus})};
   if(dir==='BUY'){add('bull order-block reaction',zoneMid(m.bullObLow,m.bullObHigh),3);if(m.fvgType==='BULLISH')add('bull FVG reaction',zoneMid(m.fvgLow,m.fvgHigh),2);add('nearest adaptive support/liquidity',lows.filter(x=>x<=last.c).at(-1),1)}
   else{add('bear order-block reaction',zoneMid(m.bearObLow,m.bearObHigh),3);if(m.fvgType==='BEARISH')add('bear FVG reaction',zoneMid(m.fvgLow,m.fvgHigh),2);add('nearest adaptive resistance/liquidity',highs.filter(x=>x>=last.c)[0],1)}
   candidates.push({reason:'current live price',p:last.c,bonus:0});
   const allOpp=dir==='BUY'?[...highs,m.equalHigh,m.bearObLow,m.bearObHigh].filter(Number.isFinite):[...lows,m.equalLow,m.bullObLow,m.bullObHigh].filter(Number.isFinite);
-  const rankedCandidates=candidates.map(x=>{const invalid=structuralInvalidation(x.p,dir,lows,highs,m,model),sl0=dir==='BUY'?invalid-model.noise:invalid+model.noise,risk=Math.max(Math.abs(x.p-sl0),1e-9),obj=chooseObjective(x.p,allOpp,model.rewardTypical,dir,model.noise*.35),reward=Math.max(obj!=null?Math.abs(obj-x.p):model.rewardTypical,1e-9),riskFit=Math.abs(Math.log(risk/Math.max(model.riskTypical,1e-9))),rewardFit=Math.abs(Math.log(reward/Math.max(model.rewardTypical,1e-9))),drift=Math.abs(last.c-x.p)/Math.max(model.rewardTypical,1e-9);return{...x,invalid,sl0,risk,fit:riskFit+rewardFit*.7+drift*.25-x.bonus*.08}}).sort((a,b)=>a.fit-b.fit);
+  const desiredTp1=clampDistance(model.rewardTypical,profile.tp1Floor,profile.tp1Cap),desiredTp2=clampDistance(model.rewardStretch,Math.max(profile.tp2Floor,desiredTp1*1.25),profile.tp2Cap);
+  const rankedCandidates=candidates.map(x=>{
+    const invalid=structuralInvalidation(x.p,dir,lows,highs,m,model),rawSl=dir==='BUY'?invalid-model.noise:invalid+model.noise,rawRisk=Math.max(Math.abs(x.p-rawSl),1e-9),risk=clampDistance(rawRisk,profile.riskFloor,profile.riskCap),sl0=dir==='BUY'?x.p-risk:x.p+risk;
+    const obj=chooseObjectiveBounded(x.p,allOpp,desiredTp1,dir,Math.max(model.noise*.35,profile.tp1Floor*.25),profile.tp1Cap),reward=Math.max(obj!=null?Math.abs(obj-x.p):desiredTp1,1e-9);
+    const riskFit=Math.abs(Math.log(risk/Math.max(clampDistance(model.riskTypical,profile.riskFloor,profile.riskCap),1e-9))),rewardFit=Math.abs(Math.log(reward/Math.max(desiredTp1,1e-9))),drift=Math.abs(last.c-x.p)/Math.max(desiredTp1,1e-9),oversizePenalty=rawRisk>profile.riskCap?Math.min(3,(rawRisk/profile.riskCap)-1):0;
+    return{...x,invalid,sl0,risk,rawRisk,fit:riskFit+rewardFit*.7+drift*.25+oversizePenalty-x.bonus*.08};
+  }).sort((a,b)=>a.fit-b.fit);
   const chosen=rankedCandidates[0],entry=chosen.p,sl=chosen.sl0;
-  const tp1Obj=chooseObjective(entry,allOpp,model.rewardTypical,dir,model.noise*.35),tp1=tp1Obj??(dir==='BUY'?entry+model.rewardTypical:entry-model.rewardTypical);
-  const further=allOpp.filter(x=>dir==='BUY'?x>tp1:x<tp1),tp2Obj=chooseObjective(entry,further,model.rewardStretch,dir,Math.abs(tp1-entry)*.9),tp2=tp2Obj??(dir==='BUY'?entry+model.rewardStretch:entry-model.rewardStretch);
+  const tp1Obj=chooseObjectiveBounded(entry,allOpp,desiredTp1,dir,Math.max(model.noise*.35,profile.tp1Floor*.25),profile.tp1Cap),tp1=tp1Obj??(dir==='BUY'?entry+desiredTp1:entry-desiredTp1);
+  const further=allOpp.filter(x=>dir==='BUY'?x>tp1:x<tp1),tp2Obj=chooseObjectiveBounded(entry,further,desiredTp2,dir,Math.abs(tp1-entry)*1.05,profile.tp2Cap),tp2=tp2Obj??(dir==='BUY'?entry+desiredTp2:entry-desiredTp2);
   const score=dir==='BUY'?buyScore:sellScore,risk=Math.max(Math.abs(entry-sl),1e-9),rr1=Math.abs(tp1-entry)/risk,rr2=Math.abs(tp2-entry)/risk,reasons=ranked.slice(0,7).flatMap(f=>[`${f.name} ${Math.round(f.score)}/100`,f.reasons[0]]).filter(Boolean).slice(0,14);
-  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,status:'PENDING',reasons,setupReason:`${dir} • BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL is beyond the selected structural invalidation using same-${tf} empirical adverse-range and wick behavior; it is not a fixed pip or ATR multiple.`,tp1Reason:`TP1 is the opposing structure/liquidity objective that best matches the observed ${tf} swing distribution. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next structure/liquidity objective closest to the observed stretch-move distribution. Current computed R:R ${two(rr2)}R.`,distanceModel:model};
+  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,status:'PENDING',reasons,setupReason:`${dir} • BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL uses the selected structural invalidation plus current ${tf} wick/range behavior, bounded by the measured ${tf} risk envelope (${two(profile.riskMin)}–${two(profile.riskMax)} median true-ranges); no fixed pip distance is used.`,tp1Reason:`TP1 uses reachable opposing structure/liquidity inside the measured ${tf} target envelope. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next reachable structure/liquidity objective inside the measured ${tf} stretch envelope. Current computed R:R ${two(rr2)}R.`,distanceModel:{...model,timeframeProfile:profile}};
+}
+
+function managedReconfirmedLevelsV552(prev,fresh,c){
+  if(!prev||!fresh||prev.direction!==fresh.direction)return fresh;
+  const last=c.at(-1),s=stats(c),model=empiricalDistanceModel(c,prev.direction,s),profile=timeframeRiskProfile(prev.timeframe||timeframe,s);
+  const freshRisk=clampDistance(Math.abs(fresh.entry-fresh.sl),profile.riskFloor,profile.riskCap),freshTp1=clampDistance(Math.abs(fresh.tp1-fresh.entry),profile.tp1Floor,profile.tp1Cap),freshTp2=clampDistance(Math.abs(fresh.tp2-fresh.entry),Math.max(profile.tp2Floor,freshTp1*1.25),profile.tp2Cap);
+  let sl=prev.direction==='BUY'?prev.entry-freshRisk:prev.entry+freshRisk;
+  let tp1=prev.direction==='BUY'?prev.entry+freshTp1:prev.entry-freshTp1;
+  let tp2=prev.direction==='BUY'?prev.entry+freshTp2:prev.entry-freshTp2;
+  const originalRisk=Math.max(Math.abs(prev.entry-prev.sl),1e-9),move=prev.direction==='BUY'?last.c-prev.entry:prev.entry-last.c;
+  if(prev.direction==='BUY'){
+    sl=Math.max(Number(prev.sl),sl);
+    if(move>=originalRisk)sl=Math.max(sl,prev.entry);
+    sl=Math.min(sl,last.c-Math.max(model.noise*.25,profile.riskFloor*.12));
+  }else{
+    sl=Math.min(Number(prev.sl),sl);
+    if(move>=originalRisk)sl=Math.min(sl,prev.entry);
+    sl=Math.max(sl,last.c+Math.max(model.noise*.25,profile.riskFloor*.12));
+  }
+  return{...fresh,entry:prev.entry,sl,tp1,tp2,managedLevels:true,previousLevels:{sl:prev.sl,tp1:prev.tp1,tp2:prev.tp2}};
+}
+function protectOnReversalV552(prev,c){
+  const last=c.at(-1),s=stats(c),model=empiricalDistanceModel(c,prev.direction,s),profile=timeframeRiskProfile(prev.timeframe||timeframe,s),gap=Math.max(model.noise*.35,profile.riskFloor*.18);
+  let sl=Number(prev.sl);
+  if(prev.direction==='BUY'){const candidate=last.c-gap;if(candidate>sl)sl=Math.min(candidate,last.c-gap*.5)}
+  else{const candidate=last.c+gap;if(candidate<sl)sl=Math.max(candidate,last.c+gap*.5)}
+  return{...prev,sl,managedLevels:true,reversalProtection:true,previousLevels:{sl:prev.sl,tp1:prev.tp1,tp2:prev.tp2}};
 }
 
 function adaptiveExpiryBars(c){const sp=adaptiveSpan(c.length),pts=[...pivots(c,true,sp),...pivots(c,false,sp)].sort((a,b)=>a.index-b.index),gaps=[];for(let i=1;i<pts.length;i++){const g=pts[i].index-pts[i-1].index;if(g>0)gaps.push(g)}if(!gaps.length)return Math.max(3,Math.round(Math.sqrt(c.length)));const med=median(gaps),mad=median(gaps.map(x=>Math.abs(x-med)));return Math.max(3,Math.round(med+mad))}
 function signalBarsAge(c,s){let idx=c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime));if(idx<0)idx=Math.max(0,c.length-adaptiveExpiryBars(c));return Math.max(0,c.length-1-idx)}
 function signalTouched(c,s,field){const idx=Math.max(0,c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime)));const w=c.slice(idx<0?0:idx),p=Number(s[field]);if(!Number.isFinite(p))return false;if(field==='sl')return s.direction==='BUY'?w.some(x=>x.l<=p):w.some(x=>x.h>=p);return s.direction==='BUY'?w.some(x=>x.h>=p):w.some(x=>x.l<=p)}
 function classifyReconfirmation(prev,fresh,c){if(!prev||!fresh||prev.direction!==fresh.direction)return null;if(signalTouched(c,prev,'sl')||signalTouched(c,prev,'tp1'))return null;const model=empiricalDistanceModel(c,prev.direction,stats(c)),d=Math.abs(Number(prev.entry)-Number(fresh.entry));if(d>model.entryTolerance)return null;const age=signalBarsAge(c,prev),life=adaptiveExpiryBars(c);return{distance:d,tolerance:model.entryTolerance,age,life}}
-function preserveReconfirmedSignal(prev,fresh,meta){return{...fresh,id:prev.id,entry:prev.entry,sl:prev.sl,tp1:prev.tp1,tp2:prev.tp2,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • This is the earlier setup, not a new duplicate trade. Fresh data still ranks the same direction and the entry zone remains inside current adaptive relevance. ${fresh.setupReason}`}}
+function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
 
 function analyze(c,prev){
   c=c.slice(-300);const m=marketMap(c);if(c.length<60)return{signal:null,map:m,buyScore:0,sellScore:0,bestFamily:'-',runnerUpFamily:'-',explanation:`Only ${c.length} candles are available; need at least 60 direct ${timeframe} candles.`,reasons:[],warnings:[]};
@@ -136,11 +190,11 @@ function analyze(c,prev){
   const [buy,bf]=aggregate(families.filter(x=>x.direction==='BUY')),[sell,sf]=aggregate(families.filter(x=>x.direction==='SELL')),buyScore=Math.round(buy),sellScore=Math.round(sell),edge=Math.abs(buy-sell),bestDir=buy>=sell?'BUY':'SELL',winner=bestDir==='BUY'?bf:sf,loser=bestDir==='BUY'?sf:bf,best=winner[0]?.name||'Composite market structure',runner=winner[1]?.name||loser[0]?.name||'-',reasons=winner.slice(0,6).flatMap(f=>[`${f.name} ${Math.round(f.score)}/100`,...f.reasons.slice(0,2)]).filter(Boolean),warnings=[];
   if(m.fvgType&&m.fvgFillPct>=90)warnings.push(`Latest ${m.fvgType} FVG is almost fully mitigated.`);
   const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);if(winnerScore<57||edge<=minEdge)return{signal:null,map:m,buyScore,sellScore,bestFamily:best,runnerUpFamily:runner,explanation:`No clear current directional edge: BUY ${buyScore} vs SELL ${sellScore}; difference ${two(edge)} is inside this timeframe's measured uncertainty ${two(s.pressureUncertainty)}.`,reasons,warnings};
-  let signal=buildSignal(symbol,timeframe,c,m,s,bestDir,buyScore,sellScore,winner);const recon=classifyReconfirmation(prev,signal,c);if(recon)signal=preserveReconfirmedSignal(prev,signal,recon);
-  const reconText=signal.reconfirmed?` This is a reconfirmation of the earlier ${signal.direction} setup: entry-zone drift ${fmt(recon.distance)} is within current adaptive relevance ${fmt(recon.tolerance)}; original levels are preserved.`:'';
+  let signal=buildSignal(symbol,timeframe,c,m,s,bestDir,buyScore,sellScore,winner);const recon=classifyReconfirmation(prev,signal,c);if(recon)signal=preserveReconfirmedSignal(prev,signal,recon,c);
+  const reconText=signal.reconfirmed?` This is a reconfirmation of the earlier ${signal.direction} setup: entry-zone drift ${fmt(recon.distance)} is within current adaptive relevance ${fmt(recon.tolerance)}; entry is preserved while protective SL/TP are refreshed from current ${timeframe} structure.`:'';
   return{signal,map:m,buyScore,sellScore,bestFamily:best,runnerUpFamily:runner,explanation:`${bestDir} is the strongest CURRENT ${timeframe} thesis. BUY ${buyScore} vs SELL ${sellScore}; edge ${two(edge)} is larger than measured same-timeframe uncertainty ${two(s.pressureUncertainty)}. Best family: ${best}.${reconText}`,reasons,warnings};
 }
-function refreshReason(prev,d){const fresh=d.signal;if(!prev&&!fresh)return d.explanation;if(!prev&&fresh)return`Fresh analysis found ${fresh.direction} as the best current setup. ${d.explanation}`;if(prev&&!fresh)return`The earlier ${prev.direction} setup is not being reissued. Fresh analysis no longer has a clear directional edge. ${d.explanation}`;if(fresh.direction!==prev.direction)return`The earlier ${prev.direction} setup is no longer the best current thesis. Fresh ranking changed to ${fresh.direction}. ${d.explanation}`;if(fresh.reconfirmed){const mv=(fresh.score??0)-(fresh.previousScore??prev.score??0);return`RECONFIRMED, NOT A NEW DUPLICATE: this ${fresh.direction} signal was already issued. Fresh ${timeframe} data still supports the same structure and the original entry/SL/TP levels remain relevant. Quality ${fresh.previousScore??prev.score} -> ${fresh.score}${mv?` (${mv>0?'+':''}${mv})`:''}. ${d.explanation}`;}const same=Number(prev.createdCandleTime)===Number(fresh.createdCandleTime),move=fresh.score-prev.score;return`${same?'The same latest candle snapshot was analysed again from its newest OHLC state.':'A newer same-timeframe candle snapshot was analysed.'} ${fresh.direction} remains strongest, but this is a materially refreshed setup rather than the same entry zone. Quality ${prev.score} -> ${fresh.score}${move?` (${move>0?'+':''}${move})`:''}. ${d.explanation}`}
+function refreshReason(prev,d){const fresh=d.signal;if(!prev&&!fresh)return d.explanation;if(!prev&&fresh)return`Fresh analysis found ${fresh.direction} as the best current setup. ${d.explanation}`;if(prev&&!fresh)return`The earlier ${prev.direction} setup is not being reissued. Fresh analysis no longer has a clear directional edge. ${d.explanation}`;if(fresh.direction!==prev.direction)return`The earlier ${prev.direction} setup is no longer the best current thesis. Fresh ranking changed to ${fresh.direction}. ${d.explanation}`;if(fresh.reconfirmed){const mv=(fresh.score??0)-(fresh.previousScore??prev.score??0);return`RECONFIRMED, NOT A NEW DUPLICATE: this ${fresh.direction} signal was already issued. Fresh ${timeframe} data still supports the same structure; the original entry is retained and SL/TP are re-managed from current timeframe structure/volatility. Quality ${fresh.previousScore??prev.score} -> ${fresh.score}${mv?` (${mv>0?'+':''}${mv})`:''}. ${d.explanation}`;}const same=Number(prev.createdCandleTime)===Number(fresh.createdCandleTime),move=fresh.score-prev.score;return`${same?'The same latest candle snapshot was analysed again from its newest OHLC state.':'A newer same-timeframe candle snapshot was analysed.'} ${fresh.direction} remains strongest, but this is a materially refreshed setup rather than the same entry zone. Quality ${prev.score} -> ${fresh.score}${move?` (${move>0?'+':''}${move})`:''}. ${d.explanation}`}
 
 
 const recentSession=(()=>{try{const x=JSON.parse(localStorage.getItem('mh-recent-signals-stable')||'[]');return Array.isArray(x)?x.slice(0,6):[]}catch(e){return[]}})();
@@ -660,6 +714,32 @@ async function prepareMT5SignalV796(d,state='NEW'){
     if(!r.ok){const t=await r.text();throw new Error(t||`HTTP ${r.status}`)}
   }catch(e){console.warn('MT5 prefill queue failed',e)}
 }
+async function readMT5ActiveStateV552(sym=symbol){
+  try{const r=await fetch(`/api/mt5/ea/active?symbol=${encodeURIComponent(sym)}`,{cache:'no-store'}),j=await r.json();return r.ok?j:null}catch(_){return null}
+}
+async function applyActiveTradeSafetyV552(d){
+  const sig=d?.signal;if(!sig)return d;
+  const st=await readMT5ActiveStateV552(symbol);if(!st?.active)return d;
+  const activeDir=String(st.direction||'').toUpperCase(),newDir=String(sig.direction||'').toUpperCase();
+  if(activeDir&&activeDir!=='MIXED'&&activeDir!==newDir){
+    d.blockedSignal=sig;d.signal=null;d._reversalBlocked=true;d._activeTradeState=st;
+    d.warnings=[`ACTIVE TRADE SAFETY: MT5 has active ${activeDir}. Fresh analysis detected ${newDir}, but no reverse signal/order will be issued until the current position/pending order is resolved.`,...(d.warnings||[])];
+    d.explanation=`REVERSAL WARNING — fresh analysis currently favors ${newDir}, while MT5 still reports active ${activeDir}. Re-evaluation remains active for protection/SL management; reverse execution is locked until the current exposure is resolved.`;
+  }
+  return d;
+}
+async function manageExistingMT5TradeV552(original,managed,status=''){
+  if(!original||!managed||original.direction!==managed.direction)return null;
+  const changed=Math.abs(Number(original.sl)-Number(managed.sl))>1e-9||Math.abs(Number(original.tp1)-Number(managed.tp1))>1e-9;
+  if(!changed)return null;
+  const st=await readMT5ActiveStateV552(symbol);if(!st?.active||String(st.direction||'').toUpperCase()!==String(managed.direction||'').toUpperCase())return null;
+  try{
+    const r=await fetch('/api/mt5/ea/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manage_id:`MHM${Date.now()}_${symbol}_${timeframe}`,symbol,direction:managed.direction,sl:Number(managed.sl),tp:Number(managed.tp1),reason:status||'RE-EVALUATE'})});
+    const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`EA manage HTTP ${r.status}`);
+    setAutoStatus(`MT5 active trade management queued • SL ${fmt(managed.sl)} • TP ${fmt(managed.tp1)}`,'good');return j;
+  }catch(e){console.warn('MT5 active trade management failed',e);setAutoStatus(`MT5 manage failed • ${e.message||e}`,'bad');return null}
+}
+
 // V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
 async function dispatchUniqueSignalV36(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
@@ -684,9 +764,10 @@ async function executeNewAnalysis(fromAuto=false){
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
     const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
     applyNewsRisk(d,newsRisk);
+    await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
-    if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
+    if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
     if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
@@ -732,15 +813,16 @@ async function executeReevaluate(fromAuto=false){
     else if(slHit){status='INVALID — original structural invalidation / SL was breached';}
     else if(tp2Hit){status='TARGET REACHED — TP2 reached';}
     else if(tp1Hit&&same){status='TP1 REACHED — existing trade remains structurally valid toward TP2';keep=true;displayOriginal=true;}
-    else if(opposite){status=`REVERSED — fresh data now ranks ${current.signal.direction} above the original ${s.direction}`;}
+    else if(opposite){status=`REVERSAL WARNING — fresh data now ranks ${current.signal.direction} above the original ${s.direction}; reverse execution remains locked while the active trade/pending order exists`;keep=true;displayOriginal=true;current.signal=protectOnReversalV552(s,c);}
     else if(!same&&age>life){status=`EXPIRED — ${age} bars old versus an adaptive structure lifecycle of about ${life} bars, and fresh data no longer confirms the original side`;}
     else if(same&&age>life&&!entryRelevant&&favorable){status='STILL VALID FOR AN EXISTING TRADE — ORIGINAL ENTRY EXPIRED FOR A NEW ENTRY';keep=true;displayOriginal=true;}
     else if(same){status='STILL VALID — original structure remains supported by fresh data';keep=true;displayOriginal=true;}
     else{status='WEAKENING — no fresh opposite signal, but directional confirmation is no longer clear';keep=true;displayOriginal=true;}
-    if(displayOriginal){const sideScore=s.direction==='BUY'?current.buyScore:current.sellScore;current.signal={...s,score:sideScore,status};current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Age ${age} bars; adaptive lifecycle ${life} bars.`}
+    if(displayOriginal){const sideScore=s.direction==='BUY'?current.buyScore:current.sellScore;if(same&&current.signal)current.signal={...current.signal,score:sideScore,status};else current.signal={...(current.signal||s),score:sideScore,status};current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Age ${age} bars; adaptive lifecycle ${life} bars.`}
     else{current.signal=null;current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Run NEW ANALYZE if you want a new setup.`}
     if(keep){const obj={signal:displayOriginal?current.signal:s,state:status,candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);
+    if(keep&&displayOriginal&&current.signal)await manageExistingMT5TradeV552(s,current.signal,status);
     if(autoSignalEnabled)await autoSendAndSchedule(current,'RE-EVALUATE',status);
     else{
       try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE queued to WhatsApp','good')}catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
