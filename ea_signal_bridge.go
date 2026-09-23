@@ -13,13 +13,14 @@ import (
 	"time"
 )
 
-// MH_EA_SIGNAL_READER_BRIDGE_V799
+// MH_EA_SIGNAL_READER_BRIDGE_V800
 // signal.txt is a latest-signal mailbox, not a consume-and-delete queue.
 // The EA deduplicates by signal_id. V799 therefore atomically replaces signal.txt
 // instead of waiting for the EA to delete it (the decoder never deletes it).
 // active_state.txt accepted format from the decoder:
 // FLAT
 // ACTIVE|BUY/SELL|SYMBOL|POSITION/PENDING|TICKET|MAGIC
+// manage.txt: MANAGE_ID|SYMBOL|BUY/SELL|SL|TP|REASON
 
 type eaSignalRequest struct {
 	SignalID string  `json:"signal_id"`
@@ -30,6 +31,15 @@ type eaSignalRequest struct {
 	TP       float64 `json:"tp"`
 	Lot      float64 `json:"lot"`
 	Expiry   int64   `json:"expiry"`
+}
+
+type eaManageRequest struct {
+	ManageID  string  `json:"manage_id"`
+	Symbol    string  `json:"symbol"`
+	Direction string  `json:"direction"`
+	SL        float64 `json:"sl"`
+	TP        float64 `json:"tp"`
+	Reason    string  `json:"reason"`
 }
 
 type eaActiveTrade struct {
@@ -51,6 +61,8 @@ func registerEASignalBridgeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mt5/ea/send", eaSignalSendHandler)
 	mux.HandleFunc("/api/mt5/ea/status", eaSignalStatusHandler)
 	mux.HandleFunc("/api/mt5/ea/active", eaActiveStateHandler)
+	mux.HandleFunc("/api/mt5/ea/manage", eaManageHandler)
+	mux.HandleFunc("/api/mt5/ea/manage-status", eaManageStatusHandler)
 }
 
 func mt5CommonBridgeDir() (string, error) {
@@ -122,6 +134,37 @@ func eaActiveStateHandler(w http.ResponseWriter, r *http.Request) {
 	sym:=normalizeEABridgeSymbol(r.URL.Query().Get("symbol"))
 	if sym!="" { trades,dir,err:=activeExposureFor(sym); if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}; _=json.NewEncoder(w).Encode(map[string]any{"ok":true,"symbol":sym,"active":len(trades)>0,"direction":dir,"trades":trades}); return }
 	trades,err:=readEAActiveTrades(); if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}; _=json.NewEncoder(w).Encode(map[string]any{"ok":true,"active":len(trades)>0,"trades":trades})
+}
+
+func eaManageHandler(w http.ResponseWriter,r *http.Request){
+	w.Header().Set("Content-Type","application/json")
+	if r.Method!=http.MethodPost{http.Error(w,"method",http.StatusMethodNotAllowed);return}
+	var q eaManageRequest
+	if err:=json.NewDecoder(r.Body).Decode(&q);err!=nil{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"bad manage payload"});return}
+	q.ManageID=cleanEAToken(q.ManageID);q.Symbol=normalizeEABridgeSymbol(q.Symbol);q.Direction=eaDirection(q.Direction);q.Reason=cleanEAToken(q.Reason)
+	if q.ManageID==""{q.ManageID="MHM"+strconv.FormatInt(time.Now().UnixMilli(),10)}
+	if !eaSafeToken.MatchString(q.ManageID){w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"invalid manage id"});return}
+	if q.Symbol!="XAUUSD"&&q.Symbol!="BTCUSD"{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"unsupported EA bridge symbol"});return}
+	if q.Direction!="BUY"&&q.Direction!="SELL"{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"direction must be BUY or SELL"});return}
+	if q.SL<=0||q.TP<=0{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"sl/tp must be positive"});return}
+	dir,err:=mt5CommonBridgeDir();if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}
+	line:=strings.Join([]string{q.ManageID,q.Symbol,q.Direction,strconv.FormatFloat(q.SL,'f',-1,64),strconv.FormatFloat(q.TP,'f',-1,64),q.Reason},"|")+"\r\n"
+	dst:=filepath.Join(dir,"manage.txt");tmp:=filepath.Join(dir,"manage.new")
+	eaPublishMu.Lock();defer eaPublishMu.Unlock()
+	if err:=os.WriteFile(tmp,[]byte(line),0644);err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":"could not write EA manage command: "+err.Error()});return}
+	_=os.Remove(dst)
+	if err:=os.Rename(tmp,dst);err!=nil{_=os.Remove(tmp);w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":"could not publish EA manage command: "+err.Error()});return}
+	_=json.NewEncoder(w).Encode(map[string]any{"ok":true,"manage_id":q.ManageID,"symbol":q.Symbol,"direction":q.Direction,"sl":q.SL,"tp":q.TP})
+}
+
+func eaManageStatusHandler(w http.ResponseWriter,r *http.Request){
+	w.Header().Set("Content-Type","application/json")
+	if r.Method!=http.MethodGet{http.Error(w,"method",http.StatusMethodNotAllowed);return}
+	dir,err:=mt5CommonBridgeDir();if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}
+	b,err:=os.ReadFile(filepath.Join(dir,"manage_status.txt"))
+	if err!=nil{if os.IsNotExist(err){_=json.NewEncoder(w).Encode(map[string]any{"ok":true,"status":"","exists":false});return};w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}
+	line:=strings.TrimSpace(strings.SplitN(strings.ReplaceAll(string(b),"\r\n","\n"),"\n",2)[0])
+	_=json.NewEncoder(w).Encode(map[string]any{"ok":true,"status":line,"exists":line!=""})
 }
 
 func eaSignalSendHandler(w http.ResponseWriter, r *http.Request) {
