@@ -641,13 +641,21 @@ function scheduleNextFixedEvent(allowCatchup=false){
   if(ev.at<=Date.now()+100)scheduleAutoAt(ev.action,Date.now()+100);
   else scheduleAutoAt(ev.action,ev.at);
 }
+function scheduleAfterCompletedFixedAction(action,at=Date.now()){
+  if(!autoSignalEnabled)return;
+  const info=fixedPhaseInfo(at),kind=String(action||'').toUpperCase();
+  if(kind.includes('RE-EVALUATE')){scheduleAutoAt('NEW',info.nextCycleAt);return}
+  if(at<info.reevalAt-250){scheduleAutoAt('REEVAL',info.reevalAt);return}
+  scheduleAutoAt('NEW',info.nextCycleAt);
+}
 async function autoSendAndSchedule(d,action,status=''){
   if(!autoSignalEnabled)return;
+  const completedAt=Date.now();
   try{
-    setAutoStatus(`${fixedPhaseInfo().label} • Sending ${action.toLowerCase()}…`,'warn');
+    setAutoStatus(`${fixedPhaseInfo(completedAt).label} • Sending ${action.toLowerCase()}…`,'warn');
     await sendDecisionWhatsApp(d,action,status);
   }catch(e){setAutoStatus(e.message,'bad')}
-  scheduleNextFixedEvent(false);
+  scheduleAfterCompletedFixedAction(action,completedAt);
 }
 async function setAutoSignalEnabled(on){
   if(on){
