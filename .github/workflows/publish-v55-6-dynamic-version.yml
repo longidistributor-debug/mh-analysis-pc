@@ -2,7 +2,9 @@ name: Publish MH Analysis V.55.6 Dynamic Version
 on:
   push:
     branches: [records-mt5-local-build]
-    paths: ['vercel-auth/trigger-v556']
+    paths:
+      - 'vercel-auth/trigger-v556'
+      - 'vercel-auth/trigger-v556-credit-release'
   workflow_dispatch:
 permissions:
   contents: write
@@ -48,7 +50,7 @@ jobs:
           HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
           printf 'V.55.6\n' > dist/VERSION
           cat > dist/update.json <<EOF
-          {"version":"V.55.6","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.6 makes version display dynamic: the running app shows its installed/current version while the updater shows the incoming manifest version. Existing MT5 embed and EA bridge behavior are retained; user-managed MQ5 remains external."}
+          {"version":"V.55.6","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.6 includes dynamic current/update version display and updated login-screen icon credit. Existing MT5 embed, EA bridge and user-managed MQ5 behavior are retained."}
           EOF
       - name: Install Inno Setup
         shell: powershell
