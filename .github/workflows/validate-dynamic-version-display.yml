@@ -1,0 +1,25 @@
+name: Validate dynamic version display
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-dynamic-version']
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Verify dynamic current/latest version binding
+        shell: powershell
+        run: |
+          $hostFile=Get-Content -Raw webview2_host.go
+          $update=Get-Content -Raw web/update-v001.js
+          if($hostFile.Contains('Version: V.55.1')){throw 'native shell still has stale fixed version'}
+          if(-not $hostFile.Contains('"Version: "+mhPublicVersionV001')){throw 'native shell is not bound to current installed version'}
+          if(-not $update.Contains('setVersion(j.latest)')){throw 'update screen is not bound to latest manifest version'}
+          if(-not $update.Contains('setVersion(j.current)')){throw 'update screen current fallback missing'}
+          node --check web/update-v001.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go validation failed'}
