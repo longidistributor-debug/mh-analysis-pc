@@ -745,7 +745,10 @@ async function setAutoSignalEnabled(on){
     const ev=nextFixedAutoEvent(Date.now(),true);
     if(ev.catchup){setAutoStatus(`${ev.info.label} • Catch-up NEW ANALYZE now, then fixed RE-EVALUATE at +05`,'good');scheduleAutoAt('NEW',Date.now()+120);}
     else scheduleAutoAt(ev.action,ev.at<=Date.now()?Date.now()+120:ev.at);
-  }else{stopAutoTimers();autoSignalNextAt=0;updateAutoButton();/* V.55.13: manual mode only; data/history stays independent */}
+  }else{
+    stopAutoTimers();autoSignalNextAt=0;updateAutoButton();
+    /* V.55.14: OFF means AUTO SCHEDULER OFF only. Manual NEW ANALYZE / RE-EVALUATE remain fully enabled. */
+  }
 }
 async function runScheduledAutoAction(action){
   if(!autoSignalEnabled)return;
@@ -912,8 +915,14 @@ async function executeReevaluate(fromAuto=false){
   }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed • staying on fixed quarter-hour boundary','bad');scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
   finally{busy=false;setBusy(false)}
 }
-async function runAnalyze(){return executeNewAnalysis(false)}
-async function runReevaluate(){return executeReevaluate(false)}
+async function runAnalyze(){
+  /* V.55.14 MANUAL PATH: deliberately independent of autoSignalEnabled/Get Signal. */
+  return await executeNewAnalysis(false);
+}
+async function runReevaluate(){
+  /* V.55.14 MANUAL PATH: deliberately independent of autoSignalEnabled/Get Signal. */
+  return await executeReevaluate(false);
+}
 
 function setupLightweightChart(){
   const container=$('#priceChart');
