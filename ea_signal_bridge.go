@@ -13,14 +13,14 @@ import (
 	"time"
 )
 
-// MH_EA_SIGNAL_READER_BRIDGE_V800
+// MH_EA_SIGNAL_READER_BRIDGE_V801
 // signal.txt is a latest-signal mailbox, not a consume-and-delete queue.
 // The EA deduplicates by signal_id. V799 therefore atomically replaces signal.txt
 // instead of waiting for the EA to delete it (the decoder never deletes it).
 // active_state.txt accepted format from the decoder:
 // FLAT
 // ACTIVE|BUY/SELL|SYMBOL|POSITION/PENDING|TICKET|MAGIC
-// manage.txt: MANAGE_ID|SYMBOL|BUY/SELL|SL|TP|REASON
+// manage.txt: MANAGE_ID|SYMBOL|BUY/SELL|SL|FINAL_TP|REASON|TP1|TP2|PARTIAL_TP
 
 type eaSignalRequest struct {
 	SignalID string  `json:"signal_id"`
@@ -39,6 +39,9 @@ type eaManageRequest struct {
 	Direction string  `json:"direction"`
 	SL        float64 `json:"sl"`
 	TP        float64 `json:"tp"`
+	TP1       float64 `json:"tp1"`
+	TP2       float64 `json:"tp2"`
+	PartialTP bool    `json:"partial_tp"`
 	Reason    string  `json:"reason"`
 }
 
@@ -151,7 +154,7 @@ func eaManageHandler(w http.ResponseWriter,r *http.Request){
 	if q.Direction!="BUY"&&q.Direction!="SELL"{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"direction must be BUY or SELL"});return}
 	if q.SL<=0||q.TP<=0{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"sl/tp must be positive"});return}
 	dir,err:=mt5CommonBridgeDir();if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}
-	line:=strings.Join([]string{q.ManageID,q.Symbol,q.Direction,strconv.FormatFloat(q.SL,'f',-1,64),strconv.FormatFloat(q.TP,'f',-1,64),q.Reason},"|")+"\r\n"
+	line:=strings.Join([]string{q.ManageID,q.Symbol,q.Direction,strconv.FormatFloat(q.SL,'f',-1,64),strconv.FormatFloat(q.TP,'f',-1,64),q.Reason,strconv.FormatFloat(q.TP1,'f',-1,64),strconv.FormatFloat(q.TP2,'f',-1,64),strconv.FormatBool(q.PartialTP)},"|")+"\r\n"
 	dst:=filepath.Join(dir,"manage.txt");tmp:=filepath.Join(dir,"manage.new")
 	eaPublishMu.Lock();defer eaPublishMu.Unlock()
 	if err:=os.WriteFile(tmp,[]byte(line),0644);err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":"could not write EA manage command: "+err.Error()});return}
