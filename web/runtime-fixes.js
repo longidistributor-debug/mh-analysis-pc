@@ -48,30 +48,33 @@ async function refreshMovingPrices(){
   }catch(_){}
 }
 
-function syncBtcChartControlsV553(){
-  const btc=$('.pair.active')?.dataset?.symbol==='BTCUSDT';
-  const tf20=$('.nativeTfButtons button[data-chart-tf="20m"]');
-  if(tf20)tf20.style.display=btc?'none':'';
-}
-function installBtcChartFixV553(){
-  syncBtcChartControlsV553();
+// Pair/timeframe selection is API-silent. app.js may request a chart refresh on
+// context change; suppress exactly that first history request. NEW ANALYZE and
+// RE-EVALUATE remain untouched and therefore fetch fresh candles normally.
+let suppressNextContextHistory=false;
+function installManualAnalysisOnlyGuard(){
+  const nativeFetch=window.fetch.bind(window);
+  window.fetch=(input,init)=>{
+    const url=typeof input==='string'?input:String(input?.url||'');
+    if(suppressNextContextHistory&&url.includes('/api/history')){
+      suppressNextContextHistory=false;
+      return Promise.reject(new Error('Manual selection: fresh candles wait for NEW ANALYZE or RE-EVALUATE'));
+    }
+    return nativeFetch(input,init);
+  };
   document.addEventListener('click',e=>{
-    const pair=e.target.closest('.pair');
-    const tf=e.target.closest('.nativeTfButtons button[data-chart-tf]');
-    if(!pair&&!tf)return;
-    setTimeout(()=>{
-      syncBtcChartControlsV553();
-      const btc=$('.pair.active')?.dataset?.symbol==='BTCUSDT';
-      if(!btc)return;
-      if(tf?.dataset?.chartTf==='20m')return;
-      const analyze=$('#analyze');
-      const empty=$('#chartEmpty');
-      if(analyze&&!analyze.disabled&&empty&&!empty.classList.contains('hidden'))analyze.click();
-    },80);
+    if(e.target.closest('.pair')||e.target.closest('.nativeTfButtons button[data-chart-tf]'))suppressNextContextHistory=true;
   },true);
+  const tf=$('#timeframe');
+  if(tf)tf.addEventListener('change',()=>{suppressNextContextHistory=true},{capture:true});
+}
+function installChartControlCleanup(){
+  // 20m is unsupported by the history feed and must stay unavailable for all pairs.
+  $$('.nativeTfButtons button[data-chart-tf="20m"]').forEach(x=>x.remove());
+  $$('#timeframe option').filter(x=>String(x.value||x.textContent).toLowerCase()==='20m').forEach(x=>x.remove());
 }
 function installEconomicCalendar(){const crop=$('.calendarCrop');if(!crop)return;crop.innerHTML='<div id="mhEconomicCalendar" class="mhCalendarScroll"><div class="mhCalEmpty">Loading economic calendar…</div></div>';loadEconomicCalendar();setTimeout(loadEconomicCalendar,1000);setTimeout(loadEconomicCalendar,3000);setInterval(loadEconomicCalendar,60*1000)}
 function fastOnlineRefresh(){loadEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,500);setTimeout(loadEconomicCalendar,900)}
-function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();installBtcChartFixV553();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
+function boot(){ensureLegacyTargets();installManualAnalysisOnlyGuard();installChartControlCleanup();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
