@@ -693,6 +693,16 @@ func mt5LocalRecordsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	mt5RecordsMu.Lock()
 	s := loadMT5LocalStore()
+	if r.URL.Query().Get("fast") == "1" {
+		rs := mt5RecordsSnapshot(s)
+		mt5RecordsMu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"records": rs, "summary": mt5LocalSummary(rs), "server_time": time.Now().Unix(),
+			"source": "LOCAL_RECORDS_FAST", "external_market_api_calls": 0,
+			"events_read": 0, "events_matched": 0,
+		})
+		return
+	}
 	eventsRead, matched, syncErr := syncMT5Lifecycle(&s)
 	_ = saveMT5LocalStore(s)
 	rs := mt5RecordsSnapshot(s)

@@ -157,7 +157,7 @@ func publicTickerHandlerV5411(w http.ResponseWriter, r *http.Request) {
 	if len(cached) > 0 {
 		_ = json.NewEncoder(w).Encode(cached)
 		tickerRefreshMuV5411.Lock()
-		if time.Since(tickerRefreshAtV5411) > 20*time.Second {
+		if time.Since(tickerRefreshAtV5411) > 5*time.Minute {
 			tickerRefreshAtV5411 = time.Now()
 			go refreshTickerV5411()
 		}

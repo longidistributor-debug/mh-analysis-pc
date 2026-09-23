@@ -56,6 +56,7 @@ var (
 	wv2WALastAckStatus     string
 	wv2WAActiveTarget      string
 	wv2WAResolvedTarget    string
+	wv2MT5PreparingV551    bool
 )
 
 func wv2CreateContainer(parent, inst uintptr) uintptr {
@@ -103,13 +104,15 @@ func wv2ParkWhatsAppV547() {
 	chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
 	w:=int32(r.R-r.L); h:=int32(r.B-r.T-int32(barH))
 	if w<1 { w=1 }; if h<1 { h=1 }
-	x:=w+32
-	// Full-size desktop renderer stays alive, but parent clipping keeps it invisible.
-	chMoveWindow.Call(wv2WhatsappContainer, uintptr(x), uintptr(barH), uintptr(w), uintptr(h), 1)
+	// Keep WhatsApp at full desktop size and rendered at all times. It is parked
+	// at HWND_BOTTOM instead of being moved outside the parent client area, so
+	// Chromium never enters an off-screen/throttled state and the tab paints
+	// instantly when raised.
+	chMoveWindow.Call(wv2WhatsappContainer, 0, uintptr(barH), uintptr(w), uintptr(h), 1)
 	chShowWindow.Call(wv2WhatsappContainer, chSWShow)
 	_ = wv2Whatsapp.Show()
 	wv2Whatsapp.Resize(); _ = wv2Whatsapp.NotifyParentWindowPositionChanged()
-	chSetWindowPos.Call(wv2WhatsappContainer, 1, uintptr(x), uintptr(barH), uintptr(w), uintptr(h), chSWPNoActivate)
+	chSetWindowPos.Call(wv2WhatsappContainer, 1, 0, uintptr(barH), uintptr(w), uintptr(h), chSWPNoActivate)
 }
 
 func wv2HideAll() {
@@ -189,16 +192,15 @@ func wv2ShowLocal(which int) {
 		chSetWindowPos.Call(wv2Container,0,0,uintptr(barH),uintptr(w),uintptr(h),chSWPNoActivate)
 		wv2Browser.Resize(); wv2Browser.Focus()
 	case 2:
-		wv2WAResolvedTarget = ""
 		if wv2Whatsapp != nil {
-			// Manual WhatsApp always restores the root chat UI in the SAME persistent
-			// profile. This prevents the off-screen background renderer from reopening
-			// as a blank theme-colour surface.
-			if !wv2WAProcessing { wv2Whatsapp.Navigate("https://web.whatsapp.com/") }
+			// Never navigate/reload on tab selection. The exact same persistent
+			// renderer has remained full-size and alive behind the other views.
 			chMoveWindow.Call(wv2WhatsappContainer,0,uintptr(barH),uintptr(w),uintptr(h),1)
 			chShowWindow.Call(wv2WhatsappContainer,chSWShow)
 			chSetWindowPos.Call(wv2WhatsappContainer,0,0,uintptr(barH),uintptr(w),uintptr(h),chSWPNoActivate)
-			_ = wv2Whatsapp.Show(); wv2Whatsapp.Resize(); _=wv2Whatsapp.NotifyParentWindowPositionChanged(); wv2Whatsapp.Focus(); chRedrawWindowV5414.Call(wv2WhatsappContainer,0,0,0x0001|0x0080|0x0100); chUpdateWindow.Call(wv2WhatsappContainer)
+			_ = wv2Whatsapp.Show(); wv2Whatsapp.Resize(); _=wv2Whatsapp.NotifyParentWindowPositionChanged()
+			chRedrawWindowV5414.Call(wv2WhatsappContainer,0,0,0x0001|0x0080|0x0100); chUpdateWindow.Call(wv2WhatsappContainer)
+			wv2Whatsapp.Focus()
 		}
 	case 3:
 		if wv2Records != nil {
@@ -247,19 +249,37 @@ func wv2ActivateMT5V5412() {
 
 func wv2ShowMT5() {
 	v546HideAllMT5TopLevel()
+	chMu.Lock()
+	hwnd:=chMT5Wnd
+	preparing:=wv2MT5PreparingV551 || chMT5StartingV34
+	chMu.Unlock()
+	if hwnd != 0 {
+		parent,_,_:=v36GetParent.Call(hwnd)
+		if parent==hostHWND {
+			chMu.Lock(); wv2MT5PreparingV551=false; chMu.Unlock()
+			wv2ActivateMT5V5412()
+			return
+		}
+	}
+	// Repeated clicks while the first embed is being prepared must do nothing;
+	// this avoids the old blank/flick/restart loop.
+	if preparing { return }
+	chMu.Lock(); wv2MT5PreparingV551=true; chMu.Unlock()
 	wv2SetDesiredView(4)
-	// Do not uncover the parked WhatsApp renderer while MT5 is being prepared.
-	// Keep the MH Analysis surface on top until the terminal has become a child HWND.
 	wv2ParkWhatsAppV547()
+	// Keep MH Analysis visible only during the first embed. Once the child HWND
+	// exists, every later MH MT5 click switches synchronously with no blank frame.
 	if wv2Container != 0 && wv2Browser != nil {
 		var r chRect; chGetClientRect.Call(hostHWND, uintptr(unsafe.Pointer(&r)))
 		w:=int32(r.R-r.L); h:=int32(r.B-r.T-int32(barH)); if w<1{w=1}; if h<1{h=1}
 		chShowWindow.Call(wv2Container,chSWShow); _=wv2Browser.Show()
 		chSetWindowPos.Call(wv2Container,0,0,uintptr(barH),uintptr(w),uintptr(h),chSWPNoActivate)
-		wv2Browser.Resize(); wv2Browser.Focus()
+		wv2Browser.Resize()
 	}
 	go func() {
-		if err := chEnsureMT5TerminalV36(); err != nil {
+		err:=chEnsureMT5TerminalV36()
+		chMu.Lock(); wv2MT5PreparingV551=false; chMu.Unlock()
+		if err != nil {
 			messageBox(hostHWND, err.Error(), "MH MT5", 0x10)
 			postMessage(hostHWND, wmSwitchAnalysis, 0, 0)
 			return
@@ -334,7 +354,7 @@ func wv2EvalWhatsAppV54(token uintptr) {
 	script := fmt.Sprintf(`(()=>{
 const msg=%s,isGroup=%s,token=%d;
 const ack=(st)=>{try{window.external.invoke('MHWA|'+token+'|'+st)}catch(e){};return st};
-const sentKey='mh-v55-sent-'+token,armedKey='mh-v55-armed-'+token;
+const sentKey='mh-v551-sent-'+token,armedKey='mh-v551-armed-'+token,clickKey='mh-v551-click-'+token;
 if(sessionStorage.getItem(sentKey)==='1')return ack('sent');
 const host=(location.hostname||'').toLowerCase();
 try{window.open=(u)=>{if(u)location.assign(String(u));return window}}catch(e){}
@@ -360,29 +380,31 @@ if(host!=='web.whatsapp.com')return ack('waiting-whatsapp');
 const getBox=()=>document.querySelector('footer [contenteditable="true"][role="textbox"]')||document.querySelector('footer [contenteditable="true"]')||document.querySelector('footer div[role="textbox"]');
 const box=getBox();
 if(!box)return ack('waiting-chat');
-const norm=(v)=>String(v||'').replace(/\r/g,'').trim();
+const norm=(v)=>String(v||'').replace(//g,'').trim();
 const wanted=norm(msg),current=norm(box.innerText||box.textContent);
 if(sessionStorage.getItem(armedKey)==='1'&&!current){
-  sessionStorage.setItem(sentKey,'1');sessionStorage.removeItem(armedKey);return ack('sent');
+  sessionStorage.setItem(sentKey,'1');sessionStorage.removeItem(armedKey);sessionStorage.removeItem(clickKey);return ack('sent');
 }
 box.focus();
 if(current!==wanted){
   try{
-    const sel=window.getSelection(),range=document.createRange();
-    range.selectNodeContents(box);sel.removeAllRanges();sel.addRange(range);
+    const sel=window.getSelection(),range=document.createRange();range.selectNodeContents(box);sel.removeAllRanges();sel.addRange(range);
     document.execCommand('delete',false,null);sel.removeAllRanges();
   }catch(e){}
   try{box.innerHTML=''}catch(e){try{box.textContent=''}catch(_){}}
   try{box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null}))}catch(e){box.dispatchEvent(new Event('input',{bubbles:true}))}
-  let inserted=false;
-  try{inserted=document.execCommand('insertText',false,msg)}catch(e){}
+  let inserted=false;try{inserted=document.execCommand('insertText',false,msg)}catch(e){}
   if(!inserted){box.textContent=msg}
   try{box.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:msg}))}catch(e){box.dispatchEvent(new Event('input',{bubbles:true}))}
+  sessionStorage.removeItem(clickKey);
 }
 if(norm(box.innerText||box.textContent)!==wanted)return ack('waiting-composer');
 sessionStorage.setItem(armedKey,'1');
 box.focus();
-return ack('composer-ready');
+const send=document.querySelector('footer [data-icon="send"]')?.closest('button')||document.querySelector('button[aria-label="Send"]')||document.querySelector('[data-testid="compose-btn-send"]');
+let clicks=Number(sessionStorage.getItem(clickKey)||'0')||0;
+if(send&&clicks<2){sessionStorage.setItem(clickKey,String(clicks+1));send.click();return ack('send-clicked')}
+return ack('native-enter');
 })()`, string(msgJSON), string(groupJSON), token)
 	wv2ParkWhatsAppV547()
 	_ = wv2Whatsapp.Show()
@@ -408,17 +430,21 @@ func wv2WhatsAppInputHWNDV5414() uintptr {
 
 func wv2WhatsAppNativeEnterV5414(token uintptr) {
 	if token == 0 || token != wv2WAActiveToken || !wv2WAProcessing { return }
-	// Primary V55 route: Chromium DevTools sends a browser-trusted Enter directly
-	// to the focused WhatsApp composer. It works while the WebView is parked and
-	// does not move the user's mouse or foreground window.
-	if wv2WhatsAppTrustedEnterV55() { return }
-	// Compatibility fallback only when the WebView2 core has not been captured yet.
-	h := wv2WhatsAppInputHWNDV5414(); if h == 0 { return }
-	down := uintptr(1 | (0x1C << 16))
-	up := uintptr(1 | (0x1C << 16) | (1 << 30) | (1 << 31))
-	chSendMessageV5414.Call(h,0x0100,13,down)
-	chSendMessageV5414.Call(h,0x0102,13,down)
-	chSendMessageV5414.Call(h,0x0101,13,up)
+	// The renderer remains fully alive behind the active view. Give its composer
+	// input focus without changing z-order, then deliver both native Windows Enter
+	// and Chromium CDP Enter. We no longer treat mere CDP call acceptance as proof
+	// that WhatsApp actually sent the message.
+	wv2ParkWhatsAppV547(); _ = wv2Whatsapp.Show(); wv2Whatsapp.Focus()
+	h := wv2WhatsAppInputHWNDV5414()
+	if h != 0 {
+		down := uintptr(1 | (0x1C << 16))
+		up := uintptr(1 | (0x1C << 16) | (1 << 30) | (1 << 31))
+		chSendMessageV5414.Call(h,0x0100,13,down)
+		chSendMessageV5414.Call(h,0x0102,13,down)
+		chSendMessageV5414.Call(h,0x0101,13,up)
+	}
+	_ = wv2WhatsAppTrustedEnterV55()
+	time.AfterFunc(70*time.Millisecond, func(){ postMessage(hostHWND, wmWhatsAppRefocusV5411, 0, 0) })
 }
 
 func wv2WhatsAppAckV542(token uintptr) {
@@ -427,9 +453,11 @@ func wv2WhatsAppAckV542(token uintptr) {
 	case "sent":
 		wv2WAResolvedTarget = wv2WAActiveTarget
 		wv2FinishWhatsAppV54(token)
-	case "composer-ready":
+	case "send-clicked":
+		time.AfterFunc(220*time.Millisecond, func(){ postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
+	case "native-enter", "composer-ready":
 		wv2WhatsAppNativeEnterV5414(token)
-		time.AfterFunc(420*time.Millisecond, func(){ postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
+		time.AfterFunc(280*time.Millisecond, func(){ postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
 	case "waiting-composer":
 		time.AfterFunc(140*time.Millisecond, func(){ postMessage(hostHWND, wmWhatsAppEvalV54, token, 0) })
 	}
@@ -518,7 +546,7 @@ func runWebView2Host() {
 	hostHWND, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(className)), uintptr(unsafe.Pointer(chWstr("MH Analysis"))), chWSOverlapped, 100, 100, 1280, 820, 0, 0, inst, 0)
 	if hostHWND == 0 { messageBox(0,"Could not create MH Analysis window.","MH Analysis",0x10); return }
 	chSetWindowDisplayAffinityV31.Call(hostHWND, chWDAExcludeFromCaptureV31)
-	wv2VersionLabel, _, _ = chCreateWindowEx.Call(0,uintptr(unsafe.Pointer(chWstr("STATIC"))),uintptr(unsafe.Pointer(chWstr("Version: V.55.0"))),chWSChild|chWSVisible,1040,10,160,24,hostHWND,0,inst,0)
+	wv2VersionLabel, _, _ = chCreateWindowEx.Call(0,uintptr(unsafe.Pointer(chWstr("STATIC"))),uintptr(unsafe.Pointer(chWstr("Version: V.55.1"))),chWSChild|chWSVisible,1040,10,160,24,hostHWND,0,inst,0)
 	wv2VersionFont, _, _ = wv2CreateFontV545.Call(^uintptr(14),0,0,0,700,0,0,0,1,0,0,5,0,uintptr(unsafe.Pointer(chWstr("Segoe UI"))))
 	if wv2VersionFont != 0 { wv2SendMessageV545.Call(wv2VersionLabel,0x0030,wv2VersionFont,1) }
 	btnAnalysis, _, _ = chCreateWindowEx.Call(0,uintptr(unsafe.Pointer(chWstr("BUTTON"))),uintptr(unsafe.Pointer(chWstr("MH Analysis"))),chWSChild|chWSVisible,8,7,140,30,hostHWND,idAnalysis,inst,0)

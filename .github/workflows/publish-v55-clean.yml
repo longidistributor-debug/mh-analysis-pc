@@ -34,13 +34,17 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $version=(Get-Content VERSION -Raw).Trim()
-          if($version -ne 'V.55.0'){throw "Expected direct clean source V.55.0, got $version"}
+          if($version -notmatch '^V\.55\.\d+$'){throw "Expected V.55.x direct clean source, got $version"}
           $legacy=Get-ChildItem '.github\scripts' -Filter 'v54*_patch.py' -ErrorAction SilentlyContinue
           if($legacy){throw 'Legacy V54 build-time patch chain is still present. V55 must build directly from committed source.'}
           $bad=gofmt -l *.go
           if($bad){throw "gofmt required: $bad"}
           node --check web/app.js
           if($LASTEXITCODE -ne 0){throw 'JavaScript validation failed'}
+          if(Select-String -Path web\index.html,web\app.js -Pattern 'myfxbook|mfbcdn' -Quiet){throw 'Myfxbook calendar dependency returned'}
+          if(-not (Select-String -Path web\app.js -Pattern '/api/records-v2\?fast=1' -Quiet)){throw 'Fast Recent Signals startup path missing'}
+          if(-not (Select-String -Path webview2_host.go -Pattern 'send-clicked' -Quiet)){throw 'Confirmed WhatsApp click/send state machine missing'}
+          if(-not (Select-String -Path calendar3d.go -Pattern 'cdn-nfs\.faireconomy\.media' -Quiet)){throw 'Calendar CDN source missing'}
 
       - name: Test and build V55
         shell: powershell
@@ -67,19 +71,20 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          $version=(Get-Content VERSION -Raw).Trim()
           $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
           $tmp=Join-Path $env:RUNNER_TEMP 'v55-update'
           New-Item -ItemType Directory -Force $tmp | Out-Null
           Copy-Item 'dist\MH Analysis.exe' (Join-Path $tmp 'MH Analysis.exe')
           $manifest=[ordered]@{
-            version='V.55.0'
+            version=$version
             mandatory=$true
             download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
             sha256=$sha
-            notes='V55 is a direct committed clean runtime: single persistent native WhatsApp WebView with background trusted Enter sending, strict embedded-only MH MT5 window handling, stable local economic calendar with disk cache, and migrated persistent Recent Signals. No V54 build-time patch chain is used.'
+            notes='V55.1 direct-source runtime: WhatsApp stays permanently rendered and background sends are confirmed by composer clear with click plus native/CDP Enter fallback; MH MT5 repeated clicks switch directly to the embedded child; ticker/calendar/recent values paint from persistent cache before backend work; calendar uses a local cached ForexFactory feed with hourly refresh and no Myfxbook iframe.'
           } | ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $tmp 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
-          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),'V.55.0'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          [IO.File]::WriteAllText((Join-Path $tmp 'VERSION'),$version+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git checkout --orphan __v55_update
@@ -89,6 +94,6 @@ jobs:
           Copy-Item (Join-Path $tmp 'update.json') '.\update.json'
           Copy-Item (Join-Path $tmp 'VERSION') '.\VERSION'
           git add .
-          git commit -m 'Publish MH Analysis V.55.0 clean runtime'
+          git commit -m "Publish MH Analysis $version clean runtime"
           git push --force origin HEAD:mh-analysis-update-channel
           if($LASTEXITCODE -ne 0){throw 'Updater publish failed'}

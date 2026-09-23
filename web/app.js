@@ -296,8 +296,9 @@ function renderTopSetups(d){
 }
 
 async function loadRecentSignalsV5413(){
+  const ctl=new AbortController(),kill=setTimeout(()=>ctl.abort(),1200);
   try{
-    const r=await fetch('/api/records-v2',{cache:'no-store'});if(!r.ok)throw new Error('records unavailable');
+    const r=await fetch('/api/records-v2?fast=1',{cache:'no-store',signal:ctl.signal});if(!r.ok)throw new Error('records unavailable');
     const j=await r.json();
     const rows=(Array.isArray(j?.records)?j.records:[]).slice().sort((a,b)=>Number(b?.created_at||0)-Number(a?.created_at||0)).slice(0,6).map(x=>{
       const ts=Number(x?.created_at||0)*1000;
@@ -313,6 +314,7 @@ async function loadRecentSignalsV5413(){
     renderRecentSignals();
     return rows.length;
   }catch(e){renderRecentSignals();return 0}
+  finally{clearTimeout(kill)}
 }
 function renderRecentSignals(){
   const previous=recentSession.slice(0,5);
@@ -407,8 +409,9 @@ async function loadPersistentUICacheV5411(){
       const root=$('#economicCalendarLocal');
       if(root&&typeof renderEconomicCalendarV546==='function')renderEconomicCalendarV546(root,j.calendar);
     }
-    if(Array.isArray(j?.recent)){
+    if(Array.isArray(j?.recent)&&j.recent.length){
       recentSession.splice(0,recentSession.length,...j.recent.slice(0,6));
+      try{localStorage.setItem('mh-recent-signals-stable',JSON.stringify(recentSession))}catch(_){}
       renderRecentSignals();
     }
     return true;
@@ -918,6 +921,14 @@ async function openWhatsappSettingsPrompt(){
 
 function escapeCalendarTextV545(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function renderEconomicCalendarV546(root,days){if(!root||!Array.isArray(days)||!days.length)return false;root.innerHTML=days.map(day=>`<div class="calDayV545"><div class="calDateV545">${escapeCalendarTextV545(day.label||day.date)}</div>${(day.events||[]).map(ev=>{const imp=String(ev.impact||'').toLowerCase();return `<div class="calEventV545"><span class="calTimeV545">${escapeCalendarTextV545(ev.time)}</span><span class="calCountryV545">${escapeCalendarTextV545(ev.country)}</span><span class="calImpactV545 ${imp}">${escapeCalendarTextV545(ev.impact)}</span><span class="calTitleV545">${escapeCalendarTextV545(ev.title)}</span></div>`}).join('')}</div>`).join('');return true}
+function primeEconomicCalendarV551(){
+  const root=$('#economicCalendarLocal');if(!root)return false;
+  try{
+    const cached=JSON.parse(localStorage.getItem('mh-economic-calendar-stable')||localStorage.getItem('mh-economic-calendar-v546')||localStorage.getItem('mh-economic-calendar-v545')||'null');
+    if(cached?.days?.length)return renderEconomicCalendarV546(root,cached.days);
+  }catch(_){}
+  return !!root.querySelector('.calDayV545');
+}
 async function loadEconomicCalendarV545(){
   const root=$('#economicCalendarLocal');if(!root)return;
   try{const cached=JSON.parse(localStorage.getItem('mh-economic-calendar-stable')||localStorage.getItem('mh-economic-calendar-v546')||localStorage.getItem('mh-economic-calendar-v545')||'null');if(cached?.days)renderEconomicCalendarV546(root,cached.days)}catch(e){}
@@ -931,11 +942,25 @@ $('#analyze').onclick=runAnalyze;$('#reevaluate').onclick=runReevaluate;$('#auto
 $$('.pair').forEach(b=>b.onclick=()=>{$$('.pair').forEach(x=>x.classList.remove('active'));b.classList.add('active');symbol=b.dataset.symbol;contextChanged()});
 $('#timeframe').onchange=e=>{timeframe=e.target.value;contextChanged()};
 
+// V55.1 startup: last-known UI values paint BEFORE any awaited backend work.
+// This removes the old 2–3 minute blank ticker/calendar caused by waiting for Records/MT5 sync.
+primeTickerV549();
+primeMovingTickerV547();
+renderRecentSignals();
+primeEconomicCalendarV551();
+setupLightweightChart();setupChartControls();loadChart();
+const startupUICacheV551=loadPersistentUICacheV5411().then(()=>{primeTickerV549();renderRecentSignals();primeEconomicCalendarV551()}).catch(()=>false);
+loadRecentSignalsV5413().catch(()=>0);
+loadEconomicCalendarV545().catch(()=>{});
+refreshPublicTicker();
+refreshMarketCap();
+requestAnimationFrame(()=>refreshPublicTicker());setTimeout(refreshPublicTicker,250);setTimeout(refreshPublicTicker,900);setTimeout(refreshPublicTicker,1800);
 // v79.6 credentials are stored by native Windows settings dialogs, not editable HTML fields.
 await refreshBackendSettings();
 if(backendSettings.has_api_key){setDataState('neutralDot','Key saved')}else setDataState('neutralDot','Access key not saved');
 autoSignalEnabled=localStorage.getItem(STORAGE_AUTO)==='1';
-await loadPersistentUICacheV5411();await loadRecentSignalsV5413();renderRecentSignals();primeTickerV549();primeMovingTickerV547();refreshPublicTicker();loadEconomicCalendarV545();setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();requestAnimationFrame(()=>refreshPublicTicker());setTimeout(refreshPublicTicker,250);setTimeout(refreshPublicTicker,900);setTimeout(refreshPublicTicker,1800);setInterval(refreshMarketCap,60000);setInterval(refreshPublicTicker,60000);setInterval(loadEconomicCalendarV545,180000);
+void startupUICacheV551;
+setInterval(refreshMarketCap,60000);setInterval(refreshPublicTicker,60000);setInterval(loadEconomicCalendarV545,60*60*1000);
 if(autoSignalEnabled){
   stopAutoTimers();
   const info=fixedPhaseInfo();
