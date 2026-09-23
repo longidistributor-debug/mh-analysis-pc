@@ -20,10 +20,8 @@ if 'function applyStoppedSetupReentryGuardV5510' not in s:
     if anchor not in s: raise SystemExit('activeStorageKey anchor missing')
     s=s.replace(anchor,anchor+insert,1)
 
-# NEW ANALYZE: use the stable analysis-expression anchor rather than the old
-# newsRisk line layout. This is deliberately idempotent because the branch may
-# already contain the helper functions from an earlier interrupted release.
-new_marker="applyStoppedSetupReentryGuardV5510(d,c,k);"
+# NEW ANALYZE: use a stable expression anchor and keep the patch idempotent.
+new_marker="persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k)"
 if new_marker not in s:
     analyze_anchor="const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null)"
     if analyze_anchor not in s: raise SystemExit('NEW ANALYZE expression anchor missing')
@@ -38,7 +36,6 @@ if "else if(slHit){persistStoppedSetupV5510(k,s,c);" not in s:
 
 p.write_text(s,encoding='utf-8')
 
-# Version-only updates. Do not alter any other behavior.
 Path('VERSION').write_text('V.55.10\n',encoding='utf-8')
 for fn in ['updater.go','license_auth.go','web/index.html']:
     q=Path(fn); t=q.read_text(encoding='utf-8'); t=t.replace('V.55.9','V.55.10'); q.write_text(t,encoding='utf-8')
