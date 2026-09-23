@@ -152,7 +152,7 @@ function buildSignal(sym,tf,c,m,s,dir,buyScore,sellScore,ranked){
   const tp1Obj=chooseObjectiveBounded(entry,allOpp,desiredTp1,dir,Math.max(model.noise*.35,profile.tp1Floor*.25),profile.tp1Cap),tp1=tp1Obj??(dir==='BUY'?entry+desiredTp1:entry-desiredTp1);
   const further=allOpp.filter(x=>dir==='BUY'?x>tp1:x<tp1),tp2Obj=chooseObjectiveBounded(entry,further,desiredTp2,dir,Math.abs(tp1-entry)*1.05,profile.tp2Cap),tp2=tp2Obj??(dir==='BUY'?entry+desiredTp2:entry-desiredTp2);
   const score=dir==='BUY'?buyScore:sellScore,risk=Math.max(Math.abs(entry-sl),1e-9),rr1=Math.abs(tp1-entry)/risk,rr2=Math.abs(tp2-entry)/risk,reasons=ranked.slice(0,7).flatMap(f=>[`${f.name} ${Math.round(f.score)}/100`,f.reasons[0]]).filter(Boolean).slice(0,14);
-  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,status:'PENDING',reasons,setupReason:`${dir} • BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL uses the selected structural invalidation plus current ${tf} wick/range behavior, bounded by the measured ${tf} risk envelope (${two(profile.riskMin)}–${two(profile.riskMax)} median true-ranges); no fixed pip distance is used.`,tp1Reason:`TP1 uses reachable opposing structure/liquidity inside the measured ${tf} target envelope. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next reachable structure/liquidity objective inside the measured ${tf} stretch envelope. Current computed R:R ${two(rr2)}R.`,distanceModel:{...model,timeframeProfile:profile}};
+  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,createdMarketPrice:last.c,status:'PENDING',reasons,setupReason:`${dir} • BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL uses the selected structural invalidation plus current ${tf} wick/range behavior, bounded by the measured ${tf} risk envelope (${two(profile.riskMin)}–${two(profile.riskMax)} median true-ranges); no fixed pip distance is used.`,tp1Reason:`TP1 uses reachable opposing structure/liquidity inside the measured ${tf} target envelope. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next reachable structure/liquidity objective inside the measured ${tf} stretch envelope. Current computed R:R ${two(rr2)}R.`,distanceModel:{...model,timeframeProfile:profile}};
 }
 
 function managedReconfirmedLevelsV552(prev,fresh,c){
@@ -184,7 +184,42 @@ function protectOnReversalV552(prev,c){
 
 function adaptiveExpiryBars(c){const sp=adaptiveSpan(c.length),pts=[...pivots(c,true,sp),...pivots(c,false,sp)].sort((a,b)=>a.index-b.index),gaps=[];for(let i=1;i<pts.length;i++){const g=pts[i].index-pts[i-1].index;if(g>0)gaps.push(g)}if(!gaps.length)return Math.max(3,Math.round(Math.sqrt(c.length)));const med=median(gaps),mad=median(gaps.map(x=>Math.abs(x-med)));return Math.max(3,Math.round(med+mad))}
 function signalBarsAge(c,s){let idx=c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime));if(idx<0)idx=Math.max(0,c.length-adaptiveExpiryBars(c));return Math.max(0,c.length-1-idx)}
-function signalTouched(c,s,field){const idx=Math.max(0,c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime)));const w=c.slice(idx<0?0:idx),p=Number(s[field]);if(!Number.isFinite(p))return false;if(field==='sl')return s.direction==='BUY'?w.some(x=>x.l<=p):w.some(x=>x.h>=p);return s.direction==='BUY'?w.some(x=>x.h>=p):w.some(x=>x.l<=p)}
+function signalEntryActivation(c,s){
+  const entry=Number(s?.entry),createdT=Number(s?.createdCandleTime),createdPx=Number(s?.createdMarketPrice);
+  if(!Number.isFinite(entry)||!Number.isFinite(createdT)||!Array.isArray(c)||!c.length)return null;
+  const signalIdx=c.findIndex(x=>Number(x.t)===createdT),eps=Math.max(Math.abs(entry)*1e-10,1e-9);
+  // If the pending entry was effectively at the live price when the signal was created,
+  // treat it as immediately activated. Never use the signal candle's pre-signal wick.
+  if(Number.isFinite(createdPx)&&Math.abs(createdPx-entry)<=eps)return{index:signalIdx>=0?signalIdx:Math.max(0,c.findIndex(x=>Number(x.t)>createdT)-1),immediate:true};
+  // Otherwise only candles strictly AFTER the signal candle are allowed to activate it.
+  // This prevents an earlier wick from the same candle from pretending the pending order filled.
+  const start=c.findIndex(x=>Number(x.t)>createdT);
+  if(start<0)return null;
+  for(let i=start;i<c.length;i++){
+    const x=c[i];
+    if(Number(x.l)<=entry&&Number(x.h)>=entry)return{index:i,immediate:false};
+  }
+  return null;
+}
+function signalTouched(c,s,field){
+  const p=Number(s?.[field]);if(!Number.isFinite(p))return false;
+  const activation=signalEntryActivation(c,s);
+  if(!activation)return false; // pending order never filled after this signal, so SL/TP cannot be hit
+  const dir=String(s?.direction||'').toUpperCase(),i=Math.max(0,activation.index),a=c[i];
+  // On the activation candle, OHLC high/low ordering is unknown. Only the candle's
+  // closing/current price is safe evidence after entry activation; older intrabar extremes
+  // may have happened before the order filled.
+  if(a&&Number.isFinite(Number(a.c))){
+    const q=Number(a.c);
+    if(field==='sl'){
+      if(dir==='BUY'?q<=p:q>=p)return true;
+    }else if(dir==='BUY'?q>=p:q<=p)return true;
+  }
+  // From the NEXT candle onward, the whole OHLC range is definitely post-entry.
+  const w=c.slice(i+1);
+  if(field==='sl')return dir==='BUY'?w.some(x=>Number(x.l)<=p):w.some(x=>Number(x.h)>=p);
+  return dir==='BUY'?w.some(x=>Number(x.h)>=p):w.some(x=>Number(x.l)<=p);
+}
 function classifyReconfirmation(prev,fresh,c){if(!prev||!fresh||prev.direction!==fresh.direction)return null;if(signalTouched(c,prev,'sl')||signalTouched(c,prev,'tp1'))return null;const model=empiricalDistanceModel(c,prev.direction,stats(c)),d=Math.abs(Number(prev.entry)-Number(fresh.entry));if(d>model.entryTolerance)return null;const age=signalBarsAge(c,prev),life=adaptiveExpiryBars(c);return{distance:d,tolerance:model.entryTolerance,age,life}}
 function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
 
