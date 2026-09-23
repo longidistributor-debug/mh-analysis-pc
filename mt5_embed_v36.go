@@ -13,6 +13,8 @@ import (
     "unsafe"
 )
 
+var v5410MT5ExeBase string
+
 var (
     v36OpenProcess = chKernel32.NewProc("OpenProcess")
     v36CloseHandle = chKernel32.NewProc("CloseHandle")
@@ -46,9 +48,45 @@ func v54EmbedMT5WithRetry(hwnd uintptr, wait time.Duration) bool {
     return false
 }
 
+func v545EmbedStartedMT5Fast(wait time.Duration) bool {
+    deadline:=time.Now().Add(wait)
+    for time.Now().Before(deadline) {
+        if hwnd:=v36FindRunningMT5();hwnd!=0 { chShowWindow.Call(hwnd,chSWHide); if v36EmbedMT5(hwnd){return true} }
+        time.Sleep(2*time.Millisecond)
+    }
+    return false
+}
+
+func v5410IsMT5Image(image string) bool {
+	image = strings.ToLower(strings.TrimSpace(image))
+	return image == "terminal64.exe" || image == "terminal.exe" || (v5410MT5ExeBase != "" && image == v5410MT5ExeBase)
+}
+func v5410FindMT5Candidate() uintptr {
+	var found uintptr; var bestArea int64
+	cb:=syscall.NewCallback(func(hwnd,_ uintptr)uintptr{
+		if hwnd==0||hwnd==hostHWND{return 1}; var pid uint32; chGetWindowThreadPID.Call(hwnd,uintptr(unsafe.Pointer(&pid)))
+		if !v5410IsMT5Image(v36ProcessImage(pid)){return 1}
+		var r chRect; ok,_,_:=v41GetWindowRect.Call(hwnd,uintptr(unsafe.Pointer(&r))); if ok==0{return 1}
+		w:=int64(r.R-r.L); h:=int64(r.B-r.T); if w<80||h<60{return 1}; if a:=w*h; a>bestArea{bestArea=a;found=hwnd}; return 1
+	}); chEnumWindows.Call(cb,0); return found
+}
+
+func v546HideAllMT5TopLevel(){
+	cb:=syscall.NewCallback(func(hwnd,_ uintptr)uintptr{if hwnd==0||hwnd==hostHWND{return 1};var pid uint32;chGetWindowThreadPID.Call(hwnd,uintptr(unsafe.Pointer(&pid)));if v5410IsMT5Image(v36ProcessImage(pid)){parent,_,_:=v36GetParent.Call(hwnd);if parent!=hostHWND{chShowWindow.Call(hwnd,chSWHide)}};return 1});chEnumWindows.Call(cb,0)
+}
+func v546EmbedOnlyMT5(wait time.Duration) bool {
+	deadline:=time.Now().Add(wait)
+	for time.Now().Before(deadline){
+		v546HideAllMT5TopLevel()
+		if hwnd:=v5410FindMT5Candidate();hwnd!=0{chShowWindow.Call(hwnd,chSWHide);if v36EmbedMT5(hwnd){return true}}
+		time.Sleep(2*time.Millisecond)
+	}
+	return false
+}
+
 func chEnsureMT5TerminalV36() error {
     chMu.Lock();existingEmbedded:=chMT5Wnd;chMu.Unlock();if existingEmbedded!=0{parent,_,_:=v36GetParent.Call(existingEmbedded);if parent==hostHWND{chResizeChildren();chShowWindow.Call(existingEmbedded,chSWShow);chFocusEmbeddedBrowser(existingEmbedded);go mt5ApplyLatestQueued();return nil};chMu.Lock();if chMT5Wnd==existingEmbedded{chMT5Wnd=0};chMu.Unlock()}
     chMu.Lock();if chMT5StartingV34{chMu.Unlock();return nil};chMT5StartingV34=true;chMu.Unlock();defer func(){chMu.Lock();chMT5StartingV34=false;chMu.Unlock()}()
-    if hwnd:=v36FindRunningMT5();hwnd!=0{if !v54EmbedMT5WithRetry(hwnd,4*time.Second){return errors.New("Installed MT5 was detected, but Windows still refused child embedding after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil}
-    path,err:=chMT5Executable();if err!=nil{return err};cmd:=exec.Command(path);cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true,CreationFlags:0x08000000};if err:=cmd.Start();err!=nil{return fmt.Errorf("Could not start MT5: %w",err)};chMu.Lock();chMT5Cmd=cmd;chMu.Unlock();if !v54EmbedMT5WithRetry(0,18*time.Second){return errors.New("MT5 started, but its terminal window could not be embedded after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil
+    v546HideAllMT5TopLevel();if hwnd:=v5410FindMT5Candidate();hwnd!=0{chShowWindow.Call(hwnd,chSWHide);if !v546EmbedOnlyMT5(4*time.Second){return errors.New("Installed MT5 was detected, but Windows still refused child embedding after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil}
+    path,err:=chMT5Executable();if err!=nil{return err};v5410MT5ExeBase=strings.ToLower(filepath.Base(path));v546HideAllMT5TopLevel();cmd:=exec.Command(path);cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true,CreationFlags:0x08000000};if err:=cmd.Start();err!=nil{return fmt.Errorf("Could not start MT5: %w",err)};chMu.Lock();chMT5Cmd=cmd;chMu.Unlock();if !v546EmbedOnlyMT5(18*time.Second){return errors.New("MT5 started, but its terminal window could not be embedded after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil
 }

@@ -143,7 +143,7 @@ function analyze(c,prev){
 function refreshReason(prev,d){const fresh=d.signal;if(!prev&&!fresh)return d.explanation;if(!prev&&fresh)return`Fresh analysis found ${fresh.direction} as the best current setup. ${d.explanation}`;if(prev&&!fresh)return`The earlier ${prev.direction} setup is not being reissued. Fresh analysis no longer has a clear directional edge. ${d.explanation}`;if(fresh.direction!==prev.direction)return`The earlier ${prev.direction} setup is no longer the best current thesis. Fresh ranking changed to ${fresh.direction}. ${d.explanation}`;if(fresh.reconfirmed){const mv=(fresh.score??0)-(fresh.previousScore??prev.score??0);return`RECONFIRMED, NOT A NEW DUPLICATE: this ${fresh.direction} signal was already issued. Fresh ${timeframe} data still supports the same structure and the original entry/SL/TP levels remain relevant. Quality ${fresh.previousScore??prev.score} -> ${fresh.score}${mv?` (${mv>0?'+':''}${mv})`:''}. ${d.explanation}`;}const same=Number(prev.createdCandleTime)===Number(fresh.createdCandleTime),move=fresh.score-prev.score;return`${same?'The same latest candle snapshot was analysed again from its newest OHLC state.':'A newer same-timeframe candle snapshot was analysed.'} ${fresh.direction} remains strongest, but this is a materially refreshed setup rather than the same entry zone. Quality ${prev.score} -> ${fresh.score}${move?` (${move>0?'+':''}${move})`:''}. ${d.explanation}`}
 
 
-const recentSession=[];
+const recentSession=(()=>{try{const x=JSON.parse(localStorage.getItem('mh-recent-signals-stable')||'[]');return Array.isArray(x)?x.slice(0,6):[]}catch(e){return[]}})();
 function setDataState(kind,text){
   const top=$('#restState'),detail=$('#restDetail');
   top.className=`statusPill ${kind}`;top.textContent=`MH Analysis By MHammadS • Data • ${text}`;
@@ -294,10 +294,30 @@ function renderTopSetups(d){
   else if(d.bestFamily&&d.bestFamily!=='-'){rows.push(`<div class="rankRow"><span>1. ${escapeHtml(d.bestFamily)}</span><b>${d.signal?.score??Math.max(d.buyScore,d.sellScore)}</b></div>`);if(d.runnerUpFamily&&d.runnerUpFamily!=='-')rows.push(`<div class="rankRow"><span>2. ${escapeHtml(d.runnerUpFamily)}</span><b>—</b></div>`)}
   $('#topSetups').className='rankList';$('#topSetups').innerHTML=rows.join('')||'No ranking yet.';
 }
+
+async function loadRecentSignalsV5413(){
+  try{
+    const r=await fetch('/api/records-v2',{cache:'no-store'});if(!r.ok)throw new Error('records unavailable');
+    const j=await r.json();
+    const rows=(Array.isArray(j?.records)?j.records:[]).slice().sort((a,b)=>Number(b?.created_at||0)-Number(a?.created_at||0)).slice(0,6).map(x=>{
+      const ts=Number(x?.created_at||0)*1000;
+      const t=String(x?.local_time||'').trim()||(ts?new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—');
+      const label=String(x?.direction||'').trim().toUpperCase()||'NO EDGE';
+      return {time:t,timeframe:String(x?.timeframe||'—'),label,score:Math.round(Number(x?.score)||0),state:String(x?.status||''),key:String(x?.signal_id||x?.id||`${ts}|${label}`)};
+    });
+    if(rows.length){
+      recentSession.splice(0,recentSession.length,...rows);
+      try{localStorage.setItem('mh-recent-signals-stable',JSON.stringify(recentSession))}catch(e){}
+      savePersistentUICacheV5411({recent:recentSession});
+    }
+    renderRecentSignals();
+    return rows.length;
+  }catch(e){renderRecentSignals();return 0}
+}
 function renderRecentSignals(){
-  const previous=recentSession.slice(1,5);
+  const previous=recentSession.slice(0,5);
   $('#recentSignals').className='recentList';
-  $('#recentSignals').innerHTML=previous.length?previous.map(x=>`<div class="recentRow"><span>${x.time}</span><span class="recentTf">${x.timeframe||'—'}</span><b class="${x.label==='BUY'?'good':x.label==='SELL'?'bad':'warn'}">${x.label}</b><span>${x.score}/100</span></div>`).join(''):'No previous session signals yet.';
+  $('#recentSignals').innerHTML=previous.length?previous.map(x=>`<div class="recentRow"><span>${x.time}</span><span class="recentTf">${x.timeframe||'—'}</span><b class="${x.label==='BUY'?'good':x.label==='SELL'?'bad':'warn'}">${x.label}</b><span>${Math.round(Number(x.score)||0)}/100</span></div>`).join(''):'No recent signals yet.';
 }
 // MH_SAME_SIGNAL_GUARD_V30
 async function checkSameSignalV30(d){
@@ -333,6 +353,8 @@ function addRecent(d,state='NEW'){
   const key=`${symbol}|${timeframe}|${label}|${score}|${state}`;
   if(recentSession[0]?.key!==key)recentSession.unshift({time:now,timeframe,label,score,state,key});
   if(recentSession.length>6)recentSession.length=6;
+  try{localStorage.setItem('mh-recent-signals-stable',JSON.stringify(recentSession))}catch(e){}
+  savePersistentUICacheV5411({recent:recentSession});
   // V36: Records are written only by the canonical V2 fanout.
   renderRecentSignals();
 }
@@ -372,10 +394,58 @@ function showError(msg){
   $('#explanation').className='detailText bad';$('#explanation').textContent=msg;
 }
 
+
+
+function savePersistentUICacheV5411(delta){
+  try{fetch('/api/ui-cache',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(delta),cache:'no-store'}).catch(()=>{})}catch(e){}
+}
+async function loadPersistentUICacheV5411(){
+  try{
+    const r=await fetch('/api/ui-cache',{cache:'no-store'}); if(!r.ok)return false;
+    const j=await r.json();
+    if(j?.ticker)applyTickerCacheV549(j.ticker);
+    if(Array.isArray(j?.calendar)&&j.calendar.length){
+      const root=$('#economicCalendarLocal');
+      if(root&&typeof renderEconomicCalendarV546==='function')renderEconomicCalendarV546(root,j.calendar);
+    }
+    if(Array.isArray(j?.recent)){
+      recentSession.splice(0,recentSession.length,...j.recent.slice(0,6));
+      renderRecentSignals();
+    }
+    return true;
+  }catch(e){return false}
+}
+function applyTickerCacheV549(j){
+  try{
+    if(Number.isFinite(Number(j?.gold_usd))&&Number(j.gold_usd)>0){publicGoldPrice=Number(j.gold_usd);$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`}
+    if(Number.isFinite(Number(j?.btc_usd)))$('#tickerBTC').textContent=`$${Number(j.btc_usd).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+    if(Number.isFinite(Number(j?.eth_usd)))$('#tickerETH').textContent=`$${Number(j.eth_usd).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+    if(Number.isFinite(Number(j?.eurusd)))$('#tickerEURUSD').textContent=Number(j.eurusd).toFixed(5);
+    if(Number.isFinite(Number(j?.usdjpy)))$('#tickerUSDJPY').textContent=Number(j.usdjpy).toFixed(3);
+    if(Number.isFinite(Number(j?.gbpusd)))$('#tickerGBPUSD').textContent=Number(j.gbpusd).toFixed(5);
+    if(Number.isFinite(Number(j?.gbpjpy)))$('#tickerGBPJPY').textContent=Number(j.gbpjpy).toFixed(3);
+    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
+    document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{if(vals[i])el.textContent=vals[i]});
+  }catch(e){}
+}
+function primeTickerV549(){
+  try{const c=JSON.parse(localStorage.getItem('mh-public-ticker-stable')||'null');if(c)applyTickerCacheV549(c)}catch(e){}
+  try{const cached=(candleCache.get('XAUUSD|15m')||restoreCandles('XAUUSD|15m')||[]);if(cached.length&&(!$('#tickerGold').textContent||$('#tickerGold').textContent==='—')){$('#tickerGold').textContent=`$${fmt(Number(cached.at(-1).c))}`}}catch(e){}
+  const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
+  document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>el.textContent=vals[i]||'—');
+}
 async function refreshPublicTicker(){
+  try{
+    const cached=(candleCache.get('XAUUSD|15m')||candleCache.get(keyFor())||[]).map(normalizeCandle).filter(Boolean);
+    if(cached.length){publicGoldPrice=Number(cached.at(-1).c);if(Number.isFinite(publicGoldPrice))$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`}
+    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
+    document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{if(vals[i]!=null)el.textContent=vals[i]});
+  }catch(e){}
   try{
     const r=await fetch('/api/public-ticker',{cache:'no-store'}),j=await r.json();
     if(r.ok){
+      try{localStorage.setItem('mh-public-ticker-stable',JSON.stringify(j));applyTickerCacheV549(j)}catch(e){}
+      savePersistentUICacheV5411({ticker:j});
       if(Number.isFinite(Number(j.gold_usd))&&Number(j.gold_usd)>0){publicGoldPrice=Number(j.gold_usd);$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`;if(symbol==='XAUUSD')renderGoldMetrics();}
       if(Number.isFinite(Number(j.btc_usd)))$('#tickerBTC').textContent=`$${Number(j.btc_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.btc_change_24h))?` • ${Number(j.btc_change_24h)>=0?'+':''}${Number(j.btc_change_24h).toFixed(2)}%`:''}`;
       if(Number.isFinite(Number(j.eth_usd)))$('#tickerETH').textContent=`$${Number(j.eth_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.eth_change_24h))?` • ${Number(j.eth_change_24h)>=0?'+':''}${Number(j.eth_change_24h).toFixed(2)}%`:''}`;
@@ -399,6 +469,13 @@ async function refreshPublicTicker(){
     document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{ if(vals[i]!=null) el.textContent=vals[i]; });
   }catch(e){}
 }
+
+function primeMovingTickerV547(){
+  try{
+    const bar=document.querySelector('.movingTicker');
+    if(bar){bar.style.visibility='visible';bar.style.opacity='1'}
+  }catch(e){}
+}
 function capFmt(v){const n=Number(v);if(!Number.isFinite(n))return'—';if(n>=1e12)return`$${(n/1e12).toFixed(2)}T`;if(n>=1e9)return`$${(n/1e9).toFixed(2)}B`;if(n>=1e6)return`$${(n/1e6).toFixed(2)}M`;return`$${n.toLocaleString(undefined,{maximumFractionDigits:0})}`}
 function setTopMetricLabels(title,a,b,c,d){$('#marketDataTitle').textContent=title;$('#metric1Label').textContent=a;$('#metric2Label').textContent=b;$('#metric3Label').textContent=c;$('#metric4Label').textContent=d}
 function renderGoldMetrics(){
@@ -418,20 +495,34 @@ async function refreshMarketCap(){if(symbol==='XAUUSD'){renderGoldMetrics();retu
 
 function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
-  const sig=d?.signal||(action==='RE-EVALUATE'?d?.originalSignal:null),isSell=sig?.direction==='SELL',dot=sig?(isSell?'🔴':'🟢'):'⚪';
-  const lines=[`*MH ANALYSIS SIGNAL*`,`*Action:* ${action}`,`*Pair:* ${symbol}`,`*Timeframe:* ${timeframe}`,`*Time:* ${new Date().toLocaleString()}`,''];
-  if(sig){lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Setup:* ${d.bestFamily||sig.setupReason||'Best current setup'}`)}
-  else{lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*BUY Score:* ${d?.buyScore??'—'}`,`*SELL Score:* ${d?.sellScore??'—'}`,`*Reason:* ${d?.explanation||'No statistically clear directional edge on the fresh analysis.'}`)}
-  if(status)lines.push(`*Status:* ${status}`);return lines.join('\n');
+  const sig=d?.signal||d?.originalSignal||null;
+  const isRe=action==='RE-EVALUATE';
+  const statusValue=isRe?'Re-Evaluate':(sig?'Signal generated':'No clear edge');
+  const reason=isRe?(d?.explanation||status||d?.bestFamily||sig?.setupReason||'Market re-evaluation'):'';
+  const lines=[`*MH ANALYSIS SIGNAL*`,`🤝 *Status:* ${statusValue}`];
+  if(isRe){lines.push('',`*Reason:* ${reason}`,'')}
+  else{lines.push('')}
+  lines.push(`*Pair:* ${symbol}`,`*Timeframe:* ${String(timeframe).toUpperCase()}`,`*Time:* ${new Date().toLocaleString()}`,'');
+  if(sig){
+    const dot=sig.direction==='SELL'?'🔴':'🟢';
+    lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Setup:* ${d?.bestFamily||sig?.setupReason||'Best current setup'}`);
+  }else{
+    lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*Entry:* —`,`*SL:* —`,`*TP1:* —`,`*TP2:* —`,`*Score:* —`,`*Setup:* No clear edge`);
+  }
+  return lines.join('\n');
 }
-async function sendDecisionWhatsApp(d,action,status=''){
-  await refreshBackendSettings();
-  if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
+function sendDecisionWhatsApp(d,action,status=''){
   const message=decisionWhatsAppMessage(d,action,status);
-  const r=await fetch('/api/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
-  let j={};try{j=await r.json()}catch(_){ }
-  if(!r.ok)throw new Error(j.error||`WhatsApp send failed (HTTP ${r.status})`);
-  return j;
+  setTimeout(()=>{(async()=>{
+    try{
+      await refreshBackendSettings();
+      if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
+      const r=await fetch('/api/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
+      let j={};try{j=await r.json()}catch(_){ }
+      if(!r.ok)throw new Error(j.error||'WhatsApp queue failed');
+    }catch(e){console.warn('Background WhatsApp send failed',e)}
+  })()},0);
+  return Promise.resolve({ok:true,queued:true,background:true});
 }
 function setAutoStatus(text,kind=''){const el=$('#autoSignalStatus');if(!el)return;el.textContent=text;el.className=`autoSignalStatus ${kind}`.trim()}
 function actionLabel(a){return a==='REEVAL'?'RE-EVALUATE':'NEW ANALYZE'}
@@ -489,7 +580,7 @@ function scheduleFixedAfterDecision(d,action,triggerAt=autoActionStartedAt||Date
 async function autoSendAndSchedule(d,action,status=''){
   if(!autoSignalEnabled)return;
   const triggerAt=autoActionStartedAt||Date.now();
-  if(d?._sameActiveSignal){setAutoStatus('Same signal still active • no new signal sent','warn');scheduleFixedAfterDecision(d,action,triggerAt);return;}
+  if(d?._sameActiveSignal){setAutoStatus('Same signal still active • WhatsApp update will still be sent • no duplicate Record / MT5 pending','warn');}
   try{
     setAutoStatus(`${fixedPhaseInfo(triggerAt).label} • Sending ${action.toLowerCase()}…`,'warn');
     await sendDecisionWhatsApp(d,action,status);
@@ -598,19 +689,15 @@ async function executeNewAnalysis(fromAuto=false){
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
     if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
-    renderDecision(d,reason,'NEW');
-    if(d.signal&&!d._sameActiveSignal){await dispatchUniqueSignalV36(d);} // V36_CANONICAL_SIGNAL_FANOUT
+    renderDecision(d,reason,'NEW');busy=false;setBusy(false);
+    if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
     else{
       try{
-        await refreshBackendSettings();
-        if(backendSettings.has_whatsapp&&!d._sameActiveSignal){
-          setAutoStatus('Sending NEW ANALYZE to WhatsApp…','warn');
-          await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
-          setAutoStatus('NEW ANALYZE sent to WhatsApp','good');
-        }else if(d._sameActiveSignal)setAutoStatus('Same signal still active • no new WhatsApp / Record / MT5 pending','warn');
-        else setAutoStatus('Manual analysis ready • WhatsApp Signal Link not saved','warn');
-      }catch(e){setAutoStatus(`WhatsApp send failed • ${e.message||e}`,'bad')}
+        await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
+        if(d._sameActiveSignal)setAutoStatus('NEW ANALYZE queued to WhatsApp • same signal active • no duplicate Record / MT5 pending','good');
+        else setAutoStatus('NEW ANALYZE queued to WhatsApp','good');
+      }catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
     return d;
   }catch(e){
@@ -655,17 +742,10 @@ async function executeReevaluate(fromAuto=false){
     if(displayOriginal){const sideScore=s.direction==='BUY'?current.buyScore:current.sellScore;current.signal={...s,score:sideScore,status};current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Age ${age} bars; adaptive lifecycle ${life} bars.`}
     else{current.signal=null;current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Run NEW ANALYZE if you want a new setup.`}
     if(keep){const obj={signal:displayOriginal?current.signal:s,state:status,candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
-    renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');
+    renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);
     if(autoSignalEnabled)await autoSendAndSchedule(current,'RE-EVALUATE',status);
     else{
-      try{
-        await refreshBackendSettings();
-        if(backendSettings.has_whatsapp){
-          setAutoStatus('Sending RE-EVALUATE to WhatsApp…','warn');
-          await sendDecisionWhatsApp(current,'RE-EVALUATE',status);
-          setAutoStatus('RE-EVALUATE sent to WhatsApp','good');
-        }else setAutoStatus('Re-evaluation ready • WhatsApp number not saved','warn');
-      }catch(e){setAutoStatus(`WhatsApp send failed • ${e.message||e}`,'bad')}
+      try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE queued to WhatsApp','good')}catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
     return current;
   }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed • staying on fixed quarter-hour boundary','bad');scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
@@ -840,6 +920,16 @@ async function openWhatsappSettingsPrompt(){
     return false;
   }catch(e){setAutoStatus('Could not open Signal Link','bad');return false}
 }
+
+function escapeCalendarTextV545(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function renderEconomicCalendarV546(root,days){if(!root||!Array.isArray(days)||!days.length)return false;root.innerHTML=days.map(day=>`<div class="calDayV545"><div class="calDateV545">${escapeCalendarTextV545(day.label||day.date)}</div>${(day.events||[]).map(ev=>{const imp=String(ev.impact||'').toLowerCase();return `<div class="calEventV545"><span class="calTimeV545">${escapeCalendarTextV545(ev.time)}</span><span class="calCountryV545">${escapeCalendarTextV545(ev.country)}</span><span class="calImpactV545 ${imp}">${escapeCalendarTextV545(ev.impact)}</span><span class="calTitleV545">${escapeCalendarTextV545(ev.title)}</span></div>`}).join('')}</div>`).join('');return true}
+async function loadEconomicCalendarV545(){
+  const root=$('#economicCalendarLocal');if(!root)return;
+  try{const cached=JSON.parse(localStorage.getItem('mh-economic-calendar-stable')||localStorage.getItem('mh-economic-calendar-v546')||localStorage.getItem('mh-economic-calendar-v545')||'null');if(cached?.days)renderEconomicCalendarV546(root,cached.days)}catch(e){}
+  const ctl=new AbortController();const kill=setTimeout(()=>ctl.abort(),3200);
+  try{const r=await fetch('/api/economic-calendar',{cache:'no-store',signal:ctl.signal});const j=await r.json();if(!r.ok)throw new Error('Calendar unavailable');const days=Array.isArray(j.days)?j.days:[];if(days.length){renderEconomicCalendarV546(root,days);try{localStorage.setItem('mh-economic-calendar-stable',JSON.stringify({days,at:Date.now()}))}catch(e){}
+      savePersistentUICacheV5411({calendar:days});}else if(!root.children.length)root.innerHTML='<div class="calendarLoading">No upcoming calendar events.</div>'}catch(e){if(!root.children.length)if(!root.querySelector('.calDayV545'))root.innerHTML='<div class="calendarLoading">Loading calendar…</div>';setTimeout(loadEconomicCalendarV545,1500)}finally{clearTimeout(kill)}
+}
 $('#openKey').onclick=openNativeApiSettings;
 const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{await fetch('/api/open-whatsapp',{method:'POST'})}catch(_){}};
 $('#analyze').onclick=runAnalyze;$('#reevaluate').onclick=runReevaluate;$('#autoSignalToggle').onclick=()=>setAutoSignalEnabled(!autoSignalEnabled);$('#exitApp').onclick=async()=>{try{await fetch('/api/shutdown',{method:'POST'})}catch(e){}window.close()};
@@ -850,7 +940,7 @@ $('#timeframe').onchange=e=>{timeframe=e.target.value;contextChanged()};
 await refreshBackendSettings();
 if(backendSettings.has_api_key){setDataState('neutralDot','Key saved')}else setDataState('neutralDot','Access key not saved');
 autoSignalEnabled=localStorage.getItem(STORAGE_AUTO)==='1';
-setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();refreshPublicTicker();setInterval(refreshMarketCap,60000);setInterval(refreshPublicTicker,60000);
+await loadPersistentUICacheV5411();await loadRecentSignalsV5413();renderRecentSignals();primeTickerV549();primeMovingTickerV547();refreshPublicTicker();loadEconomicCalendarV545();setupLightweightChart();setupChartControls();loadChart();refreshMarketCap();requestAnimationFrame(()=>refreshPublicTicker());setTimeout(refreshPublicTicker,250);setTimeout(refreshPublicTicker,900);setTimeout(refreshPublicTicker,1800);setInterval(refreshMarketCap,60000);setInterval(refreshPublicTicker,60000);setInterval(loadEconomicCalendarV545,180000);
 if(autoSignalEnabled){
   stopAutoTimers();
   const info=fixedPhaseInfo();

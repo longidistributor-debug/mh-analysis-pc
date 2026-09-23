@@ -83,8 +83,20 @@ func economicCalendarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	calendar3Mu.Unlock()
-	cli := &http.Client{Timeout: 8 * time.Second}
-	raw := append(fetchCalendarFeed(cli, "https://nfs.faireconomy.media/ff_calendar_thisweek.json"), fetchCalendarFeed(cli, "https://nfs.faireconomy.media/ff_calendar_nextweek.json")...)
+	cli := &http.Client{Timeout: 5 * time.Second}
+	type calResult struct{ events []calendarFeedEvent }
+	ch := make(chan calResult, 2)
+	go func(){ ch <- calResult{events: fetchCalendarFeed(cli, "https://nfs.faireconomy.media/ff_calendar_thisweek.json")} }()
+	go func(){ ch <- calResult{events: fetchCalendarFeed(cli, "https://nfs.faireconomy.media/ff_calendar_nextweek.json")} }()
+	raw := make([]calendarFeedEvent,0,64)
+	timer := time.NewTimer(5500*time.Millisecond)
+	defer timer.Stop()
+	for i:=0;i<2;i++ {
+		select {
+		case x := <-ch: raw = append(raw, x.events...)
+		case <-timer.C: i=2
+		}
+	}
 	type timed struct {
 		t time.Time
 		e calendarFeedEvent

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>MH Analysis</title>
 <link rel="icon" href="/mh-analysis.ico" />
+<link rel="preconnect" href="https://widget.mfbcdn.net" />
 <link rel="stylesheet" href="/styles.css" />
 <link rel="stylesheet" href="/v81.css" />
 <link rel="stylesheet" href="/runtime-fixes.css" />
@@ -19,7 +20,7 @@
   <div class="mhUpdateCenterV001">
     <img src="/mh-logo.png" class="mhUpdateLogoV001" alt="MH Analysis" />
     <div class="mhUpdateBrandV001"><span>MH</span> ANALYSIS</div>
-    <div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.30</div>
+    <div class="mhUpdateVersionV001" id="mhUpdateVersionV001">V.54.14</div>
     <div class="mhUpdateTitleV001" id="mhUpdateTitleV001">Update Required</div>
     <div class="mhUpdateSubV001" id="mhUpdateSubV001"></div>
     <button type="button" id="mhUpdateNowV001" class="mhUpdateButtonV001">Update Now - To Access</button>
@@ -35,7 +36,7 @@
   <header class="appHeader">
     <div class="brandArea">
       <img src="/mh-logo.png" class="logo" alt="MH" />
-      <div><div class="brandName">MH ANALYSIS</div><div class="version">V.34 (Late - CH Shaukat Ali)</div></div>
+      <div><div class="brandName">MH ANALYSIS</div><div class="version">CH Shaukat Ali</div></div>
       <button class="supportLink" id="openWhatsappTab" type="button">WhatsApp: 24/7 Support</button>
       <button class="autoSignalToggle off" id="autoSignalToggle" type="button">Get Signal: OFF</button>
       <span class="autoSignalStatus" id="autoSignalStatus">Manual only</span>
@@ -205,7 +206,7 @@
       <section class="panel calendarPanel">
         <h3>ECONOMIC CALENDAR</h3>
         <div class="calendarCrop">
-          <iframe src="https://widget.mfbcdn.net/widget/calendar.html?lang=en&impacts=1,2,3&symbols=AUD,CAD,CHF,CNY,EUR,GBP,JPY,NZD,USD" title="Economic Calendar"></iframe>
+          <div id="economicCalendarLocal" class="economicCalendarLocal"><div class="calendarLoading">Loading calendar…</div></div>
         </div>
       </section>
       <section class="panel recentPanel">

@@ -177,3 +177,19 @@
 }
 
 .mhCalImpact.low{background:#163f37;color:#75e6c1}
+
+/* V54.5 fast local economic calendar */
+.economicCalendarLocal{height:100%;max-height:235px;overflow:auto;padding:6px 8px;font-size:10px;line-height:1.25}.calendarLoading{padding:12px;color:#9fb3ad}.calDayV545{margin-bottom:8px}.calDateV545{font-weight:700;color:#d9e5e1;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.08)}.calEventV545{display:grid;grid-template-columns:58px 34px 50px 1fr;gap:5px;padding:4px 0;align-items:start}.calTimeV545{color:#aab9b4}.calCountryV545{font-weight:700}.calImpactV545{font-size:8px;text-transform:uppercase}.calImpactV545.high{color:#ff6675}.calImpactV545.medium,.calImpactV545.med{color:#f1c85a}.calImpactV545.low{color:#77d99d}.calTitleV545{color:#e6efec;min-width:0}
+
+
+/* V54.11 direct economic-calendar widget: visible immediately, no API overlay. */
+#economicCalendarWidgetV5411{display:block!important;width:100%!important;height:340px!important;border:0!important;background:#fff!important;transform:none!important;visibility:visible!important;opacity:1!important}.calendarCrop{background:#fff!important;overflow:hidden!important}
+
+/* V54.12: local cached calendar paints immediately; never wait on a remote iframe. */
+.calendarCrop{background:transparent!important;overflow:auto!important}.economicCalendarLocal{display:block!important;width:100%!important;height:100%!important;max-height:340px!important;visibility:visible!important;opacity:1!important}
+
+/* V54.13 Myfxbook calendar: eager display, toolbar cropped, all clicks disabled. */
+.calendarCrop{position:relative!important;overflow:hidden!important;background:#fff!important}.calendarCrop #economicCalendarWidgetV5413{display:block!important;border:0!important;width:100%!important;height:calc(100% + 42px)!important;min-height:300px!important;transform:translateY(-40px)!important;visibility:visible!important;opacity:1!important;pointer-events:none!important;user-select:none!important;background:#fff!important}.calendarCrop .economicCalendarLocal{display:none!important}
+
+/* V54.14: reliable cached local calendar; no visible third-party unavailable page. */
+.calendarCrop{position:relative!important;overflow:auto!important;background:transparent!important}.calendarCrop #economicCalendarWidgetV5413{display:none!important}.calendarCrop .economicCalendarLocal{display:block!important;width:100%!important;height:100%!important;max-height:340px!important;visibility:visible!important;opacity:1!important;pointer-events:none!important;user-select:none!important}

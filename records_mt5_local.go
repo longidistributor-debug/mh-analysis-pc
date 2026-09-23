@@ -111,7 +111,7 @@ func mt5LocalRecordsPath() string {
 	if b == "" {
 		b = os.TempDir()
 	}
-	return filepath.Join(b, "MHAnalysis", "signal-records-v796.json")
+	return filepath.Join(b, "MHAnalysis", "signal-records-v545.json")
 }
 
 func mt5LifecyclePath() (string, error) {

@@ -61,8 +61,20 @@ func saveSettings() error {
 }
 func getSettings() settings { settingsMu.RLock(); defer settingsMu.RUnlock(); return cfg }
 
+func warmStartupTickerV5413() {
+	c := loadUICacheV5411()
+	if len(c.Ticker) >= 5 { return }
+	done := make(chan struct{})
+	go func(){ _ = refreshTickerV5411(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(1600 * time.Millisecond):
+	}
+}
+
 func main() {
 	loadSettings()
+	warmStartupTickerV5413()
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return
@@ -75,7 +87,8 @@ func main() {
 	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
 	mux.HandleFunc("/api/settings", settingsHandler)
 	mux.HandleFunc("/api/history", historyHandler)
-	mux.HandleFunc("/api/public-ticker", publicTickerHandler)
+	mux.HandleFunc("/api/public-ticker", publicTickerHandlerV5411)
+	mux.HandleFunc("/api/ui-cache", uiCacheHandlerV5411)
 	mux.HandleFunc("/api/marketcap", marketcapHandler)
 	mux.HandleFunc("/api/news-risk", newsRiskHandler)
 	mux.HandleFunc("/api/economic-calendar", economicCalendarHandler)
@@ -406,54 +419,18 @@ var pubCache map[string]any
 func publicTickerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	pubMu.Lock()
-	if time.Since(pubAt) < 30*time.Second && pubCache != nil {
-		c := pubCache
-		pubMu.Unlock()
-		_ = json.NewEncoder(w).Encode(c)
-		return
-	}
+	if time.Since(pubAt) < 30*time.Second && pubCache != nil { c := pubCache; pubMu.Unlock(); _ = json.NewEncoder(w).Encode(c); return }
 	pubMu.Unlock()
-	out := map[string]any{}
-	cli := &http.Client{Timeout: 8 * time.Second}
-	fetchJSON(cli, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true", func(v any) {
-		if m, ok := v.(map[string]any); ok {
-			if b, ok := m["bitcoin"].(map[string]any); ok {
-				out["btc_usd"], _ = fnum(b["usd"])
-				out["btc_change_24h"], _ = fnum(b["usd_24h_change"])
-			}
-			if e, ok := m["ethereum"].(map[string]any); ok {
-				out["eth_usd"], _ = fnum(e["usd"])
-				out["eth_change_24h"], _ = fnum(e["usd_24h_change"])
-			}
-		}
-	})
-	fetchJSON(cli, "https://xaus.com/api/v1/spot", func(v any) {
-		if g := findNumberByKeys(v, "price", "usd", "gold", "xau"); g > 0 {
-			out["gold_usd"] = g
-		}
-	})
-	fetchJSON(cli, "https://api.frankfurter.app/latest?from=USD&to=EUR,JPY,GBP", func(v any) {
-		if m, ok := v.(map[string]any); ok {
-			if rates, ok := m["rates"].(map[string]any); ok {
-				eur, _ := fnum(rates["EUR"])
-				jpy, _ := fnum(rates["JPY"])
-				gbp, _ := fnum(rates["GBP"])
-				if eur > 0 {
-					out["eurusd"] = 1 / eur
-				}
-				if jpy > 0 {
-					out["usdjpy"] = jpy
-				}
-				if gbp > 0 {
-					out["gbpusd"] = 1 / gbp
-				}
-			}
-		}
-	})
-	pubMu.Lock()
-	pubAt = time.Now()
-	pubCache = out
-	pubMu.Unlock()
+	type tickerPart map[string]any
+	ch := make(chan tickerPart, 3)
+	cli := &http.Client{Timeout: 2 * time.Second}
+	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true", func(v any) { if m,ok:=v.(map[string]any);ok { if b,ok:=m["bitcoin"].(map[string]any);ok { part["btc_usd"],_=fnum(b["usd"]); part["btc_change_24h"],_=fnum(b["usd_24h_change"]) }; if e,ok:=m["ethereum"].(map[string]any);ok { part["eth_usd"],_=fnum(e["usd"]); part["eth_change_24h"],_=fnum(e["usd_24h_change"]) } } }); ch<-part }()
+	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://xaus.com/api/v1/spot", func(v any) { if g:=findNumberByKeys(v,"price","usd","gold","xau");g>0 { part["gold_usd"]=g } }); ch<-part }()
+	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://api.frankfurter.app/latest?from=USD&to=EUR,JPY,GBP", func(v any) { if m,ok:=v.(map[string]any);ok { if rates,ok:=m["rates"].(map[string]any);ok { eur,_:=fnum(rates["EUR"]);jpy,_:=fnum(rates["JPY"]);gbp,_:=fnum(rates["GBP"]); if eur>0 {part["eurusd"]=1/eur}; if jpy>0 {part["usdjpy"]=jpy}; if gbp>0 {part["gbpusd"]=1/gbp} } } }); ch<-part }()
+	out:=map[string]any{}
+	timer:=time.NewTimer(2200*time.Millisecond); defer timer.Stop()
+	for i:=0;i<3;i++ { select { case part:=<-ch: for k,v:=range part {out[k]=v}; case <-timer.C: i=3 } }
+	pubMu.Lock(); pubAt=time.Now(); if len(out)>0 {pubCache=out} else if pubCache!=nil {out=pubCache}; pubMu.Unlock()
 	_ = json.NewEncoder(w).Encode(out)
 }
 func fetchJSON(cli *http.Client, u string, fn func(any)) {

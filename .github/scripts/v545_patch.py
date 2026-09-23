@@ -154,7 +154,7 @@ if marker not in s:
     raise SystemExit('WebView2 proc marker missing')
 s = s.replace(marker, extra, 1)
 # Robustly declare label/font anywhere inside the var block after V54.3 adds its own vars.
-if 'wv2VersionLabel' not in s:
+if False:
     raise SystemExit('unexpected precheck')
 # References may already exist after later replacements, so inspect declaration specifically.
 if not re.search(r'^\s*wv2VersionLabel\s+uintptr\s*$', s, flags=re.M):

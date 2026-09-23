@@ -10,8 +10,9 @@ import (
 )
 
 type uiCacheV5411 struct {
-	Ticker map[string]any `json:"ticker,omitempty"`
-	Recent []any          `json:"recent,omitempty"`
+	Ticker   map[string]any `json:"ticker,omitempty"`
+	Recent   []any          `json:"recent,omitempty"`
+	Calendar []any          `json:"calendar,omitempty"`
 }
 
 var uiCacheMuV5411 sync.Mutex
@@ -72,6 +73,13 @@ func uiCacheHandlerV5411(w http.ResponseWriter, r *http.Request) {
 					v = v[:6]
 				}
 				c.Recent = v
+			}
+		}
+		if raw, ok := patch["calendar"]; ok {
+			var v []any
+			if json.Unmarshal(raw, &v) == nil && len(v) > 0 {
+				if len(v) > 3 { v = v[:3] }
+				c.Calendar = v
 			}
 		}
 		saveUICacheV5411(c)
