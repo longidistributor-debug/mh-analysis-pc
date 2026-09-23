@@ -2,12 +2,38 @@
 'use strict';
 const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
 
+// V55.1 trade controls. Both switches are independent and persistent.
+const MH_LOT_KEY='mhScoreLotEnabledV551';
+const MH_PARTIAL_KEY='mhPartialTPEnabledV551';
+let mhScoreLotEnabled=localStorage.getItem(MH_LOT_KEY)==='1';
+let mhPartialTPEnabled=localStorage.getItem(MH_PARTIAL_KEY)==='1';
+function mhSignalScore(){const texts=[$('#signalQuality')?.textContent,$('#buyScoreTop')?.textContent,$('#sellScoreTop')?.textContent].filter(Boolean).join(' ');const nums=(texts.match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(n=>n>=0&&n<=100);return nums.length?Math.max(...nums):0}
+function mhScoreLot(score){score=Number(score)||0;if(score>=95)return .06;if(score>=90)return .05;if(score>=85)return .05;if(score>=80)return .04;if(score>=70)return .04;if(score>=65)return .03;return .02}
+function mhLevel(id){const t=String($(id)?.textContent||'').replace(/,/g,'');const m=t.match(/-?\d+(?:\.\d+)?/);return m?Number(m[0]):NaN}
+function mhPaintTradeControls(){const lot=$('#mhLotSizeToggle'),pt=$('#mhPartialTPToggle');if(lot){lot.classList.toggle('on',mhScoreLotEnabled);lot.classList.toggle('off',!mhScoreLotEnabled);lot.textContent=`Lot Size: ${mhScoreLotEnabled?'ON':'OFF'}`}if(pt){pt.classList.toggle('on',mhPartialTPEnabled);pt.classList.toggle('off',!mhPartialTPEnabled);pt.textContent=`Partial TP: ${mhPartialTPEnabled?'ON':'OFF'}`}}
+function installTradeControls(){if($('#mhLotSizeToggle'))return;const host=$('.headerStatus')||$('.brandArea');if(!host)return;const lot=document.createElement('button');lot.type='button';lot.id='mhLotSizeToggle';lot.className='mhTradeToggle';const pt=document.createElement('button');pt.type='button';pt.id='mhPartialTPToggle';pt.className='mhTradeToggle';lot.addEventListener('click',()=>{mhScoreLotEnabled=!mhScoreLotEnabled;localStorage.setItem(MH_LOT_KEY,mhScoreLotEnabled?'1':'0');mhPaintTradeControls()});pt.addEventListener('click',()=>{mhPartialTPEnabled=!mhPartialTPEnabled;localStorage.setItem(MH_PARTIAL_KEY,mhPartialTPEnabled?'1':'0');mhPaintTradeControls()});host.insertBefore(pt,host.firstChild);host.insertBefore(lot,pt);mhPaintTradeControls()}
+
 // EA handoff is fire-and-forget. WhatsApp fanout must never wait for MT5/EA.
+// Before publishing the EA mailbox, apply the two independent trade controls.
 const mhNativeFetch=window.fetch.bind(window);
 window.fetch=function(input,init){
   const url=typeof input==='string'?input:String(input?.url||'');
   if(url==='/api/mt5/ea/send'||url.endsWith('/api/mt5/ea/send')){
-    mhNativeFetch(input,init).then(async r=>{if(!r.ok){let detail='';try{detail=await r.text()}catch(_){}console.warn('MT5 EA background handoff failed',r.status,detail)}}).catch(e=>console.warn('MT5 EA background handoff unavailable',e));
+    let sendInit=init;
+    try{
+      const body=JSON.parse(String(init?.body||'{}'));
+      const score=mhSignalScore();
+      body.lot=mhScoreLotEnabled?mhScoreLot(score):.02;
+      if(mhPartialTPEnabled){
+        const tp1=Number(body.tp),tp2=mhLevel('#lvlTp2');
+        if(Number.isFinite(tp1)&&tp1>0&&Number.isFinite(tp2)&&tp2>0&&Math.abs(tp2-Number(body.entry))>Math.abs(tp1-Number(body.entry))){
+          body.tp=tp2;
+          body.signal_id=`${String(body.signal_id||`MH${Date.now()}`)}__PT1_${tp1}`;
+        }
+      }
+      sendInit={...(init||{}),body:JSON.stringify(body)};
+    }catch(e){console.warn('MH trade-control payload preparation failed',e)}
+    mhNativeFetch(input,sendInit).then(async r=>{if(!r.ok){let detail='';try{detail=await r.text()}catch(_){}console.warn('MT5 EA background handoff failed',r.status,detail)}}).catch(e=>console.warn('MT5 EA background handoff unavailable',e));
     return Promise.resolve(new Response(JSON.stringify({ok:true,queued:true,background:true}),{status:202,headers:{'Content-Type':'application/json'}}));
   }
   return mhNativeFetch(input,init);
@@ -40,10 +66,7 @@ async function loadEconomicCalendar(){
     if(!r.ok)throw new Error(`HTTP ${r.status}`);
     const data=await r.json();
     if(!renderCalendar(data)&&!mhCalendarHTML)host.innerHTML='<div class="mhCalEmpty">Loading economic calendar…</div>';
-  }catch(_){
-    // Never replace already-rendered calendar with an error page. Keep retrying in background.
-    if(mhCalendarHTML)host.innerHTML=mhCalendarHTML;else host.innerHTML='<div class="mhCalEmpty">Loading economic calendar…</div>';
-  }
+  }catch(_){if(mhCalendarHTML)host.innerHTML=mhCalendarHTML;else host.innerHTML='<div class="mhCalEmpty">Loading economic calendar…</div>'}
 }
 
 const mhTickerLast={};
@@ -61,6 +84,6 @@ async function refreshMovingPrices(){
 
 function installEconomicCalendar(){const crop=$('.calendarCrop');if(!crop)return;crop.innerHTML='<div id="mhEconomicCalendar" class="mhCalendarScroll"><div class="mhCalEmpty">Loading economic calendar…</div></div>';loadEconomicCalendar();setTimeout(loadEconomicCalendar,1000);setTimeout(loadEconomicCalendar,3000);setInterval(loadEconomicCalendar,60*1000)}
 function fastOnlineRefresh(){loadEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,500);setTimeout(loadEconomicCalendar,900)}
-function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
+function boot(){ensureLegacyTargets();installTradeControls();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
