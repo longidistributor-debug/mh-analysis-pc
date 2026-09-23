@@ -2,17 +2,12 @@
 'use strict';
 const $=s=>document.querySelector(s);const $$=s=>[...document.querySelectorAll(s)];
 
-// V48: EA handoff is fire-and-forget. A generated signal must continue to
-// WhatsApp immediately even when MT5/EA is offline, slow, rejects, or times out.
-// The real EA request still runs in the background; only its response is no
-// longer allowed to gate the rest of the signal fanout.
+// EA handoff is fire-and-forget. WhatsApp fanout must never wait for MT5/EA.
 const mhNativeFetch=window.fetch.bind(window);
 window.fetch=function(input,init){
   const url=typeof input==='string'?input:String(input?.url||'');
   if(url==='/api/mt5/ea/send'||url.endsWith('/api/mt5/ea/send')){
-    mhNativeFetch(input,init).then(async r=>{
-      if(!r.ok){let detail='';try{detail=await r.text()}catch(_){}console.warn('MT5 EA background handoff failed',r.status,detail)}
-    }).catch(e=>console.warn('MT5 EA background handoff unavailable',e));
+    mhNativeFetch(input,init).then(async r=>{if(!r.ok){let detail='';try{detail=await r.text()}catch(_){}console.warn('MT5 EA background handoff failed',r.status,detail)}}).catch(e=>console.warn('MT5 EA background handoff unavailable',e));
     return Promise.resolve(new Response(JSON.stringify({ok:true,queued:true,background:true}),{status:202,headers:{'Content-Type':'application/json'}}));
   }
   return mhNativeFetch(input,init);
@@ -27,8 +22,28 @@ function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&l
 function impactClass(v){const s=String(v||'').trim().toLowerCase();if(s.includes('high'))return'high';if(s==='low')return'low';return'medium'}
 function isAllowedImpact(v){const s=String(v||'').trim().toLowerCase();return s==='high'||s==='medium'||s==='med'||s==='low'}
 function eventMeta(e){const parts=[];if(e.actual)parts.push(`Act: ${esc(e.actual)}`);if(e.forecast)parts.push(`Fcst: ${esc(e.forecast)}`);if(e.previous)parts.push(`Prev: ${esc(e.previous)}`);return parts.join(' • ')}
-async function loadEconomicCalendar(){const host=$('#mhEconomicCalendar');if(!host)return;try{const r=await fetch('/api/economic-calendar',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();const rawDays=Array.isArray(data.days)?data.days:[];const days=rawDays.map(day=>({...day,events:(Array.isArray(day.events)?day.events:[]).filter(e=>isAllowedImpact(e.impact))})).filter(day=>day.events.length>0).slice(0,3);if(!days.length){host.innerHTML='<div class="mhCalEmpty">No Low / Medium / High economic events found for the current or next available dates.</div>';return}host.innerHTML=days.map((day,idx)=>`<section class="mhCalDay" data-day-index="${idx+1}"><div class="mhCalDate"><span>${esc(day.label||day.date)}</span><small>DAY ${idx+1} / ${days.length}</small></div>${day.events.map(e=>`<div class="mhCalEvent"><div class="mhCalTime">${esc(e.time)}</div><div class="mhCalImpact ${impactClass(e.impact)}">${esc(String(e.impact||'Medium').replace(/^med$/i,'Medium'))}</div><div class="mhCalBody"><div class="mhCalTitle">${esc(e.title||'Economic event')}</div><div class="mhCalMeta">${eventMeta(e)}</div></div><div class="mhCalCountry">${esc(e.country)}</div></div>`).join('')}</section>`).join('');host.scrollTop=0}catch(e){host.innerHTML='<div class="mhCalEmpty">Economic calendar is temporarily unavailable.</div>'}}
-function installEconomicCalendar(){const crop=$('.calendarCrop');if(!crop)return;/* Medium/High legacy build marker; Low is now included too. */crop.innerHTML='<div id="mhEconomicCalendar" class="mhCalendarScroll"><div class="mhCalEmpty">Loading date-based Low / Medium / High economic calendar…</div></div>';loadEconomicCalendar();setInterval(loadEconomicCalendar,3*60*1000)}
-function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar()}
+
+async function loadEconomicCalendar(){
+  const host=$('#mhEconomicCalendar');if(!host)return;
+  try{
+    const r=await fetch('/api/economic-calendar',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);const data=await r.json();
+    const rawDays=Array.isArray(data.days)?data.days:[];const days=rawDays.map(day=>({...day,events:(Array.isArray(day.events)?day.events:[]).filter(e=>isAllowedImpact(e.impact))})).filter(day=>day.events.length>0).slice(0,3);
+    if(!days.length){host.innerHTML='<div class="mhCalEmpty">Calendar is loading current market events…</div>';return}
+    host.innerHTML=days.map((day,idx)=>`<section class="mhCalDay" data-day-index="${idx+1}"><div class="mhCalDate"><span>${esc(day.label||day.date)}</span><small>DAY ${idx+1} / ${days.length}</small></div>${day.events.map(e=>`<div class="mhCalEvent"><div class="mhCalTime">${esc(e.time)}</div><div class="mhCalImpact ${impactClass(e.impact)}">${esc(String(e.impact||'Medium').replace(/^med$/i,'Medium'))}</div><div class="mhCalBody"><div class="mhCalTitle">${esc(e.title||'Economic event')}</div><div class="mhCalMeta">${eventMeta(e)}</div></div><div class="mhCalCountry">${esc(e.country)}</div></div>`).join('')}</section>`).join('');host.scrollTop=0;
+  }catch(_){host.innerHTML='<div class="mhCalEmpty">Economic calendar is temporarily unavailable.</div>'}
+}
+
+function setTicker(id,v,digits=5){const el=$(id);const n=Number(v);if(el&&Number.isFinite(n)&&n>0)el.textContent=n.toLocaleString(undefined,{minimumFractionDigits:digits,maximumFractionDigits:digits})}
+async function refreshMovingPrices(){
+  try{
+    const r=await fetch('/api/public-ticker',{cache:'no-store'});if(!r.ok)return;const d=await r.json();
+    setTicker('#tickerGold',d.gold_usd,2);setTicker('#tickerBTC',d.btc_usd,2);setTicker('#tickerETH',d.eth_usd,2);setTicker('#tickerEURUSD',d.eurusd,5);setTicker('#tickerUSDJPY',d.usdjpy,3);setTicker('#tickerGBPUSD',d.gbpusd,5);
+    const gbp=Number(d.gbpusd),jpy=Number(d.usdjpy);if(Number.isFinite(gbp)&&Number.isFinite(jpy)&&gbp>0&&jpy>0)setTicker('#tickerGBPJPY',gbp*jpy,3);
+  }catch(_){}
+}
+
+function installEconomicCalendar(){const crop=$('.calendarCrop');if(!crop)return;crop.innerHTML='<div id="mhEconomicCalendar" class="mhCalendarScroll"><div class="mhCalEmpty">Loading date-based Low / Medium / High economic calendar…</div></div>';loadEconomicCalendar();setInterval(loadEconomicCalendar,3*60*1000)}
+function fastOnlineRefresh(){loadEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,1200);setTimeout(loadEconomicCalendar,1800)}
+function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();refreshMovingPrices();setInterval(refreshMovingPrices,30*1000);window.addEventListener('online',fastOnlineRefresh)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
