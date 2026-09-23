@@ -75,7 +75,10 @@ func mt5CommonBridgeDir() (string, error) {
 
 func normalizeEABridgeSymbol(s string) string {
 	s = strings.ToUpper(strings.TrimSpace(s))
-	if s == "BTCUSDT" { return "BTCUSD" }
+	// Broker terminals often append suffixes such as XAUUSDm / XAUUSD.pro.
+	// Canonicalize them so active_state from MT5 matches the app symbols.
+	if strings.HasPrefix(s,"XAUUSD") { return "XAUUSD" }
+	if strings.HasPrefix(s,"BTCUSDT") || strings.HasPrefix(s,"BTCUSD") { return "BTCUSD" }
 	return s
 }
 
