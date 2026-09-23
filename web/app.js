@@ -820,7 +820,7 @@ async function executeNewAnalysis(fromAuto=false){
   if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
-    const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
+    const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null);if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k),newsRisk=await detectNewsRisk(c);
     if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);
     applyStoppedSetupReentryGuardV5510(d,c,k);
     applyNewsRisk(d,newsRisk);
