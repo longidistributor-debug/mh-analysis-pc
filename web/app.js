@@ -13,6 +13,10 @@ const AUTO_REEVAL_DELAY=5*60*1000;
 const AUTO_NEW_AFTER_REEVAL_DELAY=10*60*1000;
 const AUTO_RETRY_NO_SIGNAL_DELAY=5*60*1000;
 const STORAGE_AUTO='mhAutoSignalEnabledV796';
+const STORAGE_LOT_SIZE='mhLotSizeEnabledV551';
+const STORAGE_PARTIAL_TP='mhPartialTpEnabledV551';
+let lotSizeEnabled=localStorage.getItem(STORAGE_LOT_SIZE)==='1';
+let partialTpEnabled=localStorage.getItem(STORAGE_PARTIAL_TP)==='1';
 let backendSettings={has_api_key:false,whatsapp_link:'',has_whatsapp:false};
 const candleCache=new Map();
 const fetchInFlight=new Map();
@@ -549,6 +553,24 @@ function renderGoldMetrics(){
 async function refreshMarketCap(){if(symbol==='XAUUSD'){renderGoldMetrics();return}setTopMetricLabels('CRYPTO DATA','BTC M.CAP','TOTAL CRYPTO','BTC.D','BTC 24H');try{const r=await fetch('/api/marketcap',{cache:'no-store'}),j=await r.json();if(!r.ok)throw new Error();$('#btcMarketCap').textContent=capFmt(j.btc_market_cap);$('#totalMarketCap').textContent=capFmt(j.total_market_cap);$('#btcDominance').textContent=Number.isFinite(Number(j.btc_dominance))?`${Number(j.btc_dominance).toFixed(1)}%`:'—';const ch=Number(j.btc_change_24h),el=$('#btcChange');el.textContent=Number.isFinite(ch)?`${ch>=0?'+':''}${ch.toFixed(2)}%`:'—';el.className=Number.isFinite(ch)?(ch>=0?'good':'bad'):''}catch(e){$('#btcMarketCap').textContent='Unavailable';$('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—'}}
 
 
+function lotForSignalScore(score){
+  if(!lotSizeEnabled)return 0.02;
+  const n=Math.max(0,Math.min(100,Number(score)||0));
+  if(n>=95)return 0.06;
+  if(n>=90)return 0.05;
+  if(n>=85)return 0.05;
+  if(n>=80)return 0.04;
+  if(n>=70)return 0.04;
+  if(n>=65)return 0.03;
+  return 0.02;
+}
+function updateTradeModeButtons(){
+  const lot=$('#lotSizeToggle'),pt=$('#partialTpToggle');
+  if(lot){lot.className=`autoSignalToggle ${lotSizeEnabled?'on':'off'}`;lot.textContent=`Lot Size: ${lotSizeEnabled?'ON':'OFF'}`;}
+  if(pt){pt.className=`autoSignalToggle ${partialTpEnabled?'on':'off'}`;pt.textContent=`Partial TP: ${partialTpEnabled?'ON':'OFF'}`;}
+}
+function setLotSizeEnabled(on){lotSizeEnabled=!!on;localStorage.setItem(STORAGE_LOT_SIZE,lotSizeEnabled?'1':'0');updateTradeModeButtons();}
+function setPartialTpEnabled(on){partialTpEnabled=!!on;localStorage.setItem(STORAGE_PARTIAL_TP,partialTpEnabled?'1':'0');updateTradeModeButtons();}
 function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   const sig=d?.signal||d?.originalSignal||null;
@@ -561,7 +583,7 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   lines.push(`*Pair:* ${symbol}`,`*Timeframe:* ${String(timeframe).toUpperCase()}`,`*Time:* ${new Date().toLocaleString()}`,'');
   if(sig){
     const dot=sig.direction==='SELL'?'🔴':'🟢';
-    lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Setup:* ${d?.bestFamily||sig?.setupReason||'Best current setup'}`);
+    const selectedLot=lotForSignalScore(sig.score);lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Lot:* ${selectedLot.toFixed(2)} (${lotSizeEnabled?'Score Auto':'Fixed'})`,`*Partial TP:* ${partialTpEnabled?'ON':'OFF'}`,`*Setup:* ${d?.bestFamily||sig?.setupReason||'Best current setup'}`);
   }else{
     lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*Entry:* —`,`*SL:* —`,`*TP1:* —`,`*TP2:* —`,`*Score:* —`,`*Setup:* No clear edge`);
   }
@@ -587,62 +609,45 @@ function fixedPhaseInfo(at=Date.now()){
 }
 function fixedRemain(ms){const v=Math.max(0,ms),m=Math.floor(v/60000),sec=Math.floor((v%60000)/1000);return`${m}:${String(sec).padStart(2,'0')}`}
 function fixedPhaseElapsed(info=fixedPhaseInfo()){return fixedRemain(Math.min(FIXED_PHASE_MS,Math.max(0,Date.now()-info.cycleStart)))}
+function nextFixedAutoEvent(now=Date.now(),allowCatchup=false){
+  const info=fixedPhaseInfo(now),epsilon=1500;
+  if(Math.abs(now-info.cycleStart)<=epsilon)return{action:'NEW',at:now,info};
+  if(now<info.reevalAt){
+    if(allowCatchup)return{action:'NEW',at:now,info,catchup:true};
+    return{action:'REEVAL',at:info.reevalAt,info};
+  }
+  if(Math.abs(now-info.reevalAt)<=epsilon)return{action:'REEVAL',at:now,info};
+  return{action:'NEW',at:info.nextCycleAt,info};
+}
 function updateAutoButton(){
   const b=$('#autoSignalToggle');if(!b)return;
   b.className=`autoSignalToggle ${autoSignalEnabled?'on':'off'}`;
   if(!autoSignalEnabled){b.textContent='Get Signal: OFF';setAutoStatus('Manual only');return}
   const info=fixedPhaseInfo(),left=Math.max(0,autoSignalNextAt-Date.now());
   b.textContent=`Get Signal: ON • ${fixedRemain(left)}`;
-  const elapsed=fixedPhaseElapsed(info);
-  if(autoSignalNextAt>0)setAutoStatus(`${info.label} • Elapsed ${elapsed} / 15:00 • Next ${actionLabel(autoSignalNextAction)} in ${fixedRemain(left)}`,'good');
-  else setAutoStatus(`${info.label} • Elapsed ${elapsed} / 15:00 • fixed clock active`,'good');
+  setAutoStatus(`${info.label} • Elapsed ${fixedPhaseElapsed(info)} / 15:00 • Next ${actionLabel(autoSignalNextAction)} in ${fixedRemain(left)}`,'good');
 }
 function stopAutoTimers(){if(autoSignalTimer){clearTimeout(autoSignalTimer);autoSignalTimer=null}if(autoCountdownTimer){clearInterval(autoCountdownTimer);autoCountdownTimer=null}}
-function scheduleAutoAction(action,delayMs){
-  stopAutoTimers();if(!autoSignalEnabled){updateAutoButton();return}
-  autoSignalNextAction=action;autoSignalNextAt=Date.now()+Math.max(250,delayMs);
-  autoSignalTimer=setTimeout(()=>runScheduledAutoAction(action),Math.max(250,delayMs));
-  autoCountdownTimer=setInterval(updateAutoButton,1000);updateAutoButton();
-}
 function scheduleAutoAt(action,targetMs){
   stopAutoTimers();if(!autoSignalEnabled){updateAutoButton();return}
-  const now=Date.now(),safeTarget=Math.max(Number(targetMs)||now,now+250),delay=safeTarget-now;
+  const now=Date.now(),safeTarget=Math.max(Number(targetMs)||now,now+50),delay=safeTarget-now;
   autoSignalNextAction=action;autoSignalNextAt=safeTarget;
   autoSignalTimer=setTimeout(()=>runScheduledAutoAction(action),delay);
   autoCountdownTimer=setInterval(updateAutoButton,1000);updateAutoButton();
 }
-function scheduleFixedAfterDecision(d,action,triggerAt=autoActionStartedAt||Date.now()){
+function scheduleNextFixedEvent(allowCatchup=false){
   if(!autoSignalEnabled)return;
-  const info=fixedPhaseInfo(triggerAt),started=Number(triggerAt)||Date.now();
-  if(action==='RE-EVALUATE'){
-    scheduleAutoAt('NEW',info.nextCycleAt);autoActionStartedAt=0;return;
-  }
-  if(started<info.reevalAt){
-    // A NEW ANALYZE started in the first five minutes of the quarter-hour.
-    // If it produced a signal, re-evaluate exactly at +5. If it produced no
-    // signal, use that same fixed +5 checkpoint for one fresh NEW ANALYZE.
-    scheduleAutoAt(d?.signal?'REEVAL':'NEW',info.reevalAt);
-  }else{
-    // The +5 checkpoint was already missed. Do not invent a new five-minute
-    // timer. Wait only until the fixed quarter-hour boundary.
-    scheduleAutoAt('NEW',info.nextCycleAt);
-  }
-  autoActionStartedAt=0;
+  const ev=nextFixedAutoEvent(Date.now(),allowCatchup);
+  if(ev.at<=Date.now()+100)scheduleAutoAt(ev.action,Date.now()+100);
+  else scheduleAutoAt(ev.action,ev.at);
 }
 async function autoSendAndSchedule(d,action,status=''){
   if(!autoSignalEnabled)return;
-  const triggerAt=autoActionStartedAt||Date.now();
-  if(d?._sameActiveSignal){setAutoStatus('Same signal still active • WhatsApp update will still be sent • no duplicate Record / MT5 pending','warn');}
   try{
-    setAutoStatus(`${fixedPhaseInfo(triggerAt).label} • Sending ${action.toLowerCase()}…`,'warn');
+    setAutoStatus(`${fixedPhaseInfo().label} • Sending ${action.toLowerCase()}…`,'warn');
     await sendDecisionWhatsApp(d,action,status);
-    scheduleFixedAfterDecision(d,action,triggerAt);
-  }catch(e){
-    setAutoStatus(e.message,'bad');
-    // WhatsApp failure must not move the trading clock. Keep the same fixed
-    // +5 / quarter-hour boundary that would have applied after a successful send.
-    scheduleFixedAfterDecision(d,action,triggerAt);
-  }
+  }catch(e){setAutoStatus(e.message,'bad')}
+  scheduleNextFixedEvent(false);
 }
 async function setAutoSignalEnabled(on){
   if(on){
@@ -656,34 +661,33 @@ async function setAutoSignalEnabled(on){
     }
     if(!backendSettings.has_api_key){
       autoSignalEnabled=false;localStorage.setItem(STORAGE_AUTO,'0');stopAutoTimers();updateAutoButton();
-      setAutoStatus('Access key missing • add it from KEYS','bad');
-      return;
+      setAutoStatus('Access key missing • add it from KEYS','bad');return;
     }
   }
   autoSignalEnabled=!!on;localStorage.setItem(STORAGE_AUTO,autoSignalEnabled?'1':'0');
   if(autoSignalEnabled){
     stopAutoTimers();
-    const info=fixedPhaseInfo();
-    scheduleAutoAt('NEW',info.nextCycleAt);
-    setAutoStatus(`${info.label} • Elapsed ${fixedPhaseElapsed(info)} / 15:00 • Ready; press NEW ANALYZE now or wait for fixed NEW`,'good');
+    const ev=nextFixedAutoEvent(Date.now(),true);
+    if(ev.catchup){setAutoStatus(`${ev.info.label} • Catch-up NEW ANALYZE now, then fixed RE-EVALUATE at +05`,'good');scheduleAutoAt('NEW',Date.now()+120);}
+    else scheduleAutoAt(ev.action,ev.at<=Date.now()?Date.now()+120:ev.at);
   }else{stopAutoTimers();autoSignalNextAt=0;updateAutoButton()}
 }
 async function runScheduledAutoAction(action){
   if(!autoSignalEnabled)return;
-  if(autoSignalRunning||busy){scheduleAutoAction(action,10*1000);return}
+  if(autoSignalRunning||busy){scheduleAutoAt(action,Date.now()+10000);return}
   autoSignalRunning=true;
   try{
     if(action==='REEVAL')await executeReevaluate(true);
     else await executeNewAnalysis(true);
-  }finally{autoSignalRunning=false}
+  }finally{autoSignalRunning=false;if(autoSignalEnabled&&autoSignalNextAt<=Date.now()+250)scheduleNextFixedEvent(false)}
 }
 async function sendUniqueSignalToEAV30(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
   const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
   const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
-  const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
+  const baseSignalId=`MH${Date.now()}_${symbol}_${timeframe}`,selectedLot=lotForSignalScore(sig.score),signalId=partialTpEnabled?`${baseSignalId}__PT1_${Number(sig.tp1).toFixed(10)}`:baseSignalId,finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1);
   try{
-    const r=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0})});
+    const r=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:finalTp,lot:selectedLot,expiry:0})});
     let j={};try{j=await r.json()}catch(_){ }
     if(!r.ok)throw new Error(j.error||`EA bridge HTTP ${r.status}`);
     setAutoStatus(`MT5 pending sent to EA • ${pending}`,'good');
@@ -734,7 +738,7 @@ async function manageExistingMT5TradeV552(original,managed,status=''){
   if(!changed)return null;
   const st=await readMT5ActiveStateV552(symbol);if(!st?.active||String(st.direction||'').toUpperCase()!==String(managed.direction||'').toUpperCase())return null;
   try{
-    const r=await fetch('/api/mt5/ea/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manage_id:`MHM${Date.now()}_${symbol}_${timeframe}`,symbol,direction:managed.direction,sl:Number(managed.sl),tp:Number(managed.tp1),reason:status||'RE-EVALUATE'})});
+    const r=await fetch('/api/mt5/ea/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manage_id:`MHM${Date.now()}_${symbol}_${timeframe}`,symbol,direction:managed.direction,sl:Number(managed.sl),tp:partialTpEnabled?Number(managed.tp2):Number(managed.tp1),tp1:Number(managed.tp1),tp2:Number(managed.tp2),partial_tp:partialTpEnabled,reason:status||'RE-EVALUATE'})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`EA manage HTTP ${r.status}`);
     setAutoStatus(`MT5 active trade management queued • SL ${fmt(managed.sl)} • TP ${fmt(managed.tp1)}`,'good');return j;
   }catch(e){console.warn('MT5 active trade management failed',e);setAutoStatus(`MT5 manage failed • ${e.message||e}`,'bad');return null}
@@ -743,7 +747,7 @@ async function manageExistingMT5TradeV552(original,managed,status=''){
 // V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
 async function dispatchUniqueSignalV36(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
-  const signalId=`MH${Date.now()}_${symbol}_${timeframe}`;
+  const baseSignalId=`MH${Date.now()}_${symbol}_${timeframe}`,selectedLot=lotForSignalScore(sig.score),signalId=partialTpEnabled?`${baseSignalId}__PT1_${Number(sig.tp1).toFixed(10)}`:baseSignalId,finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1);
   const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
   const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
   const recordPayload={signal_id:signalId,symbol,timeframe,direction:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp1:Number(sig.tp1),tp2:Number(sig.tp2),score:Number(sig.score)||0,setup:d.bestFamily||sig.setupReason||'',action:'NEW'};
@@ -751,11 +755,11 @@ async function dispatchUniqueSignalV36(d){
   let rj={};try{rj=await rr.json()}catch(_){}
   if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`);
   if(rj.duplicate||rj.same_signal){d._sameActiveSignal=true;d._sameSignalStatus=rj.existing_status||'';setAutoStatus('Same signal still active • no duplicate Record / MT5 pending','warn');return rj;}
-  const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:Number(sig.tp1),lot:0.02,expiry:0})});
+  const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:finalTp,lot:selectedLot,expiry:0})});
   let ej={};try{ej=await er.json()}catch(_){}
   if(!er.ok)throw new Error(ej.error||`EA bridge HTTP ${er.status}`);
   try{await prepareMT5SignalV796(d,'NEW')}catch(_){}
-  setAutoStatus(`Signal recorded • MT5 pending sent • ${pending}`,'good');
+  setAutoStatus(`Signal recorded • MT5 pending sent • ${pending} • Lot ${selectedLot.toFixed(2)} • Partial TP ${partialTpEnabled?'ON':'OFF'}`,'good');
   return {record:rj,ea:ej,signal_id:signalId};
 }
 async function executeNewAnalysis(fromAuto=false){
@@ -1020,7 +1024,7 @@ async function loadEconomicCalendarV545(){
 }
 $('#openKey').onclick=openNativeApiSettings;
 const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{await fetch('/api/open-whatsapp',{method:'POST'})}catch(_){}};
-$('#analyze').onclick=runAnalyze;$('#reevaluate').onclick=runReevaluate;$('#autoSignalToggle').onclick=()=>setAutoSignalEnabled(!autoSignalEnabled);$('#exitApp').onclick=async()=>{try{await fetch('/api/shutdown',{method:'POST'})}catch(e){}window.close()};
+$('#analyze').onclick=runAnalyze;$('#reevaluate').onclick=runReevaluate;$('#autoSignalToggle').onclick=()=>setAutoSignalEnabled(!autoSignalEnabled);const lotBtn=$('#lotSizeToggle');if(lotBtn)lotBtn.onclick=()=>setLotSizeEnabled(!lotSizeEnabled);const ptBtn=$('#partialTpToggle');if(ptBtn)ptBtn.onclick=()=>setPartialTpEnabled(!partialTpEnabled);updateTradeModeButtons();$('#exitApp').onclick=async()=>{try{await fetch('/api/shutdown',{method:'POST'})}catch(e){}window.close()};
 $$('.pair').forEach(b=>b.onclick=()=>{$$('.pair').forEach(x=>x.classList.remove('active'));b.classList.add('active');symbol=b.dataset.symbol;contextChanged()});
 $('#timeframe').onchange=e=>{timeframe=e.target.value;contextChanged()};
 
@@ -1043,10 +1047,5 @@ if(backendSettings.has_api_key){setDataState('neutralDot','Key saved')}else setD
 autoSignalEnabled=localStorage.getItem(STORAGE_AUTO)==='1';
 void startupUICacheV551;
 setInterval(refreshMarketCap,60000);setInterval(refreshPublicTicker,60000);setInterval(loadEconomicCalendarV545,60*60*1000);
-if(autoSignalEnabled){
-  stopAutoTimers();
-  const info=fixedPhaseInfo();
-  scheduleAutoAt('NEW',info.nextCycleAt);
-  setAutoStatus(`${info.label} • Elapsed ${fixedPhaseElapsed(info)} / 15:00 • waiting for next fixed NEW ANALYZE`,'good');
-}else updateAutoButton();
+if(autoSignalEnabled){stopAutoTimers();const ev=nextFixedAutoEvent(Date.now(),true);if(ev.catchup)scheduleAutoAt('NEW',Date.now()+120);else scheduleAutoAt(ev.action,ev.at<=Date.now()?Date.now()+120:ev.at);}else updateAutoButton();
 })();
