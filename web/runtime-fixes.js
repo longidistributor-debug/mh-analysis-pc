@@ -10,7 +10,7 @@ function activateAnalysisTab(name){$$('#analysisTabs button').forEach(btn=>btn.c
 function installAnalysisTabs(){const tabs=$('#analysisTabs');if(!tabs)return;$$('#analysisTabs button').forEach(btn=>btn.type='button');tabs.addEventListener('click',e=>{const btn=e.target.closest('button[data-tab]');if(btn)activateAnalysisTab(btn.dataset.tab)})}
 function cleanAnalysisError(){const el=$('#explanation');if(!el)return;const txt=String(el.textContent||'');const cleaned=txt.replace(/\s*Response:\s*map\[[^\]]*\]\.?\s*$/i,'').trim();if(cleaned!==txt)el.textContent=cleaned}
 function watchAnalysisUpdates(){const targets=['#signalCard','#explanation','#topSetups','#buyScoreTop','#sellScoreTop'].map($).filter(Boolean);if(!targets.length)return;let timer=0;const refresh=()=>{clearTimeout(timer);timer=setTimeout(cleanAnalysisError,20)};const observer=new MutationObserver(refresh);targets.forEach(t=>observer.observe(t,{subtree:true,childList:true,characterData:true,attributes:true}));window.__mhRuntimeDetailsObserver=observer;cleanAnalysisError()}
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]))}
 function impactClass(v){const s=String(v||'').trim().toLowerCase();if(s.includes('high'))return'high';if(s==='low')return'low';return'medium'}
 function isAllowedImpact(v){const s=String(v||'').trim().toLowerCase();return s==='high'||s==='medium'||s==='med'||s==='low'}
 function eventMeta(e){const parts=[];if(e.actual)parts.push(`Act: ${esc(e.actual)}`);if(e.forecast)parts.push(`Fcst: ${esc(e.forecast)}`);if(e.previous)parts.push(`Prev: ${esc(e.previous)}`);return parts.join(' • ')}
@@ -48,8 +48,30 @@ async function refreshMovingPrices(){
   }catch(_){}
 }
 
+function syncBtcChartControlsV553(){
+  const btc=$('.pair.active')?.dataset?.symbol==='BTCUSDT';
+  const tf20=$('.nativeTfButtons button[data-chart-tf="20m"]');
+  if(tf20)tf20.style.display=btc?'none':'';
+}
+function installBtcChartFixV553(){
+  syncBtcChartControlsV553();
+  document.addEventListener('click',e=>{
+    const pair=e.target.closest('.pair');
+    const tf=e.target.closest('.nativeTfButtons button[data-chart-tf]');
+    if(!pair&&!tf)return;
+    setTimeout(()=>{
+      syncBtcChartControlsV553();
+      const btc=$('.pair.active')?.dataset?.symbol==='BTCUSDT';
+      if(!btc)return;
+      if(tf?.dataset?.chartTf==='20m')return;
+      const analyze=$('#analyze');
+      const empty=$('#chartEmpty');
+      if(analyze&&!analyze.disabled&&empty&&!empty.classList.contains('hidden'))analyze.click();
+    },80);
+  },true);
+}
 function installEconomicCalendar(){const crop=$('.calendarCrop');if(!crop)return;crop.innerHTML='<div id="mhEconomicCalendar" class="mhCalendarScroll"><div class="mhCalEmpty">Loading economic calendar…</div></div>';loadEconomicCalendar();setTimeout(loadEconomicCalendar,1000);setTimeout(loadEconomicCalendar,3000);setInterval(loadEconomicCalendar,60*1000)}
 function fastOnlineRefresh(){loadEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,500);setTimeout(loadEconomicCalendar,900)}
-function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
+function boot(){ensureLegacyTargets();installAnalysisTabs();watchAnalysisUpdates();installEconomicCalendar();installBtcChartFixV553();refreshMovingPrices();setTimeout(refreshMovingPrices,350);setTimeout(refreshMovingPrices,1200);setInterval(refreshMovingPrices,15*1000);window.addEventListener('online',fastOnlineRefresh)}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot,{once:true});else boot();
 })();
