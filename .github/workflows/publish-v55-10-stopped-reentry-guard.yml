@@ -4,7 +4,7 @@ on:
   push:
     branches: [records-mt5-local-build]
     paths:
-      - 'vercel-auth/trigger-v5510'
+      - 'vercel-auth/trigger-v5510-retry'
   workflow_dispatch:
 
 permissions:
@@ -44,13 +44,17 @@ jobs:
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'tests failed'}
 
-      - name: Commit V.55.10 source
+      - name: Commit V.55.10 source safely
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add web/app.js VERSION updater.go license_auth.go web/index.html
           git commit -m 'V.55.10 block immediate reuse of stopped-out signal setup' || true
+          # Another workflow may have moved the branch while this job was running.
+          # Rebase our isolated commit instead of failing with a non-fast-forward push.
+          git pull --rebase origin records-mt5-local-build
           git push origin HEAD:records-mt5-local-build
 
       - name: Build EXE and manifest
