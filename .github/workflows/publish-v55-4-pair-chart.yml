@@ -1,0 +1,133 @@
+name: Publish MH Analysis V.55.4 Pair Chart Fix
+on:
+  workflow_dispatch:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v554']
+permissions:
+  contents: write
+jobs:
+  patch-build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Patch pair-specific chart loading and remove 20m
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('web/app.js'); s=p.read_text(encoding='utf-8')
+          old='''function syncPairTimeframeAvailabilityV553(){
+            const btc=symbol==='BTCUSDT';
+            const twenty=document.querySelector('.nativeTfButtons button[data-chart-tf="20m"]');
+            if(twenty)twenty.style.display=btc?'none':'';
+            if(btc&&timeframe==='20m'){
+              timeframe='15m';
+              const sel=$('#timeframe');if(sel)sel.value='15m';
+            }
+          }
+          async function contextChanged(){
+            syncPairTimeframeAvailabilityV553();
+            loadChart();
+            resetViewForContext();
+            const feed=$('#nativeFeedStatus');
+            if(symbol==='BTCUSDT'){
+              if(feed)feed.textContent='Loading BTC candles…';
+              await loadContextChart();
+              refreshMarketCap();
+              return;
+            }
+            if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
+          }'''
+          new='''function normalizeSupportedTimeframeV554(){
+            if(timeframe==='20m'){
+              timeframe='15m';
+              const sel=$('#timeframe');if(sel)sel.value='15m';
+            }
+          }
+          async function contextChanged(){
+            normalizeSupportedTimeframeV554();
+            loadChart();
+            resetViewForContext();
+            const selectedSymbol=symbol,selectedTimeframe=timeframe;
+            const feed=$('#nativeFeedStatus');
+            if(feed)feed.textContent=`Loading ${selectedSymbol} ${selectedTimeframe} candles…`;
+            await loadContextChart();
+            if(symbol===selectedSymbol&&timeframe===selectedTimeframe)refreshMarketCap();
+          }'''
+          if old not in s: raise SystemExit('V553 context block not found')
+          p.write_text(s.replace(old,new,1),encoding='utf-8')
+          h=Path('web/index.html'); t=h.read_text(encoding='utf-8')
+          t=t.replace('<button data-chart-tf="20m" data-gold-only="1">20m</button>','')
+          t=t.replace('id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.4</div>')
+          h.write_text(t,encoding='utf-8')
+          Path('VERSION').write_text('V.55.4\n',encoding='utf-8')
+          for fn,a,b in [('updater.go','const mhPublicVersionV001 = "V.55.3"','const mhPublicVersionV001 = "V.55.4"'),('license_auth.go','licAppVersion = "V.55.3"','licAppVersion = "V.55.4"')]:
+            q=Path(fn); x=q.read_text(encoding='utf-8')
+            if a not in x: raise SystemExit(f'version anchor missing {fn}')
+            q.write_text(x.replace(a,b,1),encoding='utf-8')
+      - name: Verify current working retained
+        shell: powershell
+        run: |
+          $a=Get-Content -Raw web/app.js
+          $h=Get-Content -Raw web/index.html
+          if($a.Contains('syncPairTimeframeAvailabilityV553')){throw 'old pair chart switch remains'}
+          if(-not $a.Contains('normalizeSupportedTimeframeV554')){throw 'new pair chart switch missing'}
+          if($h.Contains('data-chart-tf="20m"')){throw '20m still visible'}
+          foreach($m in @('lotSizeEnabled','partialTpEnabled','lotForSignalScore','fixedPhaseInfo','nextFixedAutoEvent','dispatchUniqueSignalV36')){if(-not $a.Contains($m)){throw "runtime regression $m"}}
+          node --check web/app.js
+          node --check web/runtime-fixes.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'tests failed'}
+      - name: Commit source fix
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js web/index.html VERSION updater.go license_auth.go
+          git commit -m 'V.55.4 load independent Gold BTC charts and remove 20m'
+          git push origin HEAD:records-mt5-local-build
+      - name: Build Windows EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          cat > dist/update.json <<EOF
+          {"version":"V.55.4","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.4 removes unsupported 20m for Gold and BTC and makes each pair load its own chart immediately when selected."}
+          EOF
+          printf 'V.55.4\n' > dist/VERSION
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}; if(-not(Test-Path $iscc)){throw 'ISCC unavailable'}
+      - name: Build installer
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; New-Item -ItemType Directory -Force dist-installer|Out-Null; $src=(Resolve-Path 'dist\MH Analysis.exe').Path; $out=(Resolve-Path dist-installer).Path; & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.4' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.4' 'installer\MHAnalysis-V01.iss'; if($LASTEXITCODE -ne 0){throw 'ISCC failed'}
+      - name: Package
+        shell: powershell
+        run: Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.4.exe' -DestinationPath 'dist\MH-Analysis-V.55.4.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.4
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.4.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.4.exe
+      - name: Publish updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"; cp dist/update.json "$RUNNER_TEMP/update.json"; cp dist/VERSION "$RUNNER_TEMP/VERSION"; cp dist/SHA256SUMS.txt "$RUNNER_TEMP/SHA256SUMS.txt"; cp 'dist-installer/MH-Analysis-Setup-V.55.4.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.4.exe"
+          git checkout --orphan __v554; git rm -rf . || true; find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'; cp "$RUNNER_TEMP/update.json" update.json; cp "$RUNNER_TEMP/VERSION" VERSION; cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt; cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.4.exe" './MH-Analysis-Setup-V.55.4.exe'
+          git add .; git commit -m 'MH Analysis V.55.4 updater release'; git push --force origin HEAD:mh-analysis-update-channel
