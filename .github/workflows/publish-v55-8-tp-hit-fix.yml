@@ -1,0 +1,117 @@
+name: Publish MH Analysis V.55.8 TP Hit Fix
+
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths:
+      - 'vercel-auth/trigger-v558'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Verify V.55.8 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.55.8'){ throw 'VERSION is not V.55.8' }
+          $u=Get-Content -Raw updater.go
+          $l=Get-Content -Raw license_auth.go
+          $i=Get-Content -Raw web/index.html
+          $a=Get-Content -Raw web/app.js
+          if(-not $u.Contains('mhPublicVersionV001 = "V.55.8"')){ throw 'updater version mismatch' }
+          if(-not $l.Contains('licAppVersion = "V.55.8"')){ throw 'license version mismatch' }
+          if(-not $i.Contains('id="mhUpdateVersionV001">V.55.8</div>')){ throw 'update screen version mismatch' }
+          foreach($m in @('function signalEntryActivation(c,s)','pending order never filled after this signal','createdMarketPrice:last.c')){ if(-not $a.Contains($m)){ throw "TP/SL post-signal guard missing: $m" } }
+          node --check web/app.js
+          node --check web/runtime-fixes.js
+          node --check web/update-v001.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){ throw 'tests failed' }
+
+      - name: Build EXE and manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          sha256sum 'dist/MH Analysis.exe' | tee dist/SHA256SUMS.txt
+          HASH=$(awk '{print $1}' dist/SHA256SUMS.txt)
+          printf 'V.55.8\n' > dist/VERSION
+          cat > dist/update.json <<EOF
+          {"version":"V.55.8","mandatory":true,"download_url":"https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe","sha256":"$HASH","notes":"V.55.8 fixes TP1/TP2/SL result tracking so candles and intrabar extremes from before signal creation cannot be counted as post-signal hits. Pending orders must activate after the signal before TP/SL outcomes are evaluated. All other current MH Analysis behavior is retained."}
+          EOF
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){ choco install innosetup -y --no-progress }
+          if(-not(Test-Path $iscc)){ throw 'ISCC unavailable' }
+
+      - name: Build installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          New-Item -ItemType Directory -Force dist-installer | Out-Null
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.8' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.8' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){ throw 'ISCC failed' }
+          if(-not(Test-Path 'dist-installer\MH-Analysis-Setup-V.55.8.exe')){ throw 'installer missing' }
+
+      - name: Package release
+        shell: powershell
+        run: |
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.8.exe' -DestinationPath 'dist\MH-Analysis-V.55.8.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.8
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.8.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.8.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish mandatory updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.8.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.8.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout --orphan __v558
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/update.json" update.json
+          cp "$RUNNER_TEMP/VERSION" VERSION
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.8.exe" './MH-Analysis-Setup-V.55.8.exe'
+          git add .
+          git commit -m 'MH Analysis V.55.8 TP hit tracking fix release'
+          git push --force origin HEAD:mh-analysis-update-channel
