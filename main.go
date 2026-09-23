@@ -75,6 +75,7 @@ func warmStartupTickerV5413() {
 func main() {
 	loadSettings()
 	warmStartupTickerV5413()
+	warmStartupCalendarV55()
 	sub, err := fs.Sub(webFS, "web")
 	if err != nil {
 		return

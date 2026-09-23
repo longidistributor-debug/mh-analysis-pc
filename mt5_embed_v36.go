@@ -84,9 +84,83 @@ func v546EmbedOnlyMT5(wait time.Duration) bool {
 	return false
 }
 
+func v55MaintainMT5Embed(wait time.Duration) {
+    deadline := time.Now().Add(wait)
+    for time.Now().Before(deadline) {
+        v546HideAllMT5TopLevel()
+        chMu.Lock(); hwnd := chMT5Wnd; chMu.Unlock()
+        if hwnd != 0 {
+            parent, _, _ := v36GetParent.Call(hwnd)
+            if parent != hostHWND {
+                chShowWindow.Call(hwnd, chSWHide)
+                _ = v36EmbedMT5(hwnd)
+            }
+        }
+        time.Sleep(12 * time.Millisecond)
+    }
+    v546HideAllMT5TopLevel()
+}
+
+func v55MT5HideGuard(stop <-chan struct{}) {
+    ticker := time.NewTicker(8 * time.Millisecond)
+    defer ticker.Stop()
+    for {
+        select {
+        case <-stop:
+            v546HideAllMT5TopLevel()
+            return
+        case <-ticker.C:
+            v546HideAllMT5TopLevel()
+        }
+    }
+}
+
 func chEnsureMT5TerminalV36() error {
-    chMu.Lock();existingEmbedded:=chMT5Wnd;chMu.Unlock();if existingEmbedded!=0{parent,_,_:=v36GetParent.Call(existingEmbedded);if parent==hostHWND{chResizeChildren();chShowWindow.Call(existingEmbedded,chSWShow);chFocusEmbeddedBrowser(existingEmbedded);go mt5ApplyLatestQueued();return nil};chMu.Lock();if chMT5Wnd==existingEmbedded{chMT5Wnd=0};chMu.Unlock()}
-    chMu.Lock();if chMT5StartingV34{chMu.Unlock();return nil};chMT5StartingV34=true;chMu.Unlock();defer func(){chMu.Lock();chMT5StartingV34=false;chMu.Unlock()}()
-    v546HideAllMT5TopLevel();if hwnd:=v5410FindMT5Candidate();hwnd!=0{chShowWindow.Call(hwnd,chSWHide);if !v546EmbedOnlyMT5(4*time.Second){return errors.New("Installed MT5 was detected, but Windows still refused child embedding after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil}
-    path,err:=chMT5Executable();if err!=nil{return err};v5410MT5ExeBase=strings.ToLower(filepath.Base(path));v546HideAllMT5TopLevel();cmd:=exec.Command(path);cmd.SysProcAttr=&syscall.SysProcAttr{HideWindow:true,CreationFlags:0x08000000};if err:=cmd.Start();err!=nil{return fmt.Errorf("Could not start MT5: %w",err)};chMu.Lock();chMT5Cmd=cmd;chMu.Unlock();if !v546EmbedOnlyMT5(18*time.Second){return errors.New("MT5 started, but its terminal window could not be embedded after automatic retries. Make sure MH Analysis and MT5 use the same Windows privilege level.")};go mt5ApplyLatestQueued();return nil
+    chMu.Lock(); existingEmbedded := chMT5Wnd; chMu.Unlock()
+    if existingEmbedded != 0 {
+        parent, _, _ := v36GetParent.Call(existingEmbedded)
+        if parent == hostHWND {
+            chResizeChildren(); chShowWindow.Call(existingEmbedded, chSWShow); chFocusEmbeddedBrowser(existingEmbedded)
+            go v55MaintainMT5Embed(5*time.Second); go mt5ApplyLatestQueued(); return nil
+        }
+        chShowWindow.Call(existingEmbedded, chSWHide)
+        chMu.Lock(); if chMT5Wnd == existingEmbedded { chMT5Wnd = 0 }; chMu.Unlock()
+    }
+
+    chMu.Lock()
+    if chMT5StartingV34 { chMu.Unlock(); return nil }
+    chMT5StartingV34 = true
+    chMu.Unlock()
+    defer func(){ chMu.Lock(); chMT5StartingV34 = false; chMu.Unlock() }()
+
+    v546HideAllMT5TopLevel()
+    if hwnd := v5410FindMT5Candidate(); hwnd != 0 {
+        stop := make(chan struct{})
+        go v55MT5HideGuard(stop)
+        ok := v546EmbedOnlyMT5(5*time.Second)
+        close(stop)
+        if !ok { return errors.New("Installed MT5 was detected, but Windows refused child embedding. MH Analysis kept the standalone MT5 window hidden. Make sure MH Analysis and MT5 use the same Windows privilege level.") }
+        go v55MaintainMT5Embed(8*time.Second); go mt5ApplyLatestQueued(); return nil
+    }
+
+    path, err := chMT5Executable()
+    if err != nil { return err }
+    v5410MT5ExeBase = strings.ToLower(filepath.Base(path))
+    stop := make(chan struct{})
+    go v55MT5HideGuard(stop)
+    cmd := exec.Command(path)
+    cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow:true, CreationFlags:0x08000000}
+    if err := cmd.Start(); err != nil { close(stop); return fmt.Errorf("Could not start MT5: %w", err) }
+    chMu.Lock(); chMT5Cmd = cmd; chMu.Unlock()
+    ok := v546EmbedOnlyMT5(20*time.Second)
+    close(stop)
+    if !ok {
+        _ = cmd.Process.Kill()
+        chMu.Lock(); if chMT5Cmd == cmd { chMT5Cmd = nil }; chMu.Unlock()
+        v546HideAllMT5TopLevel()
+        return errors.New("MT5 could not be embedded inside MH Analysis. The MH-started standalone terminal was closed instead of being left open.")
+    }
+    go v55MaintainMT5Embed(10*time.Second)
+    go mt5ApplyLatestQueued()
+    return nil
 }

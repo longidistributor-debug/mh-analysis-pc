@@ -106,43 +106,66 @@ type mt5ResetRequest struct {
 
 var mt5RecordsMu sync.Mutex
 
+func mt5RecordsDir() string {
+    b := os.Getenv("LOCALAPPDATA")
+    if b == "" { b = os.TempDir() }
+    return filepath.Join(b, "MHAnalysis")
+}
+
 func mt5LocalRecordsPath() string {
-	b := os.Getenv("LOCALAPPDATA")
-	if b == "" {
-		b = os.TempDir()
-	}
-	return filepath.Join(b, "MHAnalysis", "signal-records-v545.json")
+    return filepath.Join(mt5RecordsDir(), "signal-records.json")
 }
 
 func mt5LifecyclePath() (string, error) {
-	appData := strings.TrimSpace(os.Getenv("APPDATA"))
-	if appData == "" {
-		return "", fmt.Errorf("Windows APPDATA is unavailable")
-	}
-	return filepath.Join(appData, "MetaQuotes", "Terminal", "Common", "Files", "MH_Analysis", "trade_events.jsonl"), nil
+    appData := strings.TrimSpace(os.Getenv("APPDATA"))
+    if appData == "" { return "", fmt.Errorf("Windows APPDATA is unavailable") }
+    return filepath.Join(appData, "MetaQuotes", "Terminal", "Common", "Files", "MH_Analysis", "trade_events.jsonl"), nil
+}
+
+func normalizeMT5StoreV55(s mt5LocalStore) mt5LocalStore {
+    if s.Version < 2 { s.Version = 2 }
+    if s.Records == nil { s.Records = []mt5LocalRecord{} }
+    for i := range s.Records {
+        if s.Records[i].SignalID == "" && strings.HasPrefix(s.Records[i].ID, "MH") { s.Records[i].SignalID = s.Records[i].ID }
+    }
+    return s
+}
+
+func loadMT5StoreFileV55(path string) (mt5LocalStore, bool) {
+    b, err := os.ReadFile(path)
+    if err != nil { return mt5LocalStore{}, false }
+    var s mt5LocalStore
+    if json.Unmarshal(b, &s) != nil { return mt5LocalStore{}, false }
+    return normalizeMT5StoreV55(s), true
 }
 
 func loadMT5LocalStore() mt5LocalStore {
-	s := mt5LocalStore{Version: 2, Records: []mt5LocalRecord{}}
-	b, err := os.ReadFile(mt5LocalRecordsPath())
-	if err != nil {
-		return s
-	}
-	if json.Unmarshal(b, &s) != nil {
-		return mt5LocalStore{Version: 2, Records: []mt5LocalRecord{}}
-	}
-	if s.Version < 2 {
-		s.Version = 2
-	}
-	if s.Records == nil {
-		s.Records = []mt5LocalRecord{}
-	}
-	for i := range s.Records {
-		if s.Records[i].SignalID == "" && strings.HasPrefix(s.Records[i].ID, "MH") {
-			s.Records[i].SignalID = s.Records[i].ID
-		}
-	}
-	return s
+    canonical := mt5LocalRecordsPath()
+    paths := []string{canonical}
+    legacy, _ := filepath.Glob(filepath.Join(mt5RecordsDir(), "signal-records-v*.json"))
+    paths = append(paths, legacy...)
+    merged := mt5LocalStore{Version: 2, Records: []mt5LocalRecord{}}
+    index := map[string]int{}
+    canonicalCount := -1
+    for _, path := range paths {
+        st, ok := loadMT5StoreFileV55(path)
+        if !ok { continue }
+        if filepath.Clean(path) == filepath.Clean(canonical) { canonicalCount = len(st.Records) }
+        for _, rec := range st.Records {
+            key := strings.TrimSpace(rec.SignalID)
+            if key == "" { key = strings.TrimSpace(rec.ID) }
+            if key == "" { key = fmt.Sprintf("%d|%s|%s|%s|%.8f", rec.CreatedAt, rec.Symbol, rec.Timeframe, rec.Direction, rec.Entry) }
+            if at, exists := index[key]; exists {
+                if rec.CreatedAt >= merged.Records[at].CreatedAt { merged.Records[at] = rec }
+                continue
+            }
+            index[key] = len(merged.Records)
+            merged.Records = append(merged.Records, rec)
+        }
+    }
+    merged = normalizeMT5StoreV55(merged)
+    if canonicalCount < 0 || len(merged.Records) > canonicalCount { _ = saveMT5LocalStore(merged) }
+    return merged
 }
 
 func saveMT5LocalStore(s mt5LocalStore) error {

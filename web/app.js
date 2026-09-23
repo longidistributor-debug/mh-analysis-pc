@@ -348,7 +348,6 @@ async function captureSignalRecordV796(d,state='NEW'){
   }catch(e){}
 }
 function addRecent(d,state='NEW'){
-  if(d?._sameActiveSignal){renderRecentSignals();return}
   const sig=d.signal,now=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),label=d.newsRisk?.high?'NEWS RISK':(sig?sig.direction:'NO EDGE'),score=sig?.score??Math.max(d.buyScore||0,d.sellScore||0);
   const key=`${symbol}|${timeframe}|${label}|${score}|${state}`;
   if(recentSession[0]?.key!==key)recentSession.unshift({time:now,timeframe,label,score,state,key});
@@ -511,18 +510,14 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   }
   return lines.join('\n');
 }
-function sendDecisionWhatsApp(d,action,status=''){
+async function sendDecisionWhatsApp(d,action,status=''){
   const message=decisionWhatsAppMessage(d,action,status);
-  setTimeout(()=>{(async()=>{
-    try{
-      await refreshBackendSettings();
-      if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
-      const r=await fetch('/api/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
-      let j={};try{j=await r.json()}catch(_){ }
-      if(!r.ok)throw new Error(j.error||'WhatsApp queue failed');
-    }catch(e){console.warn('Background WhatsApp send failed',e)}
-  })()},0);
-  return Promise.resolve({ok:true,queued:true,background:true});
+  await refreshBackendSettings();
+  if(!backendSettings.has_whatsapp)throw new Error('WhatsApp Signal Link is not saved. Open the WhatsApp tab and set Signal Link.');
+  const r=await fetch('/api/send-whatsapp',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message})});
+  let j={};try{j=await r.json()}catch(_){ }
+  if(!r.ok)throw new Error(j.error||'WhatsApp queue failed');
+  return j;
 }
 function setAutoStatus(text,kind=''){const el=$('#autoSignalStatus');if(!el)return;el.textContent=text;el.className=`autoSignalStatus ${kind}`.trim()}
 function actionLabel(a){return a==='REEVAL'?'RE-EVALUATE':'NEW ANALYZE'}
@@ -928,7 +923,7 @@ async function loadEconomicCalendarV545(){
   try{const cached=JSON.parse(localStorage.getItem('mh-economic-calendar-stable')||localStorage.getItem('mh-economic-calendar-v546')||localStorage.getItem('mh-economic-calendar-v545')||'null');if(cached?.days)renderEconomicCalendarV546(root,cached.days)}catch(e){}
   const ctl=new AbortController();const kill=setTimeout(()=>ctl.abort(),3200);
   try{const r=await fetch('/api/economic-calendar',{cache:'no-store',signal:ctl.signal});const j=await r.json();if(!r.ok)throw new Error('Calendar unavailable');const days=Array.isArray(j.days)?j.days:[];if(days.length){renderEconomicCalendarV546(root,days);try{localStorage.setItem('mh-economic-calendar-stable',JSON.stringify({days,at:Date.now()}))}catch(e){}
-      savePersistentUICacheV5411({calendar:days});}else if(!root.children.length)root.innerHTML='<div class="calendarLoading">No upcoming calendar events.</div>'}catch(e){if(!root.children.length)if(!root.querySelector('.calDayV545'))root.innerHTML='<div class="calendarLoading">Loading calendar…</div>';setTimeout(loadEconomicCalendarV545,1500)}finally{clearTimeout(kill)}
+      savePersistentUICacheV5411({calendar:days});}else if(!root.children.length)root.innerHTML='<div class="calendarLoading">No upcoming calendar events.</div>'}catch(e){if(!root.querySelector('.calDayV545'))root.innerHTML='<div class="calendarLoading">Calendar data refreshing…</div>';setTimeout(loadEconomicCalendarV545,1500)}finally{clearTimeout(kill)}
 }
 $('#openKey').onclick=openNativeApiSettings;
 const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{await fetch('/api/open-whatsapp',{method:'POST'})}catch(_){}};
