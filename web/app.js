@@ -22,6 +22,17 @@ const candleCache=new Map();
 const fetchInFlight=new Map();
 const active = new Map();
 const activeStorageKey=k=>`mh-active-signal-v797:${k}`;
+const stoppedStorageKey=k=>`mh-stopped-setup-v5510:${k}`;
+function persistStoppedSetupV5510(k,s,c){try{if(!s)return;const st=stats(c),m=empiricalDistanceModel(c,s.direction,st),last=c?.at?.(-1);localStorage.setItem(stoppedStorageKey(k),JSON.stringify({direction:s.direction,entry:Number(s.entry),sl:Number(s.sl),tp1:Number(s.tp1),tp2:Number(s.tp2),stoppedAt:Date.now(),stoppedCandleTime:Number(last?.t||0),entryTolerance:Number(m?.entryTolerance||st.trMedian*.5),trMedian:Number(st.trMedian||0)}))}catch(e){}}
+function restoreStoppedSetupV5510(k){try{const x=JSON.parse(localStorage.getItem(stoppedStorageKey(k))||'null');return x&&Number.isFinite(Number(x.entry))?x:null}catch(e){return null}}
+function clearStoppedSetupV5510(k){try{localStorage.removeItem(stoppedStorageKey(k))}catch(e){}}
+function applyStoppedSetupReentryGuardV5510(d,c,k){
+  const failed=restoreStoppedSetupV5510(k),sig=d?.signal;if(!failed||!sig)return false;
+  if(String(sig.direction)!==String(failed.direction)){clearStoppedSetupV5510(k);return false}
+  const st=stats(c),m=empiricalDistanceModel(c,sig.direction,st),tol=Math.max(Number(failed.entryTolerance)||0,Number(m?.entryTolerance)||0,Number(failed.trMedian||0)*.5,Number(st.trMedian||0)*.5),drift=Math.abs(Number(sig.entry)-Number(failed.entry));
+  if(drift>tol){clearStoppedSetupV5510(k);return false}
+  d.signal=null;d._stoppedReentryBlocked=true;d.explanation=`No new trade: the previous ${failed.direction} setup was stopped out and the fresh analysis is still proposing the same failed entry zone. A genuinely new structure / meaningful entry-zone shift is required before re-entry.`;return true;
+}
 function persistActiveSignal(k,obj){try{if(obj?.signal)localStorage.setItem(activeStorageKey(k),JSON.stringify({signal:obj.signal,state:obj.state||'PENDING'}));else localStorage.removeItem(activeStorageKey(k))}catch(e){}}
 function restoreActiveSignal(k){if(active.has(k))return active.get(k);try{const raw=localStorage.getItem(activeStorageKey(k));if(!raw)return null;const x=JSON.parse(raw);if(x?.signal){const obj={signal:x.signal,state:x.state||'PENDING',candles:[]};active.set(k,obj);return obj}}catch(e){}return null}
 const lastDecision = new Map();
@@ -810,6 +821,8 @@ async function executeNewAnalysis(fromAuto=false){
   try{
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
     const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
+    if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);
+    applyStoppedSetupReentryGuardV5510(d,c,k);
     applyNewsRisk(d,newsRisk);
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
@@ -857,7 +870,7 @@ async function executeReevaluate(fromAuto=false){
     const slHit=signalTouched(c,s,'sl'),tp2Hit=signalTouched(c,s,'tp2'),tp1Hit=signalTouched(c,s,'tp1'),same=current.signal?.direction===s.direction,opposite=current.signal&&current.signal.direction!==s.direction;
     const favorable=s.direction==='BUY'?last.c>=s.entry:last.c<=s.entry,entryRelevant=Math.abs(last.c-s.entry)<=model.entryTolerance;
     if(newsRisk.high){status=`NEWS RISK — ${newsRisk.label||'high-impact volatility'}. Existing setup is not freshly revalidated. No new trade signal; trade at your own risk.`;keep=true;displayOriginal=true;}
-    else if(slHit){status='INVALID — original structural invalidation / SL was breached';}
+    else if(slHit){persistStoppedSetupV5510(k,s,c);status='INVALID — original structural invalidation / SL was breached';}
     else if(tp2Hit){status='TARGET REACHED — TP2 reached';}
     else if(tp1Hit&&same){status='TP1 REACHED — existing trade remains structurally valid toward TP2';keep=true;displayOriginal=true;}
     else if(opposite){status=`REVERSAL WARNING — fresh data now ranks ${current.signal.direction} above the original ${s.direction}; reverse execution remains locked while the active trade/pending order exists`;keep=true;displayOriginal=true;current.signal=protectOnReversalV552(s,c);}
