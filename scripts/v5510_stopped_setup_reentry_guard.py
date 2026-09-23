@@ -20,15 +20,21 @@ if 'function applyStoppedSetupReentryGuardV5510' not in s:
     if anchor not in s: raise SystemExit('activeStorageKey anchor missing')
     s=s.replace(anchor,anchor+insert,1)
 
-old="const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);\n    applyNewsRisk(d,newsRisk);"
-new="const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);\n    if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);\n    applyStoppedSetupReentryGuardV5510(d,c,k);\n    applyNewsRisk(d,newsRisk);"
-if old not in s: raise SystemExit('NEW ANALYZE anchor missing')
-s=s.replace(old,new,1)
+# NEW ANALYZE: use the stable analysis-expression anchor rather than the old
+# newsRisk line layout. This is deliberately idempotent because the branch may
+# already contain the helper functions from an earlier interrupted release.
+new_marker="applyStoppedSetupReentryGuardV5510(d,c,k);"
+if new_marker not in s:
+    analyze_anchor="const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null)"
+    if analyze_anchor not in s: raise SystemExit('NEW ANALYZE expression anchor missing')
+    replacement=analyze_anchor+";if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k)"
+    s=s.replace(analyze_anchor,replacement,1)
 
 old2="else if(slHit){status='INVALID — original structural invalidation / SL was breached';}"
 new2="else if(slHit){persistStoppedSetupV5510(k,s,c);status='INVALID — original structural invalidation / SL was breached';}"
-if old2 not in s: raise SystemExit('SL invalidation anchor missing')
-s=s.replace(old2,new2,1)
+if "else if(slHit){persistStoppedSetupV5510(k,s,c);" not in s:
+    if old2 not in s: raise SystemExit('SL invalidation anchor missing')
+    s=s.replace(old2,new2,1)
 
 p.write_text(s,encoding='utf-8')
 
