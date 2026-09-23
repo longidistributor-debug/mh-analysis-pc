@@ -32,7 +32,7 @@ import (
 )
 
 const licDefaultBaseURL = "https://mh-analysis.vercel.app"
-const licAppVersion = "V.55.8"
+const licAppVersion = "V.55.9"
 
 type licDataBlob struct {
 	cbData uint32
@@ -54,6 +54,10 @@ var (
 	licLastMessage           string
 	licHTTP                  = &http.Client{Timeout: 12 * time.Second}
 	licRemoteCheckMinSpacing = 90 * time.Second
+	// Credentials are process-memory only and are used solely to renew an expired
+	// server access session on the already-bound Windows device. Never written to disk.
+	licLoginUsername         string
+	licLoginPassword         string
 )
 
 type licDeviceDisk struct {
@@ -348,6 +352,50 @@ func licSetRemoteError(status int, env licRemoteEnvelope, err error) {
 	}
 }
 
+// licReLoginSameDeviceLocked renews a server session after an access token expires.
+// It deliberately repeats the exact normal login/device proof on the SAME bound machine.
+// Expired/disabled licenses and device mismatches remain server-authoritative failures.
+// Caller must already hold licMu.
+func licReLoginSameDeviceLocked(username, password string) bool {
+	username = strings.ToLower(strings.TrimSpace(username))
+	if username == "" || password == "" {
+		return false
+	}
+	d, err := licEnsureDevice()
+	if err != nil {
+		return false
+	}
+	status, ch, callErr := licPost("auth/challenge", map[string]any{"username": username, "device_id": d.ID}, "")
+	if callErr != nil || status < 200 || status >= 300 || !ch.OK || ch.ChallengeID == "" || ch.Challenge == "" {
+		return false
+	}
+	sig := ed25519.Sign(d.Private, []byte(ch.Challenge))
+	status, rr, callErr := licPost("auth/login", map[string]any{
+		"username": username,
+		"password": password,
+		"challenge_id": ch.ChallengeID,
+		"signature": base64.StdEncoding.EncodeToString(sig),
+		"public_key": base64.StdEncoding.EncodeToString(d.DER),
+		"device_id": d.ID,
+		"device_info": licMachineInfo(),
+	}, "")
+	if callErr != nil || status < 200 || status >= 300 || !rr.OK || strings.TrimSpace(rr.AccessToken) == "" {
+		return false
+	}
+	if rr.User.DeviceID != "" && rr.User.DeviceID != d.ID {
+		return false
+	}
+	ns := &licSession{Username: rr.User.Username, AccessToken: rr.AccessToken, User: rr.User}
+	if err := licSaveSession(ns); err != nil {
+		return false
+	}
+	licAuthorized = true
+	licLastCheck = time.Now()
+	licLastCode = ""
+	licLastMessage = ""
+	return true
+}
+
 func licEnsureAuthorized(force bool) bool {
 	licMu.Lock()
 	defer licMu.Unlock()
@@ -386,6 +434,12 @@ func licEnsureAuthorized(force bool) bool {
 	}
 	licSetRemoteError(status, vr, callErr)
 	if status == http.StatusUnauthorized {
+		// Access tokens can expire while the app remains open. Renew through the
+		// normal signed SAME-device login instead of treating token age as logout.
+		// The server still rejects expired/disabled licenses or another device.
+		if licReLoginSameDeviceLocked(s.Username, licLoginPassword) {
+			return true
+		}
 		licClearSession()
 		licLastCode = "session_invalid"
 		licLastMessage = "Your secure session has ended. Please log in again."
@@ -470,6 +524,10 @@ func licHandleLogin(w http.ResponseWriter, r *http.Request) {
 		licLastCheck = time.Now()
 		licLastCode = ""
 		licLastMessage = ""
+		// Keep credentials only for this running process so an expired access token
+		// can be renewed without an unwanted logout on the same bound PC.
+		licLoginUsername = q.Username
+		licLoginPassword = q.Password
 	}
 	licMu.Unlock()
 	if err != nil {
@@ -507,6 +565,8 @@ func licHandleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	licMu.Lock()
 	licClearSession()
+	licLoginUsername = ""
+	licLoginPassword = ""
 	licMu.Unlock()
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
 }
