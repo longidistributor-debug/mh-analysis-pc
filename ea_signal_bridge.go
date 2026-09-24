@@ -20,7 +20,7 @@ import (
 // active_state.txt accepted format from the decoder:
 // FLAT
 // ACTIVE|BUY/SELL|SYMBOL|POSITION/PENDING|TICKET|MAGIC
-// manage.txt: MANAGE_ID|SYMBOL|BUY/SELL|SL|FINAL_TP|REASON|TP1|TP2|PARTIAL_TP
+// manage.txt: MANAGE_ID|SYMBOL|BUY/SELL|SL|FINAL_TP|REASON|TP1|TP2|PARTIAL_TP|TIMEFRAME
 
 type eaSignalRequest struct {
 	SignalID string  `json:"signal_id"`
@@ -43,6 +43,7 @@ type eaManageRequest struct {
 	TP2       float64 `json:"tp2"`
 	PartialTP bool    `json:"partial_tp"`
 	Reason    string  `json:"reason"`
+	Timeframe string  `json:"timeframe"`
 }
 
 type eaActiveTrade struct {
@@ -147,14 +148,15 @@ func eaManageHandler(w http.ResponseWriter,r *http.Request){
 	if r.Method!=http.MethodPost{http.Error(w,"method",http.StatusMethodNotAllowed);return}
 	var q eaManageRequest
 	if err:=json.NewDecoder(r.Body).Decode(&q);err!=nil{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"bad manage payload"});return}
-	q.ManageID=cleanEAToken(q.ManageID);q.Symbol=normalizeEABridgeSymbol(q.Symbol);q.Direction=eaDirection(q.Direction);q.Reason=cleanEAToken(q.Reason)
+	q.ManageID=cleanEAToken(q.ManageID);q.Symbol=normalizeEABridgeSymbol(q.Symbol);q.Direction=eaDirection(q.Direction);q.Reason=cleanEAToken(q.Reason);q.Timeframe=cleanEAToken(q.Timeframe)
 	if q.ManageID==""{q.ManageID="MHM"+strconv.FormatInt(time.Now().UnixMilli(),10)}
 	if !eaSafeToken.MatchString(q.ManageID){w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"invalid manage id"});return}
 	if q.Symbol!="XAUUSD"&&q.Symbol!="BTCUSD"{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"unsupported EA bridge symbol"});return}
 	if q.Direction!="BUY"&&q.Direction!="SELL"{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"direction must be BUY or SELL"});return}
 	if q.SL<=0||q.TP<=0{w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"sl/tp must be positive"});return}
+	if q.Timeframe==""||!eaSafeToken.MatchString(q.Timeframe){w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"timeframe is required for safe EA management"});return}
 	dir,err:=mt5CommonBridgeDir();if err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":err.Error()});return}
-	line:=strings.Join([]string{q.ManageID,q.Symbol,q.Direction,strconv.FormatFloat(q.SL,'f',-1,64),strconv.FormatFloat(q.TP,'f',-1,64),q.Reason,strconv.FormatFloat(q.TP1,'f',-1,64),strconv.FormatFloat(q.TP2,'f',-1,64),strconv.FormatBool(q.PartialTP)},"|")+"\r\n"
+	line:=strings.Join([]string{q.ManageID,q.Symbol,q.Direction,strconv.FormatFloat(q.SL,'f',-1,64),strconv.FormatFloat(q.TP,'f',-1,64),q.Reason,strconv.FormatFloat(q.TP1,'f',-1,64),strconv.FormatFloat(q.TP2,'f',-1,64),strconv.FormatBool(q.PartialTP),q.Timeframe},"|")+"\r\n"
 	dst:=filepath.Join(dir,"manage.txt");tmp:=filepath.Join(dir,"manage.new")
 	eaPublishMu.Lock();defer eaPublishMu.Unlock()
 	if err:=os.WriteFile(tmp,[]byte(line),0644);err!=nil{w.WriteHeader(http.StatusInternalServerError);_=json.NewEncoder(w).Encode(map[string]any{"error":"could not write EA manage command: "+err.Error()});return}
