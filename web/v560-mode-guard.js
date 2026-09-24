@@ -4,6 +4,7 @@
 const $=s=>document.querySelector(s);
 let lastFast=null;
 let saved=null;
+let savedSL=null;
 let applying=false;
 
 function isOn(id){
@@ -33,12 +34,13 @@ function setNormalControlsLocked(locked){
   });
   document.querySelectorAll('.nativeTfButtons button').forEach(b=>b.disabled=!!locked);
 }
-function saveNormalState(){
+function saveNormalState(slState){
   if(saved)return;
   saved={auto:isOn('#autoSignalToggle'),lot:isOn('#lotSizeToggle'),partial:isOn('#partialTpToggle')};
+  savedSL=!!slState;
 }
-function pauseNormalMode(){
-  saveNormalState();
+function pauseNormalMode(slState){
+  saveNormalState(slState);
   clickIf('#autoSignalToggle',false);
   clickIf('#lotSizeToggle',false);
   clickIf('#partialTpToggle',false);
@@ -46,14 +48,17 @@ function pauseNormalMode(){
   setNormalControlsLocked(true);
   const st=$('#autoSignalStatus');if(st)st.textContent='Fast Scalping active • normal signal controls paused';
 }
-function restoreNormalMode(){
+async function restoreNormalMode(){
   setNormalControlsLocked(false);
   if(saved){
     clickIf('#lotSizeToggle',saved.lot);
     clickIf('#partialTpToggle',saved.partial);
     clickIf('#autoSignalToggle',saved.auto);
   }
-  saved=null;
+  if(savedSL!==null){
+    try{await fetch('/api/mt5/modes',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sl_adjustment:!!savedSL})});}catch(_){}
+  }
+  saved=null;savedSL=null;
 }
 async function sync(){
   if(applying)return;
@@ -62,8 +67,8 @@ async function sync(){
     remove20m();
     const r=await fetch('/api/mt5/modes',{cache:'no-store'});if(!r.ok)return;
     const j=await r.json();const fast=!!j.fast_scalping;
-    if(fast){pauseNormalMode();}
-    else if(lastFast===true){restoreNormalMode();}
+    if(fast){pauseNormalMode(j.sl_adjustment);}
+    else if(lastFast===true){await restoreNormalMode();}
     lastFast=fast;
   }catch(_){
   }finally{applying=false;}
