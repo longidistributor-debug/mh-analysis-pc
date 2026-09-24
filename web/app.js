@@ -669,6 +669,7 @@ function setAutoStatus(text,kind=''){const el=$('#autoSignalStatus');if(!el)retu
 function actionLabel(a){return a==='REEVAL'?'RE-EVALUATE':'NEW ANALYZE'}
 const FIXED_PHASE_MS=15*60*1000;
 const FIXED_REEVAL_OFFSET=5*60*1000;
+// V.55.16 FIXED WALL CLOCK: NEW at :00/:15/:30/:45; RE-EVALUATE at :05/:20/:35/:50.
 function fixedPhaseInfo(at=Date.now()){
   const d=new Date(at),minute=d.getMinutes(),phase=Math.floor(minute/15)+1,startMinute=(phase-1)*15,endMinute=phase*15;
   const cycleStart=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),startMinute,0,0).getTime();
@@ -844,7 +845,7 @@ async function executeNewAnalysis(fromAuto=false){
   if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
-    const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null);if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k),newsRisk=await detectNewsRisk(c);
+    const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null);if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k);const newsRisk=await detectNewsRisk(c);
     if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);
     applyStoppedSetupReentryGuardV5510(d,c,k);
     applyNewsRisk(d,newsRisk);
@@ -864,7 +865,7 @@ async function executeNewAnalysis(fromAuto=false){
     }
     return d;
   }catch(e){
-    showError(e.message);if(autoSignalEnabled){setAutoStatus('Analysis failed • staying on fixed 15m clock','bad');scheduleFixedAfterDecision(null,'NEW ANALYSIS',autoActionStartedAt||Date.now())}return null;
+    showError(e.message);if(autoSignalEnabled){setAutoStatus('Analysis failed • staying on fixed 15m clock','bad');scheduleAfterCompletedFixedAction('NEW ANALYSIS',autoActionStartedAt||Date.now())}return null;
   }finally{busy=false;setBusy(false)}
 }
 async function executeReevaluate(fromAuto=false){
@@ -882,7 +883,7 @@ async function executeReevaluate(fromAuto=false){
     }catch(e){setAutoStatus(`WhatsApp send failed • ${e.message||e}`,'bad')}
     if(autoSignalEnabled){
       setAutoStatus(`${fixedPhaseInfo(autoActionStartedAt).label} • Re-evaluation skipped`,'warn');
-      scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt);
+      scheduleAfterCompletedFixedAction('RE-EVALUATE',autoActionStartedAt);
     }
     return null;
   }
@@ -912,7 +913,7 @@ async function executeReevaluate(fromAuto=false){
       try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE queued to WhatsApp','good')}catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
     return current;
-  }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed • staying on fixed quarter-hour boundary','bad');scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
+  }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed • staying on fixed quarter-hour boundary','bad');scheduleAfterCompletedFixedAction('RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
   finally{busy=false;setBusy(false)}
 }
 async function runAnalyze(){
