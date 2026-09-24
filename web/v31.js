@@ -27,4 +27,9 @@ const guard=document.createElement('script');
 guard.src='/v560-mode-guard.js';
 guard.defer=true;
 document.head.appendChild(guard);
+// V56.2 text-only rendering cleanup. Does not touch Bismillah or trading logic.
+const textFix=document.createElement('script');
+textFix.src='/v562-text-fix.js';
+textFix.defer=true;
+document.head.appendChild(textFix);
 })();
