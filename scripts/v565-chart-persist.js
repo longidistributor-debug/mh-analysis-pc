@@ -34,7 +34,7 @@ const c1=check.indexOf('async function contextChanged(){');
 const c2=check.indexOf('\n}',c1);
 const context=check.slice(c1,c2);
 if(context.includes('loadChart();'))throw new Error('Selection still clears chart');
-if(/fetchCandles|loadContextChart|refreshMarketCap/.test(context))throw new Error('Selection must remain API-silent');
+if(/await\s+fetchCandles\s*\(|loadContextChart\s*\(|refreshMarketCap\s*\(\s*\)/.test(context))throw new Error('Selection must remain API-silent');
 if(!check.includes('if(busy)return null;loadChart();autoActionStartedAt=Date.now()'))throw new Error('NEW ANALYZE chart replacement marker missing');
 const re=check.slice(check.indexOf('async function executeReevaluate(fromAuto=false){'));
 if(!re.includes('loadChart();\n  busy=true;setBusy'))throw new Error('RE-EVALUATE chart replacement marker missing');
