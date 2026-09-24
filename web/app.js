@@ -232,6 +232,19 @@ function signalTouched(c,s,field){
   if(field==='sl')return dir==='BUY'?w.some(x=>Number(x.l)<=p):w.some(x=>Number(x.h)>=p);
   return dir==='BUY'?w.some(x=>Number(x.h)>=p):w.some(x=>Number(x.l)<=p);
 }
+function activatedTradeSnapshotV5519(c,s,mt5){
+  if(!s||!mt5?.active)return null;
+  const activation=signalEntryActivation(c,s);if(!activation)return null;
+  const sigDir=String(s.direction||'').toUpperCase(),mt5Dir=String(mt5.direction||'').toUpperCase();
+  if(mt5Dir&&mt5Dir!=='MIXED'&&mt5Dir!==sigDir)return null;
+  const last=Number(c?.at?.(-1)?.c),entry=Number(s.entry);if(!Number.isFinite(last)||!Number.isFinite(entry))return null;
+  const move=sigDir==='BUY'?last-entry:entry-last;
+  return{active:true,direction:sigDir,entry,last,move,performance:move>1e-9?'POSITIVE':move<-1e-9?'NEGATIVE':'FLAT',activationIndex:activation.index};
+}
+function retireTriggeredSignalV5519(k,s,c,mt5){
+  const snap=activatedTradeSnapshotV5519(c,s,mt5);if(!snap)return null;
+  active.delete(k);persistActiveSignal(k,null);return snap;
+}
 function classifyReconfirmation(prev,fresh,c){if(!prev||!fresh||prev.direction!==fresh.direction)return null;if(signalTouched(c,prev,'sl')||signalTouched(c,prev,'tp1'))return null;const model=empiricalDistanceModel(c,prev.direction,stats(c)),d=Math.abs(Number(prev.entry)-Number(fresh.entry));if(d>model.entryTolerance)return null;const age=signalBarsAge(c,prev),life=adaptiveExpiryBars(c);return{distance:d,tolerance:model.entryTolerance,age,life}}
 function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
 
@@ -620,11 +633,12 @@ function setLotSizeEnabled(on){lotSizeEnabled=!!on;localStorage.setItem(STORAGE_
 function setPartialTpEnabled(on){partialTpEnabled=!!on;localStorage.setItem(STORAGE_PARTIAL_TP,partialTpEnabled?'1':'0');updateTradeModeButtons();/* V.55.13: execution preference only; never touch market/history connection */}
 function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
-  const sig=d?.signal||d?.originalSignal||null;
+  const sig=d?._activatedTradeRetired?(d?.signal||null):(d?.signal||d?.originalSignal||null);
   const isRe=action==='RE-EVALUATE';
   const statusValue=isRe?'Re-Evaluate':(sig?'Signal generated':'No clear edge');
   const reason=isRe?(d?.explanation||status||d?.bestFamily||sig?.setupReason||'Market re-evaluation'):'';
   const lines=[`*MH ANALYSIS SIGNAL*`,`🤝 *Status:* ${statusValue}`];
+  if(d?._activatedTradeRetired){const a=d._activatedTradeRetired;lines.push(`📌 *Previous trade:* ACTIVE • ${a.performance} • Move ${a.move>=0?'+':''}${fmt(a.move)}`)}
   if(isRe){lines.push('',`*Reason:* ${reason}`,'')}
   else{lines.push('')}
   lines.push(`*Pair:* ${symbol}`,`*Timeframe:* ${String(timeframe).toUpperCase()}`,`*Time:* ${new Date().toLocaleString()}`,'');
@@ -638,7 +652,7 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
 }
 let mhWhatsAppLastDispatchKeyV5511='',mhWhatsAppLastDispatchAtV5511=0;
 function mhWhatsAppDispatchKeyV5511(d,action,status=''){
-  const sig=d?.signal||d?.originalSignal||null;
+  const sig=d?._activatedTradeRetired?(d?.signal||null):(d?.signal||d?.originalSignal||null);
   return JSON.stringify({
     action:String(action||'').toUpperCase(),
     symbol:String(symbol||'').toUpperCase(),
@@ -845,13 +859,15 @@ async function dispatchUniqueSignalV36(d){
 async function executeNewAnalysis(fromAuto=false){
   if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
-    const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
-    const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null);if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k);const newsRisk=await detectNewsRisk(c);
+    const k=keyFor(),storedPrev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
+    const f=await candlesForAnalysis(),c=f.candles,mt5State=storedPrev?await readMT5ActiveStateV552(symbol):null,activated=storedPrev?retireTriggeredSignalV5519(k,storedPrev,c,mt5State):null,prev=activated?null:storedPrev,d=analyze(c,null);if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);applyStoppedSetupReentryGuardV5510(d,c,k);const newsRisk=await detectNewsRisk(c);
+    if(activated){d._activatedTradeRetired=activated;d.warnings=[`PREVIOUS SIGNAL RETIRED: entry is now an ACTIVE ${activated.direction} trade (${activated.performance}, move ${activated.move>=0?'+':''}${fmt(activated.move)}). It cannot be re-issued as a signal.`,...(d.warnings||[])]}
     if(prev&&signalTouched(c,prev,'sl'))persistStoppedSetupV5510(k,prev,c);
     applyStoppedSetupReentryGuardV5510(d,c,k);
     applyNewsRisk(d,newsRisk);
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
+    if(activated)reason=`Previous ${activated.direction} signal has triggered and is now an ACTIVE trade (${activated.performance}, move ${activated.move>=0?'+':''}${fmt(activated.move)}). That old signal was retired. This result is a completely fresh ${timeframe} analysis. ${d.explanation}`;
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
     if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
@@ -890,7 +906,16 @@ async function executeReevaluate(fromAuto=false){
   }
   busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}RE-EVALUATE • testing the original signal against fresh data…`);
   try{
-    const f=await candlesForAnalysis(),c=f.candles,s=a.signal,current=analyze(c,s),newsRisk=await detectNewsRisk(c),age=signalBarsAge(c,s),life=adaptiveExpiryBars(c),last=c.at(-1),model=empiricalDistanceModel(c,s.direction,stats(c));
+    const f=await candlesForAnalysis(),c=f.candles,s=a.signal,mt5State=await readMT5ActiveStateV552(symbol),activated=retireTriggeredSignalV5519(k,s,c,mt5State);
+    if(activated){
+      const current=analyze(c,null),newsRisk=await detectNewsRisk(c);current.newsRisk=newsRisk;applyNewsRisk(current,newsRisk);current._ranked=buildRankedForUi(c,current);current._activatedTradeRetired=activated;current.originalSignal=null;
+      const status=`PREVIOUS SIGNAL RETIRED — entry is now an ACTIVE ${activated.direction} trade • ${activated.performance} • move ${activated.move>=0?'+':''}${fmt(activated.move)}. Fresh ${timeframe} analysis generated; old triggered signal will not be re-sent.`;
+      current.warnings=[status,...(current.warnings||[])];current.explanation=`${status} ${current.explanation}`;
+      renderDecision(current,current.explanation,'REEVAL');busy=false;setBusy(false);
+      if(autoSignalEnabled)await autoSendAndSchedule(current,'RE-EVALUATE',status);else{try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE sent • triggered signal retired • fresh analysis','good')}catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}}
+      return current;
+    }
+    const current=analyze(c,s),newsRisk=await detectNewsRisk(c),age=signalBarsAge(c,s),life=adaptiveExpiryBars(c),last=c.at(-1),model=empiricalDistanceModel(c,s.direction,stats(c));
     current.newsRisk=newsRisk;
     current._ranked=buildRankedForUi(c,current);current.originalSignal=s;let status='',keep=false,displayOriginal=false;
     const slHit=signalTouched(c,s,'sl'),tp2Hit=signalTouched(c,s,'tp2'),tp1Hit=signalTouched(c,s,'tp1'),same=current.signal?.direction===s.direction,opposite=current.signal&&current.signal.direction!==s.direction;
