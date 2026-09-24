@@ -1,0 +1,66 @@
+name: Publish V555 Channel
+on:
+  push:
+    branches: [v55.5-ui-placement]
+    paths: ['vercel-auth/publish-v555-channel']
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: v55.5-ui-placement}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Build exact V.55.5 updater binary
+        shell: python
+        run: |
+          from pathlib import Path
+          def rd(p):
+            b=Path(p).read_bytes()
+            for e in ('utf-8-sig','cp1252','latin-1'):
+              try:return b.decode(e)
+              except UnicodeDecodeError:pass
+            raise RuntimeError(p)
+          def wr(p,s):Path(p).write_text(s,encoding='utf-8')
+          wr('VERSION','V.55.5\n')
+          for f,a,b in [('updater.go','const mhPublicVersionV001 = "V.55.3"','const mhPublicVersionV001 = "V.55.5"'),('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.5"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.5</div>')]:
+            s=rd(f);assert a in s;wr(f,s.replace(a,b,1))
+      - name: Test and build
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/v553-placement.js
+          go test ./...
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0){throw 'build failed'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.55.5'|Set-Content -Encoding ascii dist\VERSION
+          $m=[ordered]@{version='V.55.5';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.5 top MH MT5 UI placement correction.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+      - name: Publish updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.55.5 updater channel'
+          git push origin mh-analysis-update-channel
