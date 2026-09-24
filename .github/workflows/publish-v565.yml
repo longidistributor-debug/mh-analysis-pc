@@ -26,8 +26,8 @@ jobs:
           $p='webview2_host.go';$s=Get-Content -Raw $p;$s=$s.Replace('Version: V.55.8','Version: V.56.5');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
           $p='web/index.html';$s=Get-Content -Raw $p;$s=$s.Replace('id="mhUpdateVersionV001">V.55.8<','id="mhUpdateVersionV001">V.56.5<');$s=$s.Replace('<button data-chart-tf="20m">20m</button>','');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
       - name: Apply V56.5 chart persistence fix
-        shell: powershell
-        run: .\scripts\v565-chart-persist.ps1
+        shell: bash
+        run: node scripts/v565-chart-persist.js
       - name: Validate source and fixes
         shell: powershell
         run: |
@@ -38,6 +38,9 @@ jobs:
           $app=Get-Content -Raw web\app.js
           if(-not $app.Contains('V56.5: keep the last fetched chart visible')){throw 'V56.5 chart persistence fix missing'}
           if(-not $app.Contains('if(busy)return null;loadChart();autoActionStartedAt=Date.now()')){throw 'NEW ANALYZE chart replacement missing'}
+          $context=[regex]::Match($app,'async function contextChanged\(\)\{(?s:.*?)\n\}').Value
+          if($context.Contains('loadChart();')){throw 'timeframe/pair selection still clears chart'}
+          if($context.Contains('fetchCandles') -or $context.Contains('loadContextChart') -or $context.Contains('refreshMarketCap')){throw 'context selection must remain API-silent'}
           $v31=Get-Content -Raw web\v31.js
           if(-not $v31.Contains('/v564-market-ui-fix.js')){throw 'V56.4 market safety baseline missing'}
           if(-not $v31.Contains("bismillah.setAttribute('dir','rtl')")){throw 'Bismillah baseline missing'}
