@@ -1,0 +1,42 @@
+name: Publish MH Analysis V.55.4 Placement Safe Main
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v554-placement-safe']
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: v55.4-safe}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+      - name: Verify baseline and set V.55.4 identity only in workspace
+        shell: python
+        run: |
+          from pathlib import Path
+          assert 'const licAppVersion = "V.55.3"' in Path('license_auth.go').read_text()
+          p=Path('web/v553-placement.js').read_text()
+          for x in ['mhSlAdjustment','mhProgressiveV1','mhFastScalping']: assert x in p
+          Path('VERSION').write_text('V.55.4\n')
+          for f,a,b in [('updater.go','const mhPublicVersionV001 = "V.55.3"','const mhPublicVersionV001 = "V.55.4"'),('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.4"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.4</div>')]:
+            q=Path(f);s=q.read_text();assert a in s;q.write_text(s.replace(a,b,1))
+      - name: Test build installer package
+        shell: powershell
+        run: |
+          node --check web/v553-placement.js;node --check web/v31.js;go test ./...;if($LASTEXITCODE -ne 0){throw 'tests failed'}
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null;$env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0';go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .;if($LASTEXITCODE -ne 0){throw 'build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe';if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress};$src=(Resolve-Path 'dist\MH Analysis.exe').Path;$out=(Resolve-Path dist-installer).Path;& $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.4' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.4' 'installer\MHAnalysis-V01.iss';if($LASTEXITCODE -ne 0){throw 'installer failed'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower();"$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt;'V.55.4'|Set-Content -Encoding ascii dist\VERSION;$m=[ordered]@{version='V.55.4';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.4 placement-only correction on intact V.55.3 baseline.'}|ConvertTo-Json -Compress;[IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)));Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.4.exe' -DestinationPath 'dist\MH-Analysis-V.55.4.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.4
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.4.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.4.exe
