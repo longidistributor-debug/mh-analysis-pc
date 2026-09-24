@@ -1,0 +1,117 @@
+name: Publish V558 Clean Rebuild
+on:
+  push:
+    branches: [v55.8-clean-rebuild]
+    paths:
+      - 'vercel-auth/publish-v558-clean'
+      - '.github/workflows/publish-v558-clean.yml'
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v55.8-clean-rebuild
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Format and verify clean source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          gofmt -w *.go
+          node --check web/app.js
+          node --check web/runtime-fixes.js
+          node --check web/auth.js
+          node --check web/v31.js
+          node --check web/v558-fast.js
+          if($LASTEXITCODE -ne 0){throw 'JavaScript validation failed'}
+          $idx=Get-Content -Raw web\index.html
+          foreach($m in @('openKey','economicCalendarLocal','tickerGold','tickerBTC','/auth.js','/v558-fast.js')){
+            if(-not $idx.Contains($m)){throw "baseline UI marker missing: $m"}
+          }
+          $host=Get-Content -Raw webview2_host.go
+          foreach($m in @('MH Analysis','WhatsApp','Records','MH MT5','SL Adjustment: OFF','Fast Scalping: OFF')){
+            if(-not $host.Contains($m)){throw "native control missing: $m"}
+          }
+          $v31=Get-Content -Raw web\v31.js
+          if($v31.Contains('window.fetch=')){throw 'global fetch override must not exist'}
+          if($v31.Contains('mhProgressiveV1')){throw 'Progressive UI must not exist'}
+          if($idx.Contains('Normal Trading Mode') -or $host.Contains('Normal Trading Mode')){throw 'Normal Trading Mode text must not exist'}
+          $auth=Get-Content -Raw license_auth.go
+          if(-not $auth.Contains('username') -or -not $auth.Contains('password')){throw 'login credential flow missing'}
+          if(-not (Get-Content -Raw calendar3d.go).Contains('economic')){throw 'calendar backend missing'}
+          if(-not (Get-Content -Raw main.go).Contains('/api/public-ticker')){throw 'ticker backend missing'}
+          if(-not (Get-Content -Raw main.go).Contains('registerRecordsV2Routes')){throw 'records backend missing'}
+          if(-not (Get-Content -Raw main.go).Contains('/api/send-whatsapp')){throw 'whatsapp backend missing'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.55.8'){throw 'VERSION is not V.55.8'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.55.8"')){throw 'updater identity wrong'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.55.8"')){throw 'license identity wrong'}
+      - name: Test and build clean V55.8
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.8' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.8' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer failed'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.55.8'|Set-Content -Encoding ascii dist\VERSION
+          $m=[ordered]@{
+            version='V.55.8'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes='V.55.8 clean rebuild from the known working V55 runtime. Restores existing login, analysis, WhatsApp, Records, MT5, calendar and ticker paths; adds isolated SL Adjustment and Fast Scalping controls; Progressive remains internal without a separate UI button.'
+          }|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.8.exe' -DestinationPath 'dist\MH-Analysis-V.55.8.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.8
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.8.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.8.exe
+          if-no-files-found: error
+      - name: Publish updater channel atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.8.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.8.exe"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.8.exe" './MH-Analysis-Setup-V.55.8.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.8.exe'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.55.8 clean rebuild'
+          git push origin mh-analysis-update-channel
