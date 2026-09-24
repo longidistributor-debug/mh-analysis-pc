@@ -49,7 +49,7 @@ func v558WriteMailbox(name, line string) error {
 func v558PublishConfig() error {
     s := v558Snapshot()
     line := strings.Join([]string{
-        "V.55.8",
+        "V.56.0",
         strconv.FormatBool(s.SLAdjustment),
         "true",
         strconv.FormatBool(s.FastScalping),
@@ -77,7 +77,11 @@ func v558RefreshNativeButtons() {
 
 func v558ToggleSLAdjustment() {
     v558ModeMu.Lock()
-    v558Modes.SLAdjustment = !v558Modes.SLAdjustment
+    // SL Adjustment is a normal-mode function. Do not allow it to become active
+    // while Fast Scalping is isolating the normal trading controls.
+    if !v558Modes.FastScalping {
+        v558Modes.SLAdjustment = !v558Modes.SLAdjustment
+    }
     v558ModeMu.Unlock()
     _ = v558PublishConfig()
     v558RefreshNativeButtons()
@@ -86,6 +90,9 @@ func v558ToggleSLAdjustment() {
 func v558ToggleFastScalping() {
     v558ModeMu.Lock()
     v558Modes.FastScalping = !v558Modes.FastScalping
+    if v558Modes.FastScalping {
+        v558Modes.SLAdjustment = false
+    }
     v558ModeMu.Unlock()
     _ = v558PublishConfig()
     v558RefreshNativeButtons()
@@ -96,13 +103,16 @@ func v558ModesHandler(w http.ResponseWriter, r *http.Request) {
     switch r.Method {
     case http.MethodGet:
         s := v558Snapshot()
-        _ = json.NewEncoder(w).Encode(map[string]any{"ok":true,"sl_adjustment":s.SLAdjustment,"fast_scalping":s.FastScalping,"progressive_v1":true})
+        _ = json.NewEncoder(w).Encode(map[string]any{"ok":true,"sl_adjustment":s.SLAdjustment,"fast_scalping":s.FastScalping,"progressive_v1":true,"normal_mode_paused":s.FastScalping})
     case http.MethodPost:
         var q struct { SLAdjustment *bool `json:"sl_adjustment"`; FastScalping *bool `json:"fast_scalping"` }
         if json.NewDecoder(r.Body).Decode(&q) != nil { http.Error(w,"bad json",400); return }
         v558ModeMu.Lock()
-        if q.SLAdjustment != nil { v558Modes.SLAdjustment = *q.SLAdjustment }
-        if q.FastScalping != nil { v558Modes.FastScalping = *q.FastScalping }
+        if q.FastScalping != nil {
+            v558Modes.FastScalping = *q.FastScalping
+            if v558Modes.FastScalping { v558Modes.SLAdjustment = false }
+        }
+        if q.SLAdjustment != nil && !v558Modes.FastScalping { v558Modes.SLAdjustment = *q.SLAdjustment }
         v558Modes.Progressive = true
         v558ModeMu.Unlock()
         if err := v558PublishConfig(); err != nil { http.Error(w,err.Error(),500); return }
