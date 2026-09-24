@@ -629,7 +629,7 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   lines.push(`*Pair:* ${symbol}`,`*Timeframe:* ${String(timeframe).toUpperCase()}`,`*Time:* ${new Date().toLocaleString()}`,'');
   if(sig){
     const dot=sig.direction==='SELL'?'🔴':'🟢';
-    const selectedLot=lotForSignalScore(sig.score);lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${sig.score}/100`,`*Lot:* ${selectedLot.toFixed(2)} (${lotSizeEnabled?'Score Auto':'Fixed'})`,`*Partial TP:* ${partialTpEnabled?'ON':'OFF'}`,`*Setup:* ${d?.bestFamily||sig?.setupReason||'Best current setup'}`);
+    const selectedLot=lotForSignalScore(sig.score);lines.push(`*Signal:* ${dot} ${sig.direction}`,`*Entry:* ${dot} ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`  ↳ *Why SL:* ${sig.slReason||'Structural invalidation / current timeframe risk envelope'}`,`*TP1:* ${fmt(sig.tp1)}`,`  ↳ *Why TP1:* ${sig.tp1Reason||'Nearest reachable opposing structure / liquidity objective'}`,`*TP2:* ${fmt(sig.tp2)}`,`  ↳ *Why TP2:* ${sig.tp2Reason||'Next reachable structure / liquidity stretch objective'}`,`*Score:* ${sig.score}/100`,`*Lot:* ${selectedLot.toFixed(2)} (${lotSizeEnabled?'Score Auto':'Fixed'})`,`*Partial TP:* ${partialTpEnabled?'ON':'OFF'}`,`*Setup:* ${d?.bestFamily||sig?.setupReason||'Best current setup'}`);
   }else{
     lines.push(`*Signal:* ⚪ NO CLEAR EDGE`,`*Entry:* —`,`*SL:* —`,`*TP1:* —`,`*TP2:* —`,`*Score:* —`,`*Setup:* No clear edge`);
   }
