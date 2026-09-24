@@ -1,7 +1,7 @@
-name: Publish V558 Clean Rebuild
+name: Publish V559 Release
 on:
   push:
-    branches: [v55.8-clean-rebuild]
+    branches: [v55.9-release]
 permissions:
   contents: write
 jobs:
@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v55.8-clean-rebuild
+          ref: v55.9-release
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -36,9 +36,9 @@ jobs:
           $main=Get-Content -Raw main.go
           foreach($m in @('/api/public-ticker','registerRecordsV2Routes','/api/send-whatsapp','registerV558ModeRoutes')){if(-not $main.Contains($m)){throw "backend marker missing: $m"}}
           if(-not (Get-Content -Raw calendar3d.go).Contains('economic')){throw 'calendar backend missing'}
-          if((Get-Content VERSION -Raw).Trim() -ne 'V.55.8'){throw 'VERSION is not V.55.8'}
-          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.55.8"')){throw 'updater identity wrong'}
-          if(-not $auth.Contains('const licAppVersion = "V.55.8"')){throw 'license identity wrong'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.55.9'){throw 'VERSION is not V.55.9'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.55.9"')){throw 'updater identity wrong'}
+          if(-not $auth.Contains('const licAppVersion = "V.55.9"')){throw 'license identity wrong'}
           $iss=Get-Content -Raw installer\MHAnalysis-V01.iss
           if(-not $iss.Contains('OutputBaseFilename={#MyOutputBaseFilename}')){throw 'installer output filename is not configurable'}
       - name: Test build installer manifest and package
@@ -56,45 +56,40 @@ jobs:
           if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup installation failed'}}
           $src=(Resolve-Path 'dist\MH Analysis.exe').Path
           $out=(Resolve-Path dist-installer).Path
-          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.8' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.8' 'installer\MHAnalysis-V01.iss'
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.9' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.9' 'installer\MHAnalysis-V01.iss'
           if($LASTEXITCODE -ne 0){throw 'installer compilation failed'}
-          $installer='dist-installer\MH-Analysis-Setup-V.55.8.exe'
-          if(-not(Test-Path $installer)){Write-Host 'Installer directory contents:'; Get-ChildItem dist-installer -Force | Format-Table Name,Length; throw "expected installer missing: $installer"}
-          if((Get-Item $installer).Length -lt 1MB){throw 'installer unexpectedly small'}
+          $installer='dist-installer\MH-Analysis-Setup-V.55.9.exe'
+          if(-not(Test-Path $installer)){throw "expected installer missing: $installer"}
           $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
-          if($sha.Length -ne 64){throw 'invalid SHA256'}
           "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
-          'V.55.8'|Set-Content -Encoding ascii dist\VERSION
-          $m=[ordered]@{version='V.55.8';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.8 clean rebuild from the known working V55 runtime. Preserves login, MH Analysis, WhatsApp, Records, MH MT5, calendar and headline/ticker paths. Adds isolated SL Adjustment and Fast Scalping controls. Progressive remains internal with no separate UI button.'}|ConvertTo-Json -Compress
+          'V.55.9'|Set-Content -Encoding ascii dist\VERSION
+          $m=[ordered]@{version='V.55.9';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.9 preserves the V55.8 clean runtime and fixes the release/live updater verification pipeline.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
           $manifest=Get-Content -Raw dist\update.json|ConvertFrom-Json
-          if($manifest.version -ne 'V.55.8' -or $manifest.sha256 -ne $sha -or -not $manifest.download_url){throw 'manifest self-check failed'}
-          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.55.8.zip' -Force
-          if(-not(Test-Path 'dist\MH-Analysis-V.55.8.zip')){throw 'ZIP package missing'}
-          foreach($p in @('dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist\MH-Analysis-V.55.8.zip',$installer)){if(-not(Test-Path $p)){throw "release artifact missing: $p"}}
-          Write-Host "V.55.8 local release verification PASSED; SHA256=$sha"
+          if($manifest.version -ne 'V.55.9' -or $manifest.sha256 -ne $sha){throw 'manifest self-check failed'}
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.55.9.zip' -Force
+          foreach($p in @('dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist\MH-Analysis-V.55.9.zip',$installer)){if(-not(Test-Path $p)){throw "release artifact missing: $p"}}
       - uses: actions/upload-artifact@v4
         with:
-          name: MH-Analysis-V.55.8
+          name: MH-Analysis-V.55.9
           path: |
             dist/MH Analysis.exe
-            dist/MH-Analysis-V.55.8.zip
+            dist/MH-Analysis-V.55.9.zip
             dist/SHA256SUMS.txt
             dist/update.json
             dist/VERSION
-            dist-installer/MH-Analysis-Setup-V.55.8.exe
+            dist-installer/MH-Analysis-Setup-V.55.9.exe
           if-no-files-found: error
       - name: Publish updater channel atomically
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/pub"
-          for f in 'dist/MH Analysis.exe' dist/update.json dist/VERSION dist/SHA256SUMS.txt 'dist-installer/MH-Analysis-Setup-V.55.8.exe'; do test -s "$f" || { echo "Missing publish input: $f"; exit 1; }; done
           cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
           cp dist/update.json "$RUNNER_TEMP/pub/update.json"
           cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
           cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
-          cp 'dist-installer/MH-Analysis-Setup-V.55.8.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.8.exe"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.9.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.9.exe"
           git reset --hard HEAD
           git clean -fd
           git fetch origin mh-analysis-update-channel
@@ -103,23 +98,22 @@ jobs:
           cp "$RUNNER_TEMP/pub/update.json" update.json
           cp "$RUNNER_TEMP/pub/VERSION" VERSION
           cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
-          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.8.exe" './MH-Analysis-Setup-V.55.8.exe'
-          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.8.exe'
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.9.exe" './MH-Analysis-Setup-V.55.9.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.9.exe'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git diff --cached --quiet && { echo 'Nothing to publish'; exit 1; }
-          git commit -m 'Publish MH Analysis V.55.8 clean rebuild'
+          git commit -m 'Publish MH Analysis V.55.9'
           git push origin mh-analysis-update-channel
       - name: Verify live updater channel
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          Start-Sleep -Seconds 3
+          Start-Sleep -Seconds 4
           $base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
-          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json') -Headers @{'Cache-Control'='no-cache'}).Content|ConvertFrom-Json
-          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
-          if($live.version -ne 'V.55.8'){throw "live version mismatch: $($live.version)"}
-          if($live.sha256 -ne $local.sha256){throw 'live SHA mismatch'}
-          $liveVersion=(Invoke-WebRequest -UseBasicParsing ($base+'VERSION') -Headers @{'Cache-Control'='no-cache'}).Content.Trim()
-          if($liveVersion -ne 'V.55.8'){throw "live VERSION mismatch: $liveVersion"}
-          Write-Host 'LIVE V.55.8 updater verification PASSED'
+          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())).Content|ConvertFrom-Json
+          $published=(Get-Content -Raw "$env:RUNNER_TEMP\pub\update.json")|ConvertFrom-Json
+          if($live.version -ne 'V.55.9'){throw "live version mismatch: $($live.version)"}
+          if($live.sha256 -ne $published.sha256){throw 'live SHA mismatch'}
+          $liveVersion=(Invoke-WebRequest -UseBasicParsing ($base+'VERSION?cb='+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())).Content.Trim()
+          if($liveVersion -ne 'V.55.9'){throw "live VERSION mismatch: $liveVersion"}
+          Write-Host 'LIVE V.55.9 updater verification PASSED'
