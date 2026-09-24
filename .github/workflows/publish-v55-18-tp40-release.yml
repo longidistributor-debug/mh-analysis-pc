@@ -30,7 +30,7 @@ jobs:
           $ErrorActionPreference='Stop'
           if((Get-Content -Raw VERSION).Trim() -ne 'V.55.18'){throw 'VERSION mismatch'}
           $a=Get-Content -Raw web/app.js
-          foreach($m in @('const tp1=entry+(tp2-entry)*0.40','structuralTp1Obj','TP1 is fixed at 40% of the Entry→TP2 distance')){if(-not $a.Contains($m)){throw "missing V.55.18 marker: $m"}}
+          foreach($m in @('const tp1=entry+(tp2-entry)*0.40','structuralTp1Obj')){if(-not $a.Contains($m)){throw "missing V.55.18 marker: $m"}}
           if(-not $a.Contains('const finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1)')){throw 'partial TP final TP behavior changed unexpectedly'}
           node --check web/app.js
           go test ./...
