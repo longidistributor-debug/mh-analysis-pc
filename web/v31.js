@@ -1,18 +1,38 @@
 (()=>{
 'use strict';
-// Block ordinary copy/cut/context-menu/zoom shortcuts while preserving login/settings typing.
+// Preserve V31 copy/zoom protection.
 const editable=e=>!!e.target.closest('input,textarea,[contenteditable="true"]');
 for(const ev of ['copy','cut','contextmenu','dragstart']) document.addEventListener(ev,e=>{if(!editable(e))e.preventDefault()},true);
 document.addEventListener('selectstart',e=>{if(!editable(e))e.preventDefault()},true);
-document.addEventListener('keydown',e=>{
-  if(e.key==='PrintScreen'){e.preventDefault();return;}
-  if(!editable(e) && e.ctrlKey && ['c','x','a','+','-','=','0'].includes(e.key.toLowerCase())){e.preventDefault();e.stopPropagation();}
-},true);
+document.addEventListener('keydown',e=>{if(e.key==='PrintScreen'){e.preventDefault();return;}if(!editable(e)&&e.ctrlKey&&['c','x','a','+','-','=','0'].includes(e.key.toLowerCase())){e.preventDefault();e.stopPropagation();}},true);
 document.addEventListener('wheel',e=>{if(e.ctrlKey)e.preventDefault()},{passive:false,capture:true});
-// Support button is explicitly external. Internal top navigation WhatsApp is untouched.
 const support=document.getElementById('openWhatsappTab');
-if(support){
-  const clone=support.cloneNode(true); support.replaceWith(clone);
-  clone.addEventListener('click',async e=>{e.preventDefault();try{await fetch('/api/open-support-external',{method:'POST'})}catch(_){}});
-}
+if(support){const clone=support.cloneNode(true);support.replaceWith(clone);clone.addEventListener('click',async e=>{e.preventDefault();try{await fetch('/api/open-support-external',{method:'POST'})}catch(_){}});}
+
+// ================= MH V553 MODE CONTROLS =================
+const rawFetchV553=window.fetch.bind(window);
+const state={slAdjustment:false,progressiveV1:true,fast:false,saved:new Map(),historyCalls:[],busy:false};
+const isOn=b=>/\bON\b/i.test((b?.textContent||''))&&!/\bOFF\b/i.test((b?.textContent||''));
+const setBtn=(b,label,on)=>{if(!b)return;b.textContent=label+': '+(on?'ON':'OFF');b.classList.toggle('off',!on);b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on));};
+const tradingButtons=()=>[...document.querySelectorAll('button')].filter(b=>/Get Signal|Auto Signal|Partial TP|Lot Size|Lot Adjustment/i.test(b.textContent||''));
+function injectStyle(){const s=document.createElement('style');s.textContent=`.mhV553Toggle{border:1px solid #4b5563;background:#111827;color:#e5e7eb;border-radius:7px;padding:7px 10px;font:700 11px/1.1 system-ui;cursor:pointer;white-space:nowrap}.mhV553Toggle.on{border-color:#16a34a;color:#86efac}.mhV553Toggle.off{opacity:.82}.mhV553Toggle:disabled{opacity:.38;cursor:not-allowed}.mhFastOn{border-color:#f59e0b!important;color:#fde68a!important;box-shadow:0 0 0 1px rgba(245,158,11,.18) inset}.mhFastStatus{font:600 10px/1.2 system-ui;color:#9ca3af;max-width:180px}.mhFastStatus.live{color:#fbbf24}`;document.head.appendChild(s)}
+function addControls(){injectStyle();const anchor=document.getElementById('autoSignalToggle')||document.querySelector('.brandArea button');if(!anchor)return;const mk=(id,label,on)=>{const b=document.createElement('button');b.id=id;b.type='button';b.className='mhV553Toggle '+(on?'on':'off');setBtn(b,label,on);return b};const sl=mk('mhSlAdjustment','SL Adjustment',false);const pv=mk('mhProgressiveV1','Progressive V1',true);const fs=mk('mhFastScalping','Fast Scalping',false);const st=document.createElement('span');st.id='mhFastStatus';st.className='mhFastStatus';st.textContent='Normal trading mode';anchor.insertAdjacentElement('afterend',sl);sl.insertAdjacentElement('afterend',pv);pv.insertAdjacentElement('afterend',fs);fs.insertAdjacentElement('afterend',st);sl.onclick=()=>{if(state.fast)return;state.slAdjustment=!state.slAdjustment;setBtn(sl,'SL Adjustment',state.slAdjustment);publishConfig()};pv.onclick=()=>{if(state.fast)return;state.progressiveV1=!state.progressiveV1;setBtn(pv,'Progressive V1',state.progressiveV1);publishConfig()};fs.onclick=()=>setFast(!state.fast);publishConfig()}
+async function publishConfig(){try{await rawFetchV553('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'MH_CONFIG',signal_id:'CFG'+Date.now(),sl_adjustment:state.slAdjustment,progressive_v1:state.progressiveV1,fast_scalping:state.fast,fast_lot:0.01,fast_tp_min:2,fast_tp_max:4,daily_loss_limit:100,daily_profit_stop:200})})}catch(_){}}
+function saveAndDisable(b){if(!b||state.saved.has(b))return;state.saved.set(b,{disabled:b.disabled,on:isOn(b)});if(isOn(b)){try{b.click()}catch(_){}}b.disabled=true}
+function restoreNormal(){for(const [b,v] of state.saved){b.disabled=v.disabled;if(v.on&&!isOn(b)){try{b.click()}catch(_){}}}state.saved.clear();for(const id of ['analyze','reevaluate','mhSlAdjustment','mhProgressiveV1']){const b=document.getElementById(id);if(b)b.disabled=false}}
+function setFast(on){if(state.fast===on)return;state.fast=on;const fs=document.getElementById('mhFastScalping'),st=document.getElementById('mhFastStatus');setBtn(fs,'Fast Scalping',on);fs.classList.toggle('mhFastOn',on);if(on){tradingButtons().forEach(saveAndDisable);['analyze','reevaluate','mhSlAdjustment','mhProgressiveV1'].forEach(id=>{const b=document.getElementById(id);if(b)b.disabled=true});const tf=document.getElementById('timeframe');if(tf){tf.value='1m';tf.dispatchEvent(new Event('change',{bubbles:true}))}if(st){st.textContent='M1 • 0.01 lot • one scalp at a time';st.classList.add('live')}publishConfig();fastCycle()}else{restoreNormal();if(st){st.textContent='Normal trading mode';st.classList.remove('live')}publishConfig()}}
+function pruneHistory(){const cut=Date.now()-61000;state.historyCalls=state.historyCalls.filter(t=>t>cut)}
+async function waitHistorySlot(){for(;;){if(!state.fast)return false;pruneHistory();if(state.historyCalls.length<3)return true;const wait=Math.max(500,state.historyCalls[0]+61250-Date.now());await new Promise(r=>setTimeout(r,wait))}}
+function parseNumber(id){const s=(document.getElementById(id)?.textContent||'').replace(/[^0-9.+-]/g,'');const n=Number(s);return Number.isFinite(n)?n:0}
+function direction(){const t=((document.getElementById('signalBadge')?.textContent||'')+' '+(document.getElementById('signalHeadline')?.textContent||'')).toUpperCase();if(/\bBUY\b/.test(t))return'BUY';if(/\bSELL\b/.test(t))return'SELL';return''}
+async function runFreshAnalysis(){if(!(await waitHistorySlot()))return false;const b=document.getElementById('analyze');if(!b)return false;const before=document.getElementById('lastUpdate')?.textContent||'';b.disabled=false;b.click();b.disabled=true;const start=Date.now();while(state.fast&&Date.now()-start<15000){await new Promise(r=>setTimeout(r,250));const now=document.getElementById('lastUpdate')?.textContent||'';if(now&&now!==before&&now!=='—')return true}return false}
+async function sendScalp(dir){const symbol=(document.querySelector('.pair.active')?.dataset?.symbol||'XAUUSD').toUpperCase();const entry=parseNumber('lvlEntry')||parseNumber('btcMarketCap');const r=await rawFetchV553('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:'SCALP'+Date.now(),symbol,type:'FAST_'+dir,entry,sl:0,tp:0,lot:0.01,fast_tp_min:2,fast_tp_max:4,daily_loss_limit:100,daily_profit_stop:200})});return r.ok}
+async function waitScalpFinish(){while(state.fast){await new Promise(r=>setTimeout(r,650));try{const r=await rawFetchV553('/api/mt5/ea/status',{cache:'no-store'});const j=await r.json();const s=String(j.status||'').toUpperCase();if(s.includes('FAST_DAILY_LOSS')||s.includes('FAST_DAILY_PROFIT')){setFast(false);return false}if(s.includes('FAST_SCALP_CLOSED')||s.includes('FAST_TP_HIT'))return true;if(s.includes('FAST_REJECTED')||s.includes('FAST_ERROR'))return true}catch(_){}}return false}
+async function fastCycle(){if(state.busy)return;state.busy=true;try{while(state.fast){const ok=await runFreshAnalysis();if(!state.fast)break;if(!ok){await new Promise(r=>setTimeout(r,1000));continue}const dir=direction();if(!dir){await new Promise(r=>setTimeout(r,700));continue}const sent=await sendScalp(dir).catch(()=>false);if(!sent){await new Promise(r=>setTimeout(r,1000));continue}await waitScalpFinish()}}finally{state.busy=false}}
+
+// Track the real API quota. Fast mode never forces three trades; it fetches again after a scalp closes,
+// immediately when quota is available and otherwise waits only for the API slot.
+window.fetch=async function(input,init){const u=typeof input==='string'?input:input?.url||'';if(String(u).includes('/api/history')){pruneHistory();state.historyCalls.push(Date.now())}if(state.fast&&String(u).includes('/api/mt5/ea/send')){try{const body=JSON.parse(init?.body||'{}');if(!String(body.type||'').startsWith('FAST_')&&body.type!=='MH_CONFIG')return new Response(JSON.stringify({ok:true,suppressed:true,mode:'fast_scalping'}),{status:200,headers:{'Content-Type':'application/json'}})}catch(_){}}if(state.slAdjustment&&!state.fast&&String(u).includes('/api/mt5/ea/send')){try{const body=JSON.parse(init?.body||'{}'),lot=Number(body.lot||0),entry=Number(body.entry||0),sl=Number(body.sl||0),type=String(body.type||'').toUpperCase();let add=lot<=.02?6:lot<=.03?7:lot<=.04?8:lot<=.05?9:12;if(entry>0&&sl>0&&lot>=.02){if(type.startsWith('BUY'))body.sl=sl-add;else if(type.startsWith('SELL'))body.sl=sl+add;init={...(init||{}),body:JSON.stringify(body)}}}catch(_){}}return rawFetchV553(input,init)};
+
+addControls();
 })();
