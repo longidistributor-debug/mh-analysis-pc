@@ -185,6 +185,13 @@ func eaSignalSendHandler(w http.ResponseWriter, r *http.Request) {
 	switch q.Type {case "BUY","SELL","BUY_LIMIT","SELL_LIMIT","BUY_STOP","SELL_STOP":default:w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"unsupported pending signal type"});return}
 	if q.Entry<=0||q.SL<=0||q.TP<=0 { w.WriteHeader(http.StatusBadRequest);_=json.NewEncoder(w).Encode(map[string]any{"error":"entry/sl/tp must be positive"});return }
 	if q.Lot<0 {q.Lot=0}; if q.Expiry<0 {q.Expiry=0}
+	// V.55.8: SL Adjustment is isolated here, after validation and before the normal mailbox write.
+	// With the mode OFF, this path is byte-for-byte equivalent to the clean runtime behavior.
+	if v558Snapshot().SLAdjustment && q.Lot >= 0.02 {
+		add := 12.0
+		if q.Lot <= 0.02 { add = 6 } else if q.Lot <= 0.03 { add = 7 } else if q.Lot <= 0.04 { add = 8 } else if q.Lot <= 0.05 { add = 9 }
+		if strings.HasPrefix(q.Type,"BUY") { q.SL -= add } else if strings.HasPrefix(q.Type,"SELL") { q.SL += add }
+	}
 
 	// Reversal safety remains app-side using the live state endpoint. Do not add a
 	// second execution lock here; approved signals must reach the decoder reliably.
