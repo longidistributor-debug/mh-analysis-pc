@@ -1,4 +1,4 @@
-// MH V.02 manual-login gate — device binding/data remain persistent, login never bypasses UI.
+// MH V35 manual-login gate — login required on every app process; no inactivity logout.
 (() => {
   const rawFetch = window.fetch.bind(window);
   let overlay, message, form, userInput, passInput, button, meta;
@@ -19,7 +19,8 @@
   async function login(e){e?.preventDefault();const username=userInput.value.trim(),password=passInput.value;if(!username||!password){message.textContent="Enter username and password.";focusField(!username?"username":"password");return}button.disabled=true;button.textContent="VERIFYING…";message.textContent="Checking account, expiry and authorized device…";try{const r=await rawFetch("/api/license/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,password}),cache:"no-store"});const j=await r.json().catch(()=>({}));if(!r.ok||!j.authorized){show(j.code||j.error,j.message);return}manualLoginThisProcess=true;passInput.value="";hide(j)}catch{show("internet_required")}finally{button.disabled=false;button.textContent="LOGIN"}}
   window.fetch=async function(input,init){const r=await rawFetch(input,init);try{const u=typeof input==="string"?input:input?.url||"";if((r.status===401||r.status===403)&&String(u).includes("/api/")&&!String(u).includes("/api/license/")){manualLoginThisProcess=false;const j=await r.clone().json().catch(()=>({}));show(j.code||j.error||"authorization_required",j.message)}}catch{}return r};
   window.MHLicense={logout:async()=>{manualLoginThisProcess=false;await rawFetch("/api/license/logout",{method:"POST"}).catch(()=>{});show("login_required")},status};
-  // MH_V32_EXTERNAL_SUPPORT: always leave the app for support; never navigate the internal WebView.
   document.addEventListener("click",async e=>{const a=e.target.closest?.(".mhLicenseWhatsapp");if(!a)return;e.preventDefault();e.stopImmediatePropagation();try{await rawFetch("/api/open-support-external",{method:"POST"})}catch{}},true);
-  build();show("login_required");setInterval(()=>{if(manualLoginThisProcess)status()},4*60*1000);
+  build();show("login_required");
+  // V35: intentionally no inactivity/status timer. Authentication remains valid for this
+  // running process and a fresh app process always starts locked and requires login.
 })();
