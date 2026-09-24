@@ -57,6 +57,8 @@ jobs:
           cp dist/VERSION "$RUNNER_TEMP/v554pub/VERSION"
           cp dist/SHA256SUMS.txt "$RUNNER_TEMP/v554pub/SHA256SUMS.txt"
           cp 'dist-installer/MH-Analysis-Setup-V.55.4.exe' "$RUNNER_TEMP/v554pub/MH-Analysis-Setup-V.55.4.exe"
+          git reset --hard HEAD
+          git clean -fd
           git fetch origin mh-analysis-update-channel
           git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
           cp "$RUNNER_TEMP/v554pub/MH Analysis.exe" './MH Analysis.exe'
