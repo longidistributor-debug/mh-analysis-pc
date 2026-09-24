@@ -24,7 +24,7 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          gofmt -w *.go
+          Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { gofmt -w $_.FullName }
           node --check web/app.js
           node --check web/runtime-fixes.js
           node --check web/auth.js
@@ -35,14 +35,14 @@ jobs:
           foreach($m in @('openKey','economicCalendarLocal','tickerGold','tickerBTC','/auth.js','/v558-fast.js')){
             if(-not $idx.Contains($m)){throw "baseline UI marker missing: $m"}
           }
-          $host=Get-Content -Raw webview2_host.go
+          $hostSrc=Get-Content -Raw webview2_host.go
           foreach($m in @('MH Analysis','WhatsApp','Records','MH MT5','SL Adjustment: OFF','Fast Scalping: OFF')){
-            if(-not $host.Contains($m)){throw "native control missing: $m"}
+            if(-not $hostSrc.Contains($m)){throw "native control missing: $m"}
           }
           $v31=Get-Content -Raw web\v31.js
           if($v31.Contains('window.fetch=')){throw 'global fetch override must not exist'}
           if($v31.Contains('mhProgressiveV1')){throw 'Progressive UI must not exist'}
-          if($idx.Contains('Normal Trading Mode') -or $host.Contains('Normal Trading Mode')){throw 'Normal Trading Mode text must not exist'}
+          if($idx.Contains('Normal Trading Mode') -or $hostSrc.Contains('Normal Trading Mode')){throw 'Normal Trading Mode text must not exist'}
           $auth=Get-Content -Raw license_auth.go
           if(-not $auth.Contains('username') -or -not $auth.Contains('password')){throw 'login credential flow missing'}
           if(-not (Get-Content -Raw calendar3d.go).Contains('economic')){throw 'calendar backend missing'}
