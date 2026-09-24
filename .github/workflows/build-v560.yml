@@ -1,0 +1,69 @@
+name: Build V560 Release Candidate
+on:
+  push:
+    branches: [v56.0-release]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.0-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Normalize V56.0 identities
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=$s.Replace('const licAppVersion = "V.55.8"','const licAppVersion = "V.56.0"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=$s.Replace('const mhPublicVersionV001 = "V.55.9"','const mhPublicVersionV001 = "V.56.0"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=$s.Replace('Version: V.55.8','Version: V.56.0');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=$s.Replace('id="mhUpdateVersionV001">V.55.8<','id="mhUpdateVersionV001">V.56.0<');$s=$s.Replace('<button data-chart-tf="20m">20m</button>','');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+      - name: Validate source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { gofmt -w $_.FullName }
+          foreach($js in @('web/app.js','web/runtime-fixes.js','web/auth.js','web/v31.js','web/v558-fast.js','web/v560-mode-guard.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.0'){throw 'VERSION mismatch'}
+          $idx=Get-Content -Raw web\index.html
+          foreach($m in @('openKey','economicCalendarLocal','tickerGold','tickerBTC','/auth.js','/v558-fast.js')){if(-not $idx.Contains($m)){throw "baseline UI marker missing: $m"}}
+          if($idx.Contains('data-chart-tf="20m"')){throw '20m option still present'}
+          $hostSrc=Get-Content -Raw webview2_host.go
+          foreach($m in @('MH Analysis','WhatsApp','Records','MH MT5','SL Adjustment: OFF','Fast Scalping: OFF','Version: V.56.0')){if(-not $hostSrc.Contains($m)){throw "native marker missing: $m"}}
+          $auth=Get-Content -Raw license_auth.go
+          if(-not $auth.Contains('username') -or -not $auth.Contains('password')){throw 'login flow missing'}
+          if(-not $auth.Contains('const licAppVersion = "V.56.0"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.0"')){throw 'updater version mismatch'}
+          if(-not (Get-Content -Raw web\v31.js).Contains('/v560-mode-guard.js')){throw 'mode guard loader missing'}
+          if((Get-Content -Raw web\v558-fast.js).Contains('900000')){throw 'legacy timing remains'}
+          if(-not (Get-Content -Raw calendar3d.go).Contains('economic')){throw 'calendar backend missing'}
+      - name: Test and build
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.0' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.0' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer compilation failed'}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.0-RC
+          path: |
+            dist/MH Analysis.exe
+            dist-installer/MH-Analysis-Setup-V.56.0.exe
+          if-no-files-found: error
