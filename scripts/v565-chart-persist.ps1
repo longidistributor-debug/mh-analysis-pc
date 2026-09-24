@@ -15,7 +15,7 @@ $replacement=@'
   $$('.nativeTfButtons button').forEach(b=>b.classList.toggle('active',b.dataset.chartTf===timeframe));
 '@
 $s=$s.Remove($load,'  loadChart();'.Length)
-$s=$s.Insert($load,$replacement.TrimEnd("`r","`n"))
+$s=$s.Insert($load,$replacement)
 
 $newStart=$s.IndexOf('async function executeNewAnalysis(fromAuto=false){')
 if($newStart -lt 0){throw 'executeNewAnalysis not found'}
@@ -30,7 +30,7 @@ if($reStart -lt 0){throw 'executeReevaluate not found'}
 $reBusy=$s.IndexOf('  busy=true;setBusy',$reStart)
 if($reBusy -lt 0){throw 'RE-EVALUATE active-fetch block not found'}
 $prefix=$s.Substring([Math]::Max($reStart,$reBusy-20),$reBusy-[Math]::Max($reStart,$reBusy-20))
-if($prefix -notmatch 'loadChart\(\);\s*$'){$s=$s.Insert($reBusy,"  loadChart();`n")}
+if($prefix -notmatch 'loadChart\(\);\s*$'){$s=$s.Insert($reBusy,('  loadChart();' + "`n"))}
 
 [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
 
@@ -41,4 +41,5 @@ if($ctx2.Contains('loadChart();')){throw 'Selection still clears chart'}
 if($ctx2.Contains('fetchCandles') -or $ctx2.Contains('loadContextChart') -or $ctx2.Contains('refreshMarketCap')){throw 'Selection must remain API-silent'}
 if(-not $check.Contains('if(busy)return null;loadChart();autoActionStartedAt=Date.now()')){throw 'NEW ANALYZE chart replacement marker missing'}
 $re2=$check.Substring($check.IndexOf('async function executeReevaluate(fromAuto=false){'))
-if(-not $re2.Contains("loadChart();`n  busy=true;setBusy")){throw 'RE-EVALUATE chart replacement marker missing'}
+$reMarker='loadChart();' + "`n" + '  busy=true;setBusy'
+if(-not $re2.Contains($reMarker)){throw 'RE-EVALUATE chart replacement marker missing'}
