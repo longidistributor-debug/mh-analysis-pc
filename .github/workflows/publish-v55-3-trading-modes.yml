@@ -1,0 +1,143 @@
+name: Publish MH Analysis V.55.3 Trading Modes
+
+on:
+  push:
+    branches: [records-mt5-local-build]
+    paths: ['vercel-auth/trigger-v553']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: mh-analysis-v553-release
+  cancel-in-progress: true
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.23.2', cache: false}
+
+      - name: Verify V.55.3 identity and preserved source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw VERSION).Trim() -ne 'V.55.3'){throw 'VERSION mismatch'}
+          if((Get-Content -Raw updater.go) -notmatch 'const mhPublicVersionV001 = "V\.55\.3"'){throw 'Updater identity mismatch'}
+          if((Get-Content -Raw license_auth.go) -notmatch 'const licAppVersion = "V\.55\.3"'){throw 'License identity mismatch'}
+          $auth=Get-Content -Raw web\auth.js
+          if($auth -match 'setInterval\(.*status'){throw 'Inactivity logout timer still present'}
+          $v31=Get-Content -Raw web\v31.js
+          foreach($m in @('mhSlAdjustment','mhProgressiveV1','mhFastScalping','fast_lot:0.01','daily_loss_limit:100','daily_profit_stop:200')){if(-not $v31.Contains($m)){throw "missing V.55.3 control marker: $m"}}
+          $bridge=Get-Content -Raw ea_signal_bridge.go
+          foreach($m in @('FAST_BUY','FAST_SELL','MH_CONFIG','config.txt','fast_scalp.txt','Timeframe string')){if(-not $bridge.Contains($m)){throw "missing bridge/preserved marker: $m"}}
+          foreach($m in @('/api/mt5/ea/active','/api/mt5/ea/manage','/api/mt5/ea/manage-status')){if(-not $bridge.Contains($m)){throw "existing MT5 bridge regression: $m"}}
+          node --check web/app.js
+          node --check web/auth.js
+          node --check web/v31.js
+          node --check web/records.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Build V.55.3 Windows EXE
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V.55.3 EXE build failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$exeSha  MH Analysis.exe"|Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\VERSION'),'V.55.3'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Install Inno Setup
+        shell: powershell
+        run: |
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress}
+          if(-not(Test-Path $iscc)){throw 'ISCC unavailable'}
+
+      - name: Build and verify V.55.3 installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist-installer|Out-Null
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.55.3' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.55.3' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist-installer\MH-Analysis-Setup-V.55.3.exe')){throw 'installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV553Verify'
+          $p=Start-Process (Join-Path $PWD 'dist-installer\MH-Analysis-Setup-V.55.3.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait
+          if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'installer verification failed'}
+          $setupSha=(Get-FileHash 'dist-installer\MH-Analysis-Setup-V.55.3.exe' -Algorithm SHA256).Hash.ToLower()
+          Add-Content -Encoding ascii 'dist\SHA256SUMS.txt' "$setupSha  MH-Analysis-Setup-V.55.3.exe"
+
+      - name: Build updater manifest and package
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $manifest=[ordered]@{
+            version='V.55.3'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes='V.55.3 preserves the V.55.x workflow and adds no inactivity logout, fresh-start login lock, SL Adjustment, Progressive V1, and isolated M1 Fast Scalping controls/protocol. Updated EA is required for new EA-side execution.'
+          }|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.3.exe' -DestinationPath 'dist\MH-Analysis-V.55.3.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.55.3
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.55.3.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.55.3.exe
+          if-no-files-found: error
+
+      - name: Publish V.55.3 GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v55.3 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v55.3 'dist-installer/MH-Analysis-Setup-V.55.3.exe' 'dist/MH Analysis.exe' 'dist/MH-Analysis-V.55.3.zip' 'dist/SHA256SUMS.txt' 'dist/update.json' --target records-mt5-local-build --title 'MH Analysis V.55.3' --notes 'V.55.3 keeps the existing V.55.x features and adds the requested login/session behavior and isolated trading-mode controls.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish mandatory updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.3.exe' "$RUNNER_TEMP/MH-Analysis-Setup-V.55.3.exe"
+          git checkout --orphan __v553
+          git rm -rf . || true
+          find . -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp "$RUNNER_TEMP/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/update.json" update.json
+          cp "$RUNNER_TEMP/VERSION" VERSION
+          cp "$RUNNER_TEMP/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/MH-Analysis-Setup-V.55.3.exe" './MH-Analysis-Setup-V.55.3.exe'
+          git add .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'MH Analysis V.55.3 trading modes release'
+          git push --force origin HEAD:mh-analysis-update-channel
