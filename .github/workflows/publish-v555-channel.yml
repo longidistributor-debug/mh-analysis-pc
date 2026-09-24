@@ -24,8 +24,9 @@ jobs:
               except UnicodeDecodeError:pass
             raise RuntimeError(p)
           def wr(p,s):Path(p).write_text(s,encoding='utf-8')
+          assert 'const mhPublicVersionV001 = "V.55.5"' in rd('updater.go')
           wr('VERSION','V.55.5\n')
-          for f,a,b in [('updater.go','const mhPublicVersionV001 = "V.55.3"','const mhPublicVersionV001 = "V.55.5"'),('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.5"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.5</div>')]:
+          for f,a,b in [('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.5"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.5</div>')]:
             s=rd(f);assert a in s;wr(f,s.replace(a,b,1))
       - name: Test and build
         shell: powershell
