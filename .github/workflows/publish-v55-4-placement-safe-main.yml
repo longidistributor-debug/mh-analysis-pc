@@ -17,12 +17,19 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          assert 'const licAppVersion = "V.55.3"' in Path('license_auth.go').read_text()
-          p=Path('web/v553-placement.js').read_text()
+          def rd(p):
+            b=Path(p).read_bytes()
+            for e in ('utf-8-sig','cp1252','latin-1'):
+              try: return b.decode(e)
+              except UnicodeDecodeError: pass
+            raise RuntimeError('cannot decode '+p)
+          def wr(p,s): Path(p).write_text(s,encoding='utf-8')
+          assert 'const licAppVersion = "V.55.3"' in rd('license_auth.go')
+          p=rd('web/v553-placement.js')
           for x in ['mhSlAdjustment','mhProgressiveV1','mhFastScalping']: assert x in p
-          Path('VERSION').write_text('V.55.4\n')
+          wr('VERSION','V.55.4\n')
           for f,a,b in [('updater.go','const mhPublicVersionV001 = "V.55.3"','const mhPublicVersionV001 = "V.55.4"'),('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.4"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.4</div>')]:
-            q=Path(f);s=q.read_text();assert a in s;q.write_text(s.replace(a,b,1))
+            s=rd(f);assert a in s;wr(f,s.replace(a,b,1))
       - name: Test build installer package
         shell: powershell
         run: |
