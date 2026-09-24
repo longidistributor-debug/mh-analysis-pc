@@ -1,6 +1,6 @@
 (()=>{
 'use strict';
-// V56.2/V56.3: text-rendering cleanup only. Bismillah area is intentionally untouched.
+// V56.2+ text-rendering cleanup. Bismillah area is intentionally untouched.
 const root=document.querySelector('.appShell');
 if(!root)return;
 
@@ -18,6 +18,18 @@ function cleanText(value){
 }
 
 function set(selector,text){const el=document.querySelector(selector);if(el&&el.textContent!==text)el.textContent=text;}
+function putIcon(el,text){if(el&&el.textContent!==text)el.textContent=text;}
+function restoreIcons(){
+  putIcon(document.querySelector('.pair[data-symbol="XAUUSD"] .pairIcon'),'\u25c6');
+  putIcon(document.querySelector('.pair[data-symbol="BTCUSDT"] .pairIcon'),'\u20bf');
+  const iconMap={GOLD:'\u25c6',BTCUSD:'\u20bf',ETHUSD:'\u25c6',EURUSD:'\u20ac',USDJPY:'\u00a5',GBPUSD:'\u00a3',GBPJPY:'\u00a3'};
+  document.querySelectorAll('.tickerCell').forEach(cell=>{
+    const code=String(cell.querySelector('b')?.textContent||'').trim().toUpperCase();
+    const icon=cell.querySelector('.assetIcon');
+    if(iconMap[code])putIcon(icon,iconMap[code]);
+  });
+  putIcon(document.querySelector('.capTitle .globe'),'\u25ce');
+}
 function fixKnownLabels(){
   set('#analyze','NEW ANALYZE');
   set('#reevaluate','RE-EVALUATE');
@@ -28,7 +40,7 @@ function fixKnownLabels(){
   set('.liveDot','Interactive');
   const footer=document.querySelector('.mhMainCopyright');
   if(footer)footer.innerHTML='MH ANALYSIS By: Muhammad Hammad Shaukat - &copy; All Rights Reserved 2026';
-  document.querySelectorAll('.pairIcon,.assetIcon,.capTitle .globe').forEach(el=>{if(el.textContent!=='')el.textContent='';});
+  restoreIcons();
 }
 function walk(node){
   const w=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);
