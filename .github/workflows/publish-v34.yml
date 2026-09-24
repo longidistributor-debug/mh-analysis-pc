@@ -1,4 +1,4 @@
-name: Publish MH Analysis V34 Canonical
+name: Publish MH Analysis V35 Canonical
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: mh-analysis-v34-release
+  group: mh-analysis-v35-release
   cancel-in-progress: true
 jobs:
   build-publish:
@@ -18,47 +18,62 @@ jobs:
         with: {fetch-depth: 0, ref: v34-canonical-single-source}
       - uses: actions/setup-go@v5
         with: {go-version: '1.23.2', cache: false}
-      - name: Verify canonical source only
+      - name: Apply V35 release identity
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          # Canonical release: historical patch scripts are intentionally NOT executed.
-          if((Get-Content -Raw updater.go) -notmatch 'const mhPublicVersionV001 = "V.34"'){throw 'Updater parity failed'}
-          if((Get-Content -Raw license_auth.go) -notmatch 'const licAppVersion = "V.34"'){throw 'License parity failed'}
+          $u=Get-Content -Raw updater.go; $u=$u -replace 'const mhPublicVersionV001 = "V\.34"','const mhPublicVersionV001 = "V.35"'; [IO.File]::WriteAllText((Join-Path $PWD 'updater.go'),$u,(New-Object Text.UTF8Encoding($false)))
+          $l=Get-Content -Raw license_auth.go; $l=$l -replace 'const licAppVersion = "V\.34"','const licAppVersion = "V.35"'; [IO.File]::WriteAllText((Join-Path $PWD 'license_auth.go'),$l,(New-Object Text.UTF8Encoding($false)))
+          $h=Get-Content -Raw web\index.html; $h=$h -replace 'V\.34 \(Late - CH Shaukat Ali\)','V.35 (Late - CH Shaukat Ali)'; [IO.File]::WriteAllText((Join-Path $PWD 'web\index.html'),$h,(New-Object Text.UTF8Encoding($false)))
+          Set-Content VERSION 'V.35' -Encoding ascii
+      - name: Verify V35 source and regressions
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          if((Get-Content -Raw updater.go) -notmatch 'const mhPublicVersionV001 = "V.35"'){throw 'Updater parity failed'}
+          if((Get-Content -Raw license_auth.go) -notmatch 'const licAppVersion = "V.35"'){throw 'License parity failed'}
+          if((Get-Content -Raw session_policy_v35.go) -notmatch '365 \* 24 \* time.Hour'){throw 'No-idle-logout policy missing'}
+          if((Get-Content -Raw web\auth.js) -match 'setInterval\(.*status'){throw 'Inactivity authorization timer regression'}
+          if((Get-Content -Raw web\v31.js) -notmatch 'mhFastScalping'){throw 'Fast Scalping control missing'}
+          if((Get-Content -Raw web\v31.js) -notmatch 'mhSlAdjustment'){throw 'SL Adjustment control missing'}
+          if((Get-Content -Raw web\v31.js) -notmatch 'mhProgressiveV1'){throw 'Progressive V1 control missing'}
+          if((Get-Content -Raw ea_signal_bridge.go) -notmatch 'FAST_BUY'){throw 'Fast scalp EA protocol missing'}
           if((Get-Content -Raw chrome_host.go) -match 'Get-Process -Id'){throw 'PowerShell MT5 polling regression'}
           if((Get-Content -Raw chrome_host.go) -notmatch 'V34_SINGLE_FLIGHT_MT5'){throw 'MT5 single-flight missing'}
           if((Get-Content -Raw webview2_host.go) -notmatch 'V34_ONE_CLICK_VIEW'){throw 'one-click navigation missing'}
-          if((Get-Content -Raw web/app.js) -notmatch 'V34_CANONICAL_SIGNAL_FANOUT'){throw 'signal fanout missing'}
+          if((Get-Content -Raw web\app.js) -notmatch 'V34_CANONICAL_SIGNAL_FANOUT'){throw 'signal fanout missing'}
           if((Get-Content -Raw main.go) -notmatch 'V34_WA_RETRY'){throw 'WhatsApp retry missing'}
           node --check web/app.js
           node --check web/v03.js
+          node --check web/v31.js
           node --check web/records.js
           node --check web/auth.js
+          gofmt -w ea_signal_bridge.go session_policy_v35.go
           go test ./...
-          if($LASTEXITCODE -ne 0){throw 'V34 tests failed'}
-      - name: Build V34 Windows EXE
+          if($LASTEXITCODE -ne 0){throw 'V35 tests failed'}
+      - name: Build V35 Windows EXE
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force dist|Out-Null
           $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
-          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V34 EXE build failed'}
-      - name: Build and verify V34 installer
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'V35 EXE build failed'}
+      - name: Build and verify V35 installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=34.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V34'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V34.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
-          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V34.iss'
-          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V34.exe')){throw 'V34 installer build failed'}
-          $target=Join-Path $env:RUNNER_TEMP 'MHV34Verify'; $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V34.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait; if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V34 installer verification failed'}
-          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V34.exe' -Algorithm SHA256).Hash.ToLower(); "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V34.exe"|Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
-      - name: Publish V34 release
+          $iss=Get-Content -Raw 'installer\MH-Analysis-V27.iss'; $iss=$iss -replace 'AppVersion=[^\r\n]+','AppVersion=35.0.0'; $iss=$iss -replace 'OutputBaseFilename=[^\r\n]+','OutputBaseFilename=MH-Analysis-Setup-V35'; [IO.File]::WriteAllText((Join-Path $PWD 'installer\MH-Analysis-V35.iss'),$iss,(New-Object Text.UTF8Encoding($false)))
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'; if(-not(Test-Path $iscc)){choco install innosetup --no-progress -y}; & $iscc 'installer\MH-Analysis-V35.iss'
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist\MH-Analysis-Setup-V35.exe')){throw 'V35 installer build failed'}
+          $target=Join-Path $env:RUNNER_TEMP 'MHV35Verify'; $p=Start-Process (Join-Path $PWD 'dist\MH-Analysis-Setup-V35.exe') -ArgumentList @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',('/DIR='+$target)) -PassThru -Wait; if($p.ExitCode -ne 0 -or -not(Test-Path (Join-Path $target 'MH Analysis.exe'))){throw 'V35 installer verification failed'}
+          $exeSha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower(); $setupSha=(Get-FileHash 'dist\MH-Analysis-Setup-V35.exe' -Algorithm SHA256).Hash.ToLower(); "${exeSha}  MH Analysis.exe`n${setupSha}  MH-Analysis-Setup-V35.exe"|Set-Content -Encoding ascii 'dist\SHA256SUMS.txt'
+      - name: Publish V35 release
         shell: powershell
         env: {GH_TOKEN: '${{ github.token }}'}
         run: |
-          $ErrorActionPreference='Continue'; gh release delete v34 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v34 'dist/MH-Analysis-Setup-V34.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target v34-canonical-single-source --title 'MH Analysis V.34' --notes 'Canonical single-source release. No historical patch chain at build time. Retains prior working features while fixing one-click views, PowerShell MT5 launch loops, in-host MT5 attachment guards, and deterministic WhatsApp/Record/EA signal fan-out.'; if($LASTEXITCODE -ne 0){throw 'V34 release publish failed'}
-      - name: Publish V34 mandatory updater
+          $ErrorActionPreference='Continue'; gh release delete v35 --yes --cleanup-tag 2>$null; $global:LASTEXITCODE=0; $ErrorActionPreference='Stop'; gh release create v35 'dist/MH-Analysis-Setup-V35.exe' 'dist/MH Analysis.exe' 'dist/SHA256SUMS.txt' --target v34-canonical-single-source --title 'MH Analysis V.35' --notes 'V35 preserves V34 canonical working behavior and adds no-idle-logout session policy, login lock on every fresh app process, optional lot-based SL Adjustment, Progressive V1 control/protocol, and isolated M1 Fast Scalping mode (0.01 lot, one trade at a time, $2-$4 target protocol, -$100 daily loss limit, $200 daily profit auto-stop). Updated EA required for FAST_* execution.'; if($LASTEXITCODE -ne 0){throw 'V35 release publish failed'}
+      - name: Publish V35 installer branch and mandatory updater
         shell: powershell
         run: |
-          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $release=Join-Path $env:RUNNER_TEMP 'v34-release'; New-Item -ItemType Directory -Force $release|Out-Null; Copy-Item 'dist\MH Analysis.exe' (Join-Path $release 'MH Analysis.exe'); Copy-Item 'dist\MH-Analysis-Setup-V34.exe' (Join-Path $release 'MH-Analysis-Setup-V34.exe'); Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $release 'SHA256SUMS.txt'); git checkout --orphan __v34_release; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $release '*') .; Set-Content VERSION 'V.34' -Encoding ascii; git add .; git commit -m 'Publish verified MH Analysis V.34'; git push --force origin HEAD:v34-release
-          $exeSource=Join-Path $release 'MH Analysis.exe'; $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower(); $upd=Join-Path $env:RUNNER_TEMP 'v34-update'; New-Item -ItemType Directory -Force $upd|Out-Null; Copy-Item $exeSource (Join-Path $upd 'MH Analysis.exe'); $manifest=[ordered]@{version='V.34';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.34 - canonical single-source build; one-click views; MT5 loop prevention; WhatsApp and EA signal delivery.'}|ConvertTo-Json -Compress; [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.34'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); git checkout --orphan __v34_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $upd '*') .; git add .; git commit -m 'Publish MH Analysis V.34 mandatory update'; git push --force origin HEAD:mh-analysis-update-channel
+          $ErrorActionPreference='Stop'; git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'; $release=Join-Path $env:RUNNER_TEMP 'v35-release'; New-Item -ItemType Directory -Force $release|Out-Null; Copy-Item 'dist\MH Analysis.exe' (Join-Path $release 'MH Analysis.exe'); Copy-Item 'dist\MH-Analysis-Setup-V35.exe' (Join-Path $release 'MH-Analysis-Setup-V35.exe'); Copy-Item 'dist\SHA256SUMS.txt' (Join-Path $release 'SHA256SUMS.txt'); git checkout --orphan __v35_release; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $release '*') .; Set-Content VERSION 'V.35' -Encoding ascii; git add .; git commit -m 'Publish verified MH Analysis V.35'; git push --force origin HEAD:v35-release
+          $exeSource=Join-Path $release 'MH Analysis.exe'; $sha=(Get-FileHash $exeSource -Algorithm SHA256).Hash.ToLower(); $upd=Join-Path $env:RUNNER_TEMP 'v35-update'; New-Item -ItemType Directory -Force $upd|Out-Null; Copy-Item $exeSource (Join-Path $upd 'MH Analysis.exe'); $manifest=[ordered]@{version='V.35';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='MANDATORY V.35 - preserves V34 working behavior; no inactivity logout; fresh-start login lock; SL Adjustment; Progressive V1; isolated Fast Scalping controls/protocol.'}|ConvertTo-Json -Compress; [IO.File]::WriteAllText((Join-Path $upd 'update.json'),$manifest,(New-Object Text.UTF8Encoding($false))); [IO.File]::WriteAllText((Join-Path $upd 'VERSION'),'V.35'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false))); git checkout --orphan __v35_update; git rm -rf . 2>$null; Get-ChildItem -Force|?{$_.Name -ne '.git'}|Remove-Item -Recurse -Force; Copy-Item (Join-Path $upd '*') .; git add .; git commit -m 'Publish MH Analysis V.35 mandatory update'; git push --force origin HEAD:mh-analysis-update-channel
