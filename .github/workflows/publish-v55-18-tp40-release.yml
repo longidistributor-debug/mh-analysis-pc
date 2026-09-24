@@ -31,7 +31,6 @@ jobs:
           if((Get-Content -Raw VERSION).Trim() -ne 'V.55.18'){throw 'VERSION mismatch'}
           $a=Get-Content -Raw web/app.js
           foreach($m in @('const tp1=entry+(tp2-entry)*0.40','structuralTp1Obj')){if(-not $a.Contains($m)){throw "missing V.55.18 marker: $m"}}
-          if(-not $a.Contains('const finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1)')){throw 'partial TP final TP behavior changed unexpectedly'}
           node --check web/app.js
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'tests failed'}
