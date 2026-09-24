@@ -43,7 +43,8 @@ jobs:
           if((Get-Content VERSION -Raw).Trim() -ne 'V.56.1'){throw 'VERSION mismatch'}
           if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.1"')){throw 'updater version mismatch'}
           $v31=Get-Content -Raw web\v31.js
-          if(-not $v31.Contains('بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ')){throw 'Bismillah fix missing'}
+          if(-not $v31.Contains("const bismillah=document.querySelector('.bismillah')")){throw 'Bismillah fix missing'}
+          if(-not $v31.Contains("bismillah.setAttribute('dir','rtl')")){throw 'Bismillah direction fix missing'}
           $upd=Get-Content -Raw web\update-v001.js
           if(-not $upd.Contains('setLatest(j.latest)')){throw 'dynamic latest update version missing'}
           if(-not $v31.Contains('/v560-mode-guard.js')){throw 'mode guard loader missing'}
