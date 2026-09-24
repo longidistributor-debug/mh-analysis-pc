@@ -9,6 +9,7 @@ import (
     "strings"
     "sync"
     "time"
+    "unsafe"
 )
 
 type v558ModeState struct {
