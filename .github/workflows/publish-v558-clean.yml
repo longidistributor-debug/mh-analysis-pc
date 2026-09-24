@@ -17,6 +17,15 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
+      - name: Normalize V55.9 license identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='license_auth.go'
+          $s=Get-Content -Raw $p
+          $s=$s.Replace('const licAppVersion = "V.55.8"','const licAppVersion = "V.55.9"')
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          if(-not (Get-Content -Raw $p).Contains('const licAppVersion = "V.55.9"')){throw 'failed to normalize license version'}
       - name: Validate source and preserved functionality
         shell: powershell
         run: |
