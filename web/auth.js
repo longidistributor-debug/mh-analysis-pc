@@ -1,4 +1,4 @@
-// MH V.02 manual-login gate — device binding/data remain persistent, login never bypasses UI.
+// MH V.55.3 manual-login gate — fresh app process requires login; inactivity never logs out.
 (() => {
   const rawFetch = window.fetch.bind(window);
   let overlay, message, form, userInput, passInput, button, meta;
@@ -21,5 +21,5 @@
   window.MHLicense={logout:async()=>{manualLoginThisProcess=false;await rawFetch("/api/license/logout",{method:"POST"}).catch(()=>{});show("login_required")},status};
   // MH_V32_EXTERNAL_SUPPORT: always leave the app for support; never navigate the internal WebView.
   document.addEventListener("click",async e=>{const a=e.target.closest?.(".mhLicenseWhatsapp");if(!a)return;e.preventDefault();e.stopImmediatePropagation();try{await rawFetch("/api/open-support-external",{method:"POST"})}catch{}},true);
-  build();show("login_required");setInterval(()=>{if(manualLoginThisProcess)status()},4*60*1000);
+  build();show("login_required");\n  // V.55.3: no inactivity polling/logout timer. Fresh process still starts locked.\n
 })();
