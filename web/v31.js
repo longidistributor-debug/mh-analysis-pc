@@ -32,4 +32,10 @@ const textFix=document.createElement('script');
 textFix.src='/v562-text-fix.js';
 textFix.defer=true;
 document.head.appendChild(textFix);
+// V56.4 market UI correction: selected pair controls its own top summary and
+// restores moving-ticker/pair icons without touching trading logic.
+const marketFix=document.createElement('script');
+marketFix.src='/v564-market-ui-fix.js';
+marketFix.defer=true;
+document.head.appendChild(marketFix);
 })();
