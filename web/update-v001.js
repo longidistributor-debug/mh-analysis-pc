@@ -2,6 +2,7 @@
 (() => {
   const gate=document.getElementById('mhMandatoryUpdateV001');
   if(!gate)return;
+  const version=document.getElementById('mhUpdateVersionV001');
   const title=document.getElementById('mhUpdateTitleV001');
   const sub=document.getElementById('mhUpdateSubV001');
   const btn=document.getElementById('mhUpdateNowV001');
@@ -12,6 +13,7 @@
   const state=document.getElementById('mhUpdateStateV001');
   let progressTimer=0, checking=false, starting=false;
 
+  function setLatest(v){const s=String(v||'').trim();if(version&&s)version.textContent=s;}
   function showGate(){document.body.classList.remove('mhUpdateCheckingV001');document.body.classList.add('mhUpdateRequiredV001');gate.classList.remove('mhUpdateHiddenV001')}
   function hideGate(){document.body.classList.remove('mhUpdateRequiredV001');gate.classList.add('mhUpdateHiddenV001')}
   function percent(v){const n=Math.max(0,Math.min(100,Number(v)||0));fill.style.width=n+'%';pct.textContent=Math.round(n)+'%'}
@@ -28,6 +30,7 @@
   async function pollProgress(){
     try{
       const r=await fetch('/api/update/progress',{cache:'no-store'});const j=await r.json();
+      setLatest(j.latest);
       if(j.phase==='downloading'){
         title.textContent='Downloading Update';wrap.classList.add('show');percent(j.percent);state.textContent='Downloading securely…';
       }else if(j.phase==='verifying'){
@@ -45,6 +48,7 @@
     try{
       const r=await fetch('/api/update/start',{method:'POST',cache:'no-store'});
       if(!r.ok)throw new Error('Update could not start.');
+      const j=await r.json().catch(()=>({}));setLatest(j.latest||j.version);
       if(!progressTimer)progressTimer=setInterval(pollProgress,250);pollProgress();
     }catch(e){starting=false;title.textContent='Update Failed';sub.textContent='Update could not start.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';state.textContent='Your saved MH Analysis data remains unchanged.';}
   }
@@ -56,6 +60,7 @@
       const r=await fetch('/api/update/status',{cache:'no-store'});
       if(!r.ok)throw new Error('offline');
       const j=await r.json();
+      setLatest(j.latest);
       if(!j.verified){noInternet();return}
       if(j.required){
         showGate();title.textContent='Update Available';sub.textContent=`${j.latest||'A newer version'} is available. Updating MH Analysis now…`;state.textContent='Your login, Records, WhatsApp settings and saved data will remain unchanged.';
