@@ -1,5 +1,6 @@
 (()=>{
 'use strict';
+// V56.1 maintenance release.
 // Block ordinary copy/cut/context-menu/zoom shortcuts while preserving login/settings typing.
 const editable=e=>!!e.target.closest('input,textarea,[contenteditable="true"]');
 for(const ev of ['copy','cut','contextmenu','dragstart']) document.addEventListener(ev,e=>{if(!editable(e))e.preventDefault()},true);
