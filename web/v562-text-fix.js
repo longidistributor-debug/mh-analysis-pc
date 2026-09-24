@@ -1,6 +1,6 @@
 (()=>{
 'use strict';
-// V56.2: text-rendering cleanup only. Bismillah area is intentionally untouched.
+// V56.2/V56.3: text-rendering cleanup only. Bismillah area is intentionally untouched.
 const root=document.querySelector('.appShell');
 if(!root)return;
 
@@ -26,6 +26,8 @@ function fixKnownLabels(){
   set('.topSetupPanel h3','TOP SETUP');
   set('.recentPanel h3','RECENT SIGNALS');
   set('.liveDot','Interactive');
+  const footer=document.querySelector('.mhMainCopyright');
+  if(footer)footer.innerHTML='MH ANALYSIS By: Muhammad Hammad Shaukat - &copy; All Rights Reserved 2026';
   document.querySelectorAll('.pairIcon,.assetIcon,.capTitle .globe').forEach(el=>{if(el.textContent!=='')el.textContent='';});
 }
 function walk(node){
