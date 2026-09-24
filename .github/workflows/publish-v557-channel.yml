@@ -1,6 +1,8 @@
 name: Publish V557 Channel
 on:
-  workflow_dispatch:
+  push:
+    branches: [v55.7-regression-fix]
+    paths: ['vercel-auth/publish-v557']
 permissions:
   contents: write
 jobs:
