@@ -2,7 +2,9 @@ name: Publish V557 Channel
 on:
   push:
     branches: [v55.7-regression-fix]
-    paths: ['vercel-auth/publish-v557']
+    paths:
+      - 'vercel-auth/publish-v557'
+      - '.github/workflows/publish-v557-channel.yml'
 permissions:
   contents: write
 jobs:
@@ -16,14 +18,34 @@ jobs:
         with:
           go-version: '1.23.2'
           cache: false
-      - name: Verify and build
+      - name: Verify V55.7 regressions
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          $v=Get-Content -Raw web\v31.js
+          if($v.Contains('Normal trading mode')){throw 'Normal Trading Mode present'}
+          if($v.Contains("mk('mhProgressiveV1'")){throw 'Progressive UI present'}
+          foreach($m in @('mhSlAdjustment','mhFastScalping','progressive_v1:true')){if(-not $v.Contains($m)){throw "missing $m"}}
+          $p=Get-Content -Raw web\v553-placement.js
+          if($p.Contains('mhProgressiveV1')){throw 'Progressive placement present'}
           node --check web/v31.js
           node --check web/v553-placement.js
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'tests failed'}
+      - name: Set V55.7 identities
+        shell: powershell
+        run: |
+          'V.55.7'|Set-Content -Encoding ascii VERSION
+          $a=Get-Content -Raw license_auth.go
+          $a=$a -replace 'const licAppVersion = "V\.55\.3"','const licAppVersion = "V.55.7"'
+          Set-Content -Encoding utf8 license_auth.go $a
+          $i=Get-Content -Raw web\index.html
+          $i=$i -replace 'id="mhUpdateVersionV001">V\.55\.3</div>','id="mhUpdateVersionV001">V.55.7</div>'
+          Set-Content -Encoding utf8 web\index.html $i
+      - name: Build EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
           New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
           $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
@@ -36,7 +58,7 @@ jobs:
           $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
           "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
           'V.55.7'|Set-Content -Encoding ascii dist\VERSION
-          $m=[ordered]@{version='V.55.7';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.7 regression fix'}|ConvertTo-Json -Compress
+          $m=[ordered]@{version='V.55.7';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.7 restores existing app functions, removes Normal Trading Mode and separate Progressive UI, keeps Progressive internal, and keeps SL Adjustment plus Fast Scalping.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
           Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.7.exe' -DestinationPath 'dist\MH-Analysis-V.55.7.zip' -Force
       - uses: actions/upload-artifact@v4
@@ -49,3 +71,26 @@ jobs:
             dist/update.json
             dist/VERSION
             dist-installer/MH-Analysis-Setup-V.55.7.exe
+          if-no-files-found: error
+      - name: Publish live updater manifest and binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.7.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.7.exe"
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.7.exe" './MH-Analysis-Setup-V.55.7.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.7.exe'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.55.7' || true
+          git push origin mh-analysis-update-channel
