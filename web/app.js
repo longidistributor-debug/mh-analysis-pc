@@ -448,7 +448,10 @@ async function checkSameSignalV30(d){
   }catch(_){d._sameActiveSignal=false;return null}
 }
 function sameSignalMessageV30(d){
-  const s=d?.signal;return s?`SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`:'NO NEW SIGNAL';
+  const s=d?.signal;
+  if(!s)return'NO NEW SIGNAL';
+  if(d?._untouchedPendingSame)return`UNTOUCHED PENDING — SAME SIGNAL STILL VALID. Entry has not triggered yet. Fresh NEW ANALYZE still supports the same setup. No duplicate order sent. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`;
+  return`SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`;
 }
 async function captureSignalRecordV30(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
@@ -500,7 +503,7 @@ function renderDecision(d,reason,mode='NEW'){
     const newsBlocked=!!d.newsRisk?.high;
     b.className='signalBadge neutral';b.textContent=newsBlocked?'⚠ NEWS RISK • NO SIGNAL':'NO CLEAR EDGE';card.className='panel signalPanel neutralState';q.className='warn';q.textContent=newsBlocked?'HIGH IMPACT / VOLATILITY':`BUY ${d.buyScore} • SELL ${d.sellScore}`;plan.className='plan muted';plan.textContent=newsBlocked?d.explanation:'Fresh ranking found no statistically clear directional edge. The previous signal is not blindly reused.';
   }
-  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');
+  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._untouchedPendingSame?'UNTOUCHED PENDING — SAME SIGNAL STILL VALID':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS'));
   $('#explanation').className='detailText';$('#explanation').textContent=reason||d.explanation;
   $('#reasons').className='detailText';$('#reasons').textContent=[...d.reasons,...d.warnings].map(x=>`• ${x}`).join('\n')||'—';
   renderTopMap(d);renderTopSetups(d);if(mode!=='VIEW')addRecent(d,mode);updateSignalHeadline(d);
@@ -635,9 +638,10 @@ function normalizeWhatsAppNumber(raw){return String(raw||'').replace(/\D/g,'')}
 function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
   const sig=d?._activatedTradeRetired?(d?.signal||null):(d?.signal||d?.originalSignal||null);
   const isRe=action==='RE-EVALUATE';
-  const statusValue=isRe?'Re-Evaluate':(sig?'Signal generated':'No clear edge');
+  const statusValue=isRe?'Re-Evaluate':(d?._untouchedPendingSame?'UNTOUCHED PENDING — SAME SIGNAL STILL VALID':(sig?'Signal generated':'No clear edge'));
   const reason=isRe?(d?.explanation||status||d?.bestFamily||sig?.setupReason||'Market re-evaluation'):'';
   const lines=[`*MH ANALYSIS SIGNAL*`,`🤝 *Status:* ${statusValue}`];
+  if(d?._untouchedPendingSame)lines.push('',`*UNTOUCHED PENDING — SAME SIGNAL STILL VALID*`,`Entry not triggered yet. Fresh NEW ANALYZE still supports the same setup. No duplicate order sent.`,'');
   if(d?._activatedTradeRetired){const a=d._activatedTradeRetired;lines.push(`📌 *Previous trade:* ACTIVE • ${a.performance} • Move ${a.move>=0?'+':''}${fmt(a.move)}`)}
   if(isRe){lines.push('',`*Reason:* ${reason}`,'')}
   else{lines.push('')}
@@ -868,7 +872,16 @@ async function executeNewAnalysis(fromAuto=false){
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(activated)reason=`Previous ${activated.direction} signal has triggered and is now an ACTIVE trade (${activated.performance}, move ${activated.move>=0?'+':''}${fmt(activated.move)}). That old signal was retired. This result is a completely fresh ${timeframe} analysis. ${d.explanation}`;
-    if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
+    if(d.signal){
+      const same=await checkSameSignalV30(d),untouched=!!(same?.duplicate&&prev&&!signalEntryActivation(c,prev));
+      if(untouched){
+        const fresh=d.signal;
+        d._untouchedPendingSame=true;
+        d.signal={...prev,score:fresh.score,previousScore:prev.score,reconfirmedAt:Date.now(),reconfirmed:true,status:'UNTOUCHED PENDING'};
+        d.explanation=`UNTOUCHED PENDING — SAME SIGNAL STILL VALID. Entry has not triggered yet. Fresh NEW ANALYZE still supports the same setup. No duplicate order is sent. Fresh ranking: BUY ${d.buyScore} vs SELL ${d.sellScore}.`;
+        reason=sameSignalMessageV30(d);
+      }else if(same?.duplicate)reason=sameSignalMessageV30(d);
+    }
     if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
     if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT
@@ -876,7 +889,8 @@ async function executeNewAnalysis(fromAuto=false){
     else{
       try{
         await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
-        if(d._sameActiveSignal)setAutoStatus('NEW ANALYZE queued to WhatsApp • same signal active • no duplicate Record / MT5 pending','good');
+        if(d._untouchedPendingSame)setAutoStatus('NEW ANALYZE sent • UNTOUCHED PENDING • same signal still valid • no duplicate order','good');
+        else if(d._sameActiveSignal)setAutoStatus('NEW ANALYZE queued to WhatsApp • same signal active • no duplicate Record / MT5 pending','good');
         else setAutoStatus('NEW ANALYZE queued to WhatsApp','good');
       }catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
