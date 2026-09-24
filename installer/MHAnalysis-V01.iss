@@ -10,6 +10,9 @@
 #ifndef MyOutputDir
   #define MyOutputDir "..\dist-installer"
 #endif
+#ifndef MyOutputBaseFilename
+  #define MyOutputBaseFilename "MH-Analysis-Setup-V.01"
+#endif
 
 [Setup]
 ; IMPORTANT: this AppId is intentionally unchanged from the existing MH Analysis
@@ -24,7 +27,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 OutputDir={#MyOutputDir}
-OutputBaseFilename=MH-Analysis-Setup-V.01
+OutputBaseFilename={#MyOutputBaseFilename}
 SetupIconFile=..\web\mh-analysis.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
@@ -36,23 +39,19 @@ AllowNoIcons=yes
 UsePreviousAppDir=yes
 UsePreviousGroup=yes
 UsePreviousTasks=yes
-VersionInfoVersion=0.1.0.0
+VersionInfoVersion=0.55.8.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription=MH Analysis Installer
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=0.1.0.0
+VersionInfoProductVersion=0.55.8.0
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"; Flags: checkedonce
 
 [Files]
-; ignoreversion is deliberate: a public version reset to V.01 must still replace
-; the previously installed EXE when this same-product installer is run.
 Source: "{#MySourceExe}"; DestDir: "{app}"; DestName: "{#MyAppExeName}"; Flags: ignoreversion
 
 [Icons]
-; Same names and same targets mean an update refreshes the existing shortcuts;
-; it does not create a second MH Analysis shortcut/icon.
 Name: "{autoprograms}\MH Analysis"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
 Name: "{autodesktop}\MH Analysis"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
