@@ -12,12 +12,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: v55.7-regression-fix
+        with: {ref: v55.7-regression-fix}
       - uses: actions/setup-go@v5
-        with:
-          go-version: '1.23.2'
-          cache: false
+        with: {go-version: '1.23.2', cache: false}
       - name: Verify V55.7 regressions
         shell: powershell
         run: |
@@ -32,20 +29,29 @@ jobs:
           node --check web/v553-placement.js
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'tests failed'}
-      - name: Set V55.7 identities
-        shell: powershell
+      - name: Set exact V.55.7 identity
+        shell: python
         run: |
-          'V.55.7'|Set-Content -Encoding ascii VERSION
-          $a=Get-Content -Raw license_auth.go
-          $a=$a -replace 'const licAppVersion = "V\.55\.3"','const licAppVersion = "V.55.7"'
-          Set-Content -Encoding utf8 license_auth.go $a
-          $i=Get-Content -Raw web\index.html
-          $i=$i -replace 'id="mhUpdateVersionV001">V\.55\.3</div>','id="mhUpdateVersionV001">V.55.7</div>'
-          Set-Content -Encoding utf8 web\index.html $i
-      - name: Build EXE and installer
+          from pathlib import Path
+          def rd(p):
+            b=Path(p).read_bytes()
+            for e in ('utf-8-sig','cp1252','latin-1'):
+              try:return b.decode(e)
+              except UnicodeDecodeError:pass
+            raise RuntimeError(p)
+          def wr(p,s):Path(p).write_text(s,encoding='utf-8')
+          assert 'const mhPublicVersionV001 = "V.55.7"' in rd('updater.go')
+          wr('VERSION','V.55.7\n')
+          for f,a,b in [('license_auth.go','const licAppVersion = "V.55.3"','const licAppVersion = "V.55.7"'),('web/index.html','id="mhUpdateVersionV001">V.55.3</div>','id="mhUpdateVersionV001">V.55.7</div>')]:
+            s=rd(f);assert a in s,(f,a);wr(f,s.replace(a,b,1))
+      - name: Test build and installer
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
+          node --check web/v553-placement.js
+          node --check web/v31.js
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'tests failed'}
           New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
           $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
           go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
@@ -72,7 +78,7 @@ jobs:
             dist/VERSION
             dist-installer/MH-Analysis-Setup-V.55.7.exe
           if-no-files-found: error
-      - name: Publish live updater manifest and binary
+      - name: Publish updater channel atomically
         shell: bash
         run: |
           set -euo pipefail
@@ -82,6 +88,8 @@ jobs:
           cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
           cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
           cp 'dist-installer/MH-Analysis-Setup-V.55.7.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.55.7.exe"
+          git reset --hard HEAD
+          git clean -fd
           git fetch origin mh-analysis-update-channel
           git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
           cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
@@ -92,5 +100,5 @@ jobs:
           git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.7.exe'
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Publish MH Analysis V.55.7' || true
+          git commit -m 'Publish MH Analysis V.55.7 updater channel'
           git push origin mh-analysis-update-channel
