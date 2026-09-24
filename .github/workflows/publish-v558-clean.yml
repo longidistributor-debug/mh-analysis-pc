@@ -2,9 +2,6 @@ name: Publish V558 Clean Rebuild
 on:
   push:
     branches: [v55.8-clean-rebuild]
-    paths:
-      - 'vercel-auth/publish-v558-clean'
-      - '.github/workflows/publish-v558-clean.yml'
 permissions:
   contents: write
 jobs:
@@ -71,13 +68,7 @@ jobs:
           $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
           "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
           'V.55.8'|Set-Content -Encoding ascii dist\VERSION
-          $m=[ordered]@{
-            version='V.55.8'
-            mandatory=$true
-            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
-            sha256=$sha
-            notes='V.55.8 clean rebuild from the known working V55 runtime. Restores existing login, analysis, WhatsApp, Records, MT5, calendar and ticker paths; adds isolated SL Adjustment and Fast Scalping controls; Progressive remains internal without a separate UI button.'
-          }|ConvertTo-Json -Compress
+          $m=[ordered]@{version='V.55.8';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.55.8 clean rebuild from the known working V55 runtime. Restores existing login, analysis, WhatsApp, Records, MT5, calendar and ticker paths; adds isolated SL Adjustment and Fast Scalping controls; Progressive remains internal without a separate UI button.'}|ConvertTo-Json -Compress
           [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
           Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION','dist-installer\MH-Analysis-Setup-V.55.8.exe' -DestinationPath 'dist\MH-Analysis-V.55.8.zip' -Force
       - uses: actions/upload-artifact@v4
