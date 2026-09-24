@@ -128,6 +128,7 @@ func main() {
 	})
 	registerRecordsRoutes(mux)        // MH_RECORDS_V796_PATCH
 	registerEASignalBridgeRoutes(mux) // V30 automatic unique-signal pending bridge
+	registerV558ModeRoutes(mux)      // V55.8 isolated SL/Fast controls
 	registerMT5PrefillRoutes(mux)     // MH_NATIVE_MT5_PREFILL_V796
 	registerRecordsV2Routes(mux)      // MH_RECORDS_MT5_LOCAL_V797
 	mux.HandleFunc("/api/send-whatsapp", sendWhatsappHandler)
