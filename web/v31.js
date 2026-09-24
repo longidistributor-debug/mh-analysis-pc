@@ -15,4 +15,10 @@ if(support){
   const clone=support.cloneNode(true); support.replaceWith(clone);
   clone.addEventListener('click',async e=>{e.preventDefault();try{await fetch('/api/open-support-external',{method:'POST'})}catch(_){}});
 }
+// V56.0 isolated UI/mode guard. Loaded separately so the proven baseline app.js
+// remains untouched.
+const guard=document.createElement('script');
+guard.src='/v560-mode-guard.js';
+guard.defer=true;
+document.head.appendChild(guard);
 })();
