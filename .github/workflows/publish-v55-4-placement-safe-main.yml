@@ -4,7 +4,7 @@ on:
     branches: [records-mt5-local-build]
     paths: ['vercel-auth/trigger-v554-placement-safe']
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -47,3 +47,25 @@ jobs:
             dist/update.json
             dist/VERSION
             dist-installer/MH-Analysis-Setup-V.55.4.exe
+      - name: Publish V.55.4 updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/v554pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/v554pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/v554pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/v554pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/v554pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.55.4.exe' "$RUNNER_TEMP/v554pub/MH-Analysis-Setup-V.55.4.exe"
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/v554pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/v554pub/update.json" update.json
+          cp "$RUNNER_TEMP/v554pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/v554pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/v554pub/MH-Analysis-Setup-V.55.4.exe" './MH-Analysis-Setup-V.55.4.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.55.4.exe'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.55.4 updater channel'
+          git push origin mh-analysis-update-channel
