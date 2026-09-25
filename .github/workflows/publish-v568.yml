@@ -37,6 +37,9 @@ jobs:
       - name: Apply V56.8 advanced strategy upgrade
         shell: bash
         run: node scripts/v568-advanced-strategies.js
+      - name: Normalize V56.8 generated strategy syntax
+        shell: bash
+        run: node scripts/v568-syntax-hotfix.js
       - name: Validate source and fixes
         shell: powershell
         run: |
