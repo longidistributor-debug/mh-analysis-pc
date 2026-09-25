@@ -1,0 +1,144 @@
+name: Publish V567 Release
+on:
+  push:
+    branches: [v56.7-release]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.7-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Normalize V56.7 identities
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=$s.Replace('const licAppVersion = "V.55.8"','const licAppVersion = "V.56.7"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=$s.Replace('const mhPublicVersionV001 = "V.55.9"','const mhPublicVersionV001 = "V.56.7"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=$s.Replace('Version: V.55.8','Version: V.56.7');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=$s.Replace('id="mhUpdateVersionV001">V.55.8<','id="mhUpdateVersionV001">V.56.7<');$s=$s.Replace('<button data-chart-tf="20m">20m</button>','');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+      - name: Preserve V56.5 chart behavior
+        shell: bash
+        run: node scripts/v565-chart-persist.js
+      - name: Apply V56.6 isolation fixes
+        shell: bash
+        run: node scripts/v566-isolation.js
+      - name: Apply V56.7 MT5 path reselect fix
+        shell: bash
+        run: node scripts/v567-mt5-path-reselect.js
+      - name: Validate source and fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { gofmt -w $_.FullName }
+          foreach($js in @('web/app.js','web/runtime-fixes.js','web/auth.js','web/v31.js','web/v558-fast.js','web/v560-mode-guard.js','web/v562-text-fix.js','web/v564-market-ui-fix.js','web/update-v001.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.7'){throw 'VERSION mismatch'}
+          $app=Get-Content -Raw web\app.js
+          if(-not $app.Contains('V56.5: keep the last fetched chart visible')){throw 'V56.5 chart persistence baseline missing'}
+          if(-not $app.Contains('EA performs exact Pair + Timeframe matching')){throw 'Pair + Timeframe isolation missing'}
+          if(-not $app.Contains('timeframe:String(timeframe')){throw 'manage timeframe payload missing'}
+          $bridge=Get-Content -Raw ea_signal_bridge.go
+          foreach($m in @('PARTIAL_TP|TIMEFRAME','json:"timeframe"','q.Timeframe')){if(-not $bridge.Contains($m)){throw "timeframe bridge marker missing: $m"}}
+          $selector=Get-Content -Raw mt5_selector_v566.go
+          foreach($m in @('terminal64.exe;terminal.exe','0x00100000','Do not select an MT5 shortcut','SELECT MT5 PATH','v567HandleMT5Button','v567ReleaseCurrentMT5ForNewPath','wmMT5ReselectV567')){if(-not $selector.Contains($m)){throw "V56.7 selector marker missing: $m"}}
+          if($selector.Contains('MetaTrader 5 Terminal (*.exe)')){throw 'broad EXE selector still present'}
+          $embed=Get-Content -Raw mt5_embed_v36.go
+          foreach($m in @('v566FindWindowForPath(path)','v566FindWindowForPID','No other MT5 terminal was touched','V56.6 isolation rule')){if(-not $embed.Contains($m)){throw "MT5 isolation marker missing: $m"}}
+          $hostSrc=Get-Content -Raw webview2_host.go
+          foreach($m in @('v567HandleMT5Button','wmMT5ReselectV567','Desktop shortcuts are not accepted','Version: V.56.7')){if(-not $hostSrc.Contains($m)){throw "V56.7 host marker missing: $m"}}
+          $prefill=Get-Content -Raw mt5_prefill.go
+          if(-not $prefill.Contains('mt5PID')){throw 'exact embedded MT5 PID prefill missing'}
+          $chrome=Get-Content -Raw chrome_host.go
+          if(-not $chrome.Contains('return chEnsureMT5TerminalV36()')){throw 'legacy MT5 entry point not isolated'}
+          if(-not $chrome.Contains('v566RestoreStandaloneMT5')){throw 'selected MT5 restore missing'}
+          $v31=Get-Content -Raw web\v31.js
+          if(-not $v31.Contains('/v564-market-ui-fix.js')){throw 'V56.4 market safety baseline missing'}
+          if(-not $v31.Contains("bismillah.setAttribute('dir','rtl')")){throw 'Bismillah baseline missing'}
+          $auth=Get-Content -Raw license_auth.go
+          if(-not $auth.Contains('const licAppVersion = "V.56.7"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.7"')){throw 'updater version mismatch'}
+      - name: Test build installer manifest and package
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup installation failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.7' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.7' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer compilation failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.7.exe'
+          if(-not(Test-Path $installer)){throw "expected installer missing: $installer"}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.7'|Set-Content -Encoding ascii dist\VERSION
+          $m=[ordered]@{version='V.56.7';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes='V.56.7 fixes MH MT5 terminal selection. The chooser now requires the actual broker installation terminal64.exe/terminal.exe path instead of a shortcut, automatically returns to the selector if the chosen terminal cannot launch/embed, and allows re-selection by clicking MH MT5 again while its view is open. Other MT5 terminals remain independent and existing working features are unchanged.'}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.7.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.7
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.7.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.7.exe
+          if-no-files-found: error
+      - name: Publish updater channel atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.7.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.7.exe"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.7.exe" './MH-Analysis-Setup-V.56.7.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.7.exe'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.56.7'
+          git push origin mh-analysis-update-channel
+      - name: Verify live updater channel
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
+          $published=(Get-Content -Raw "$env:RUNNER_TEMP\pub\update.json")|ConvertFrom-Json
+          $ok=$false
+          for($i=0;$i -lt 12;$i++){
+            try{
+              $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+              $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+$cb)).Content|ConvertFrom-Json
+              $liveVersion=(Invoke-WebRequest -UseBasicParsing ($base+'VERSION?cb='+$cb)).Content.Trim()
+              if($live.version -eq 'V.56.7' -and $live.sha256 -eq $published.sha256 -and $liveVersion -eq 'V.56.7'){$ok=$true;break}
+            }catch{}
+            Start-Sleep -Seconds 5
+          }
+          if(-not $ok){throw 'live V.56.7 updater verification did not converge'}
+          Write-Host 'LIVE V.56.7 updater verification PASSED'
