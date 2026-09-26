@@ -26,52 +26,46 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   write(p,s);
 }
 
-// V56.14 #2: the EA is the single owner of SL Adjustment. The app/bridge sends
-// the RAW analysis SL unchanged. EA V1.37 applies the lot-based extension once
-// for fresh signals and again from the raw managed SL on exact Pair+Timeframe
-// RE-EVALUATE commands. This removes app+EA double adjustment.
+// V56.14 #2: EA owns SL Adjustment. App sends RAW analysis SL unchanged.
 {
   const p='ea_signal_bridge.go';let s=read(p);
   const a=s.indexOf('\t// V.55.8: SL Adjustment is isolated here');
   const b=s.indexOf('\n\t// Reversal safety remains app-side',a);
   if(a<0||b<0)throw new Error('legacy app-side SL adjustment block not found');
-  const repl='\t// V56.14: send RAW analysis SL unchanged. EA V1.37 is the single SL Adjustment authority.\n';
-  s=s.slice(0,a)+repl+s.slice(b);
+  s=s.slice(0,a)+'\t// V56.14: send RAW analysis SL unchanged. EA V1.37 is the single SL Adjustment authority.\n'+s.slice(b);
   write(p,s);
 }
 
-// V56.14 #3: publish the current native mode state at startup so config.txt and
-// the button state cannot drift across app restarts. Fast Scalping still forces
-// SL Adjustment OFF. Progressive V1 remains ON.
+// V56.14 #3: publish native mode state at startup so EA config and buttons agree.
 {
   const p='ea_modes_v558.go';let s=read(p);
-  s=s.replace('\t\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n}', '\t\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n\t_ = v558PublishConfig() // V56.14 startup synchronization\n}');
-  if(!s.includes('V56.14 startup synchronization')){
-    const m='\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n}';
-    must(s,m,'mode route registration');
-    s=s.replace(m,'\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n\t_ = v558PublishConfig() // V56.14 startup synchronization\n}');
+  const a=s.indexOf('func registerV558ModeRoutes(mux *http.ServeMux) {');
+  const b=s.indexOf('\n}\n\nfunc v558Snapshot()',a);
+  if(a<0||b<0)throw new Error('mode route function not found');
+  let block=s.slice(a,b+2);
+  if(!block.includes('V56.14 startup synchronization')){
+    const close=block.lastIndexOf('\n}');
+    block=block.slice(0,close)+'\n    _ = v558PublishConfig() // V56.14 startup synchronization'+block.slice(close);
+    s=s.slice(0,a)+block+s.slice(b+2);
   }
-  s=s.replace('\t\t"V.56.0",','\t\t"V.56.14",');
+  s=s.replace('"V.56.0",','"V.56.14",');
   write(p,s);
 }
 
-// V56.14 #4: harden exact selected MT5 terminal startup/embedding without ever
-// enumerating, hiding, killing or re-parenting unrelated MT5 installations.
+// V56.14 #4: harden exact selected MT5 startup/embedding; unrelated MT5 stays untouched.
 {
   const p='mt5_embed_v36.go';let s=read(p);
-  const start=s.indexOf('func chEnsureMT5TerminalV36() error {');
-  if(start<0)throw new Error('generated V56.6 MT5 ensure function not found');
+  if(s.indexOf('func chEnsureMT5TerminalV36() error {')<0)throw new Error('generated V56.6 MT5 ensure function not found');
   const stale='    chMu.Lock();existingEmbedded:=chMT5Wnd;chMu.Unlock()\n';
   must(s,stale,'existing embedded MT5 marker');
   if(!s.includes('V56.14 stale selected-window recovery')){
-    s=s.replace(stale,stale+`    // V56.14 stale selected-window recovery: a dead/old HWND must not poison\n    // a newly selected exact terminal path. Clearing the stale handle touches no other MT5.\n    if existingEmbedded!=0 && !v566WindowMatchesPath(existingEmbedded,path) {\n        chMu.Lock(); if chMT5Wnd==existingEmbedded { chMT5Wnd=0 }; chMu.Unlock()\n        existingEmbedded=0\n    }\n`);
+    s=s.replace(stale,stale+`    // V56.14 stale selected-window recovery: clear only an invalid old HWND.\n    if existingEmbedded!=0 && !v566WindowMatchesPath(existingEmbedded,path) {\n        chMu.Lock(); if chMT5Wnd==existingEmbedded { chMT5Wnd=0 }; chMu.Unlock()\n        existingEmbedded=0\n    }\n`);
   }
   s=s.replace('v55WaitMT5RenderReady(3*time.Second)','v55WaitMT5RenderReady(8*time.Second)');
-  s=s.replace('v55WaitMT5RenderReady(4*time.Second)','v55WaitMT5RenderReady(8*time.Second)');
+  s=s.replace(/v55WaitMT5RenderReady\(4\*time\.Second\)/g,'v55WaitMT5RenderReady(8*time.Second)');
   s=s.replace('deadline:=time.Now().Add(20*time.Second)','deadline:=time.Now().Add(35*time.Second)');
   s=s.replace('go v55MaintainMT5Embed(5*time.Second)','go v55MaintainMT5Embed(10*time.Second)');
   s=s.replace('go v55MaintainMT5Embed(8*time.Second)','go v55MaintainMT5Embed(12*time.Second)');
-  s=s.replace('go v55MaintainMT5Embed(10*time.Second)','go v55MaintainMT5Embed(15*time.Second)');
   const runOld=`    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n`;
   const runNew=`    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){\n            time.Sleep(650*time.Millisecond)\n            retry:=v566FindWindowForPath(path)\n            if retry==0 || !v36EmbedMT5(retry){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n            hwnd=retry\n        }\n`;
   must(s,runOld,'running MT5 embed block');s=s.replace(runOld,runNew);
@@ -81,6 +75,7 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   write(p,s);
 }
 
+// Assertions.
 {
   const app=read('web/app.js');
   must(app,'function v5614SyncVisibleContext()','V56.14 visible context sync');
@@ -95,5 +90,4 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   must(mt5,'deadline:=time.Now().Add(35*time.Second)','MT5 launch wait');
   must(mt5,'No other MT5 terminal was touched','exact MT5 isolation baseline');
 }
-
 console.log('V56.14 BTC context + MT5 reliability + SL authority fixes applied');
