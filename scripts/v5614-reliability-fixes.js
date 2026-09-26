@@ -46,7 +46,6 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
 {
   const p='ea_modes_v558.go';let s=read(p);
   s=s.replace('\t\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n}', '\t\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n\t_ = v558PublishConfig() // V56.14 startup synchronization\n}');
-  // gofmt may have tabs/spaces normalized differently in the baseline; fallback.
   if(!s.includes('V56.14 startup synchronization')){
     const m='\tmux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)\n}';
     must(s,m,'mode route registration');
@@ -73,18 +72,15 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   s=s.replace('go v55MaintainMT5Embed(5*time.Second)','go v55MaintainMT5Embed(10*time.Second)');
   s=s.replace('go v55MaintainMT5Embed(8*time.Second)','go v55MaintainMT5Embed(12*time.Second)');
   s=s.replace('go v55MaintainMT5Embed(10*time.Second)','go v55MaintainMT5Embed(15*time.Second)');
-  // One safe retry for the exact same selected path/window if the first embed attempt races MT5 startup.
-  const runOld='''    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n''';
-  const runNew='''    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){\n            time.Sleep(650*time.Millisecond)\n            retry:=v566FindWindowForPath(path)\n            if retry==0 || !v36EmbedMT5(retry){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n            hwnd=retry\n        }\n''';
+  const runOld=`    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n`;
+  const runNew=`    if hwnd:=v566FindWindowForPath(path);hwnd!=0 {\n        if !v36EmbedMT5(hwnd){\n            time.Sleep(650*time.Millisecond)\n            retry:=v566FindWindowForPath(path)\n            if retry==0 || !v36EmbedMT5(retry){return errors.New("Selected running MT5 was found, but Windows refused child embedding. Make sure MH Analysis and that MT5 use the same Windows privilege level.")}\n            hwnd=retry\n        }\n`;
   must(s,runOld,'running MT5 embed block');s=s.replace(runOld,runNew);
-  const launchOld='''    if !v36EmbedMT5(hwnd) {\n        _=cmd.Process.Kill()\n        chMu.Lock();if chMT5Cmd==cmd{chMT5Cmd=nil};chMu.Unlock()\n        return errors.New("Selected MT5 could not be embedded inside MH Analysis.")\n    }\n''';
-  const launchNew='''    if !v36EmbedMT5(hwnd) {\n        time.Sleep(650*time.Millisecond)\n        retry:=v566FindWindowForPID(uint32(cmd.Process.Pid))\n        if retry==0 { retry=v566FindWindowForPath(path) }\n        if retry==0 || !v566WindowMatchesPath(retry,path) || !v36EmbedMT5(retry) {\n            _=cmd.Process.Kill()\n            chMu.Lock();if chMT5Cmd==cmd{chMT5Cmd=nil};chMu.Unlock()\n            return errors.New("Selected MT5 could not be embedded inside MH Analysis after a safe retry.")\n        }\n        hwnd=retry\n    }\n''';
+  const launchOld=`    if !v36EmbedMT5(hwnd) {\n        _=cmd.Process.Kill()\n        chMu.Lock();if chMT5Cmd==cmd{chMT5Cmd=nil};chMu.Unlock()\n        return errors.New("Selected MT5 could not be embedded inside MH Analysis.")\n    }\n`;
+  const launchNew=`    if !v36EmbedMT5(hwnd) {\n        time.Sleep(650*time.Millisecond)\n        retry:=v566FindWindowForPID(uint32(cmd.Process.Pid))\n        if retry==0 { retry=v566FindWindowForPath(path) }\n        if retry==0 || !v566WindowMatchesPath(retry,path) || !v36EmbedMT5(retry) {\n            _=cmd.Process.Kill()\n            chMu.Lock();if chMT5Cmd==cmd{chMT5Cmd=nil};chMu.Unlock()\n            return errors.New("Selected MT5 could not be embedded inside MH Analysis after a safe retry.")\n        }\n        hwnd=retry\n    }\n`;
   must(s,launchOld,'launched MT5 embed block');s=s.replace(launchOld,launchNew);
   write(p,s);
 }
 
-// Assertions: BTC context sync is display-only; SL is no longer mutated by the
-// bridge; exact-path MT5 isolation and previous safety/analysis logic remain.
 {
   const app=read('web/app.js');
   must(app,'function v5614SyncVisibleContext()','V56.14 visible context sync');
