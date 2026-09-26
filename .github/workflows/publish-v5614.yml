@@ -1,0 +1,146 @@
+name: Publish V5614 Release
+on:
+  push:
+    branches: [v56.14-release]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.14-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Normalize V56.14 identities
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=$s.Replace('const licAppVersion = "V.55.8"','const licAppVersion = "V.56.14"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=$s.Replace('const mhPublicVersionV001 = "V.55.9"','const mhPublicVersionV001 = "V.56.14"');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=$s.Replace('Version: V.55.8','Version: V.56.14');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=$s.Replace('id="mhUpdateVersionV001">V.55.8<','id="mhUpdateVersionV001">V.56.14<');$s=$s.Replace('<button data-chart-tf="20m">20m</button>','');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+      - name: Apply preserved upgrades and V56.14 fixes
+        shell: bash
+        run: |
+          node scripts/v565-chart-persist.js
+          node scripts/v566-isolation.js
+          node scripts/v567-mt5-path-reselect.js
+          node scripts/v568-advanced-strategies.js
+          node scripts/v568-syntax-hotfix.js
+          node scripts/v569-precision-context.js
+          node scripts/v569-syntax-hotfix.js
+          node scripts/v569-go-hotfix.js
+          node scripts/v5610-api-pairtf-safety.js
+          node scripts/v5611-primary-candle-hotfix.js
+          node scripts/v5612-direct-market-snapshot.js
+          node scripts/v5613-provider-budget.js
+          node scripts/v5614-reliability-fixes.js
+      - name: Validate V56.14 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { gofmt -w $_.FullName }
+          foreach($js in @('web/app.js','web/v564-market-ui-fix.js','scripts/v5613-provider-budget.js','scripts/v5614-reliability-fixes.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.14'){throw 'VERSION mismatch'}
+          $main=Get-Content -Raw main.go
+          foreach($m in @('const providerMaxRequestsPerMinute = 3','func reserveProviderCalls(n int)','len(calls)+n > providerMaxRequestsPerMinute')){if(-not $main.Contains($m)){throw "provider budget marker missing: $m"}}
+          $ctx=Get-Content -Raw analysis_context_v569.go
+          foreach($m in @('reserveProviderCalls(3)','FCS 3-call minute budget is still cooling down','external_api_calls": 3','FCS direct precision snapshot')){if(-not $ctx.Contains($m)){throw "precision snapshot marker missing: $m"}}
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('function v5614SyncVisibleContext()','Manual selection • 0 FCS calls','function v569HTFFamilies(c,m,s)','v569ApplyExecutionFilters(d,c)','function v5610PairTimeframeExposure','Other timeframes remain independent.')){if(-not $app.Contains($m)){throw "analysis/UI safety marker missing: $m"}}
+          $c1=$app.IndexOf('async function contextChanged(){');$c2=$app.IndexOf("`n}",$c1);if($c1 -lt 0 -or $c2 -lt 0){throw 'contextChanged missing'};$cb=$app.Substring($c1,$c2-$c1)
+          foreach($bad in @('fetchCandles','analysis-snapshot-v569','/api/history')){if($cb.Contains($bad)){throw "manual context switch is not API-silent: $bad"}}
+          $bridge=Get-Content -Raw ea_signal_bridge.go
+          foreach($m in @('PARTIAL_TP|TIMEFRAME','json:"timeframe"','q.Timeframe','V56.14: send RAW analysis SL unchanged')){if(-not $bridge.Contains($m)){throw "EA bridge marker missing: $m"}}
+          if($bridge.Contains('if v558Snapshot().SLAdjustment && q.Lot >= 0.02')){throw 'old app-side SL double adjustment still present'}
+          $modes=Get-Content -Raw ea_modes_v558.go
+          foreach($m in @('V56.14 startup synchronization','"V.56.14"','SLAdjustment','FastScalping')){if(-not $modes.Contains($m)){throw "mode marker missing: $m"}}
+          $selector=Get-Content -Raw mt5_selector_v566.go
+          foreach($m in @('terminal64.exe;terminal.exe','Do not select an MT5 shortcut','SELECT MT5 PATH','v567HandleMT5Button','wmMT5ReselectV567')){if(-not $selector.Contains($m)){throw "MT5 selector marker missing: $m"}}
+          $embed=Get-Content -Raw mt5_embed_v36.go
+          foreach($m in @('V56.14 stale selected-window recovery','deadline:=time.Now().Add(35*time.Second)','v566FindWindowForPath(path)','No other MT5 terminal was touched')){if(-not $embed.Contains($m)){throw "MT5 reliability/isolation marker missing: $m"}}
+          $v31=Get-Content -Raw web\v31.js
+          if(-not $v31.Contains("bismillah.setAttribute('dir','rtl')")){throw 'Bismillah baseline missing'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.14"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.14"')){throw 'updater version mismatch'}
+      - name: Test build installer manifest and package
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup installation failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.14' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.14' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer compilation failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.14.exe'
+          if(-not(Test-Path $installer)){throw "expected installer missing: $installer"}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.14'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.14 fixes stale XAUUSD display when BTCUSDT is selected while keeping manual pair/timeframe selection at zero FCS calls. It hardens exact terminal64.exe/terminal.exe startup and embedding with stale-window recovery, longer readiness waits and a safe exact-path retry. SL Adjustment authority is moved fully to the EA bridge contract: the app sends raw analysis SL so EA V1.37 can apply the lot-based adjustment exactly once, including Pair+Timeframe re-evaluation management. Existing 3-call FCS budget, true HTF, session/news/spread filters, calibration, Partial TP handoff, Pair+Timeframe isolation, chart safety and updater are preserved.'
+          $m=[ordered]@{version='V.56.14';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.14.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.14
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.14.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.14.exe
+          if-no-files-found: error
+      - name: Publish updater channel atomically
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.14.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.14.exe"
+          git reset --hard HEAD
+          git clean -fd
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.14.exe" './MH-Analysis-Setup-V.56.14.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.14.exe'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Publish MH Analysis V.56.14'
+          git push origin mh-analysis-update-channel
+      - name: Verify published updater branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_sha="$(python -c "import json;print(json.load(open(r'$RUNNER_TEMP/pub/update.json'))['sha256'])")"
+          git fetch origin mh-analysis-update-channel
+          live_version="$(git show origin/mh-analysis-update-channel:VERSION | tr -d '\r\n')"
+          live_json="$(git show origin/mh-analysis-update-channel:update.json)"
+          LIVE_JSON="$live_json" EXPECTED_SHA="$expected_sha" LIVE_VERSION="$live_version" python - <<'PY'
+          import json,os,sys
+          j=json.loads(os.environ['LIVE_JSON'])
+          if os.environ['LIVE_VERSION']!='V.56.14' or j.get('version')!='V.56.14' or j.get('sha256')!=os.environ['EXPECTED_SHA']:
+              raise SystemExit('published V56.14 updater branch verification failed')
+          print('PUBLISHED V.56.14 updater branch verification PASSED')
+          PY
