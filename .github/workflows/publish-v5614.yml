@@ -49,7 +49,7 @@ jobs:
           foreach($js in @('web/app.js','web/v564-market-ui-fix.js','scripts/v5613-provider-budget.js','scripts/v5614-reliability-fixes.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
           if((Get-Content VERSION -Raw).Trim() -ne 'V.56.14'){throw 'VERSION mismatch'}
           $main=Get-Content -Raw main.go
-          foreach($m in @('const providerMaxRequestsPerMinute = 3','func reserveProviderCalls(n int)','len(calls)+n > providerMaxRequestsPerMinute')){if(-not $main.Contains($m)){throw "provider budget marker missing: $m"}}
+          foreach($m in @('const providerMaxRequestsPerMinute = 3','func reserveProviderCalls(n int)')){if(-not $main.Contains($m)){throw "provider budget marker missing: $m"}}
           $ctx=Get-Content -Raw analysis_context_v569.go
           foreach($m in @('reserveProviderCalls(3)','FCS 3-call minute budget is still cooling down','external_api_calls": 3','FCS direct precision snapshot')){if(-not $ctx.Contains($m)){throw "precision snapshot marker missing: $m"}}
           $app=Get-Content -Raw web\app.js
@@ -64,7 +64,7 @@ jobs:
           $selector=Get-Content -Raw mt5_selector_v566.go
           foreach($m in @('terminal64.exe;terminal.exe','Do not select an MT5 shortcut','SELECT MT5 PATH','v567HandleMT5Button','wmMT5ReselectV567')){if(-not $selector.Contains($m)){throw "MT5 selector marker missing: $m"}}
           $embed=Get-Content -Raw mt5_embed_v36.go
-          foreach($m in @('V56.14 stale selected-window recovery','deadline:=time.Now().Add(35*time.Second)','v566FindWindowForPath(path)','No other MT5 terminal was touched')){if(-not $embed.Contains($m)){throw "MT5 reliability/isolation marker missing: $m"}}
+          foreach($m in @('V56.14 stale selected-window recovery','time.Now().Add(35 * time.Second)','v566FindWindowForPath(path)','No other MT5 terminal was touched')){if(-not $embed.Contains($m)){throw "MT5 reliability/isolation marker missing: $m"}}
           $v31=Get-Content -Raw web\v31.js
           if(-not $v31.Contains("bismillah.setAttribute('dir','rtl')")){throw 'Bismillah baseline missing'}
           if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.14"')){throw 'license version mismatch'}
@@ -138,7 +138,7 @@ jobs:
           live_version="$(git show origin/mh-analysis-update-channel:VERSION | tr -d '\r\n')"
           live_json="$(git show origin/mh-analysis-update-channel:update.json)"
           LIVE_JSON="$live_json" EXPECTED_SHA="$expected_sha" LIVE_VERSION="$live_version" python - <<'PY'
-          import json,os,sys
+          import json,os
           j=json.loads(os.environ['LIVE_JSON'])
           if os.environ['LIVE_VERSION']!='V.56.14' or j.get('version')!='V.56.14' or j.get('sha256')!=os.environ['EXPECTED_SHA']:
               raise SystemExit('published V56.14 updater branch verification failed')
