@@ -1,0 +1,1 @@
+V56.13: reserve all three FCS provider-call slots atomically per NEW ANALYZE or RE-EVALUATE so the app cannot exceed the 3-requests-per-minute provider limit. No analysis, HTF, filter, EA, chart, or Pair+Timeframe behavior is removed.
