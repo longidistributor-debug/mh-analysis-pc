@@ -556,12 +556,9 @@ async function refreshMarketCap(){if(symbol==='XAUUSD'){renderGoldMetrics();retu
 function lotForSignalScore(score){
   if(!lotSizeEnabled)return 0.02;
   const n=Math.max(0,Math.min(100,Number(score)||0));
-  if(n>=95)return 0.06;
-  if(n>=90)return 0.05;
-  if(n>=85)return 0.05;
-  if(n>=80)return 0.04;
-  if(n>=70)return 0.04;
-  if(n>=65)return 0.03;
+  if(n>=83)return 0.05;
+  if(n>=73)return 0.04;
+  if(n>=66)return 0.03;
   return 0.02;
 }
 function updateTradeModeButtons(){
