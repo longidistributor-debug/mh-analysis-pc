@@ -1,0 +1,72 @@
+name: Release V564 once
+
+on:
+  push:
+    branches: [v56.3-release]
+    paths:
+      - '.github/workflows/release-v564-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Bump source and permanent publisher to V.56.4
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.56.4'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.4"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.4"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'Version: V\.[0-9.]+','Version: V.56.4');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.4<',1);$s=$s.Replace('<button data-chart-tf="20m">20m</button>','');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          $p='.github/workflows/publish-v563.yml';$s=Get-Content -Raw $p
+          $s=$s.Replace('Publish V563 Release','Publish V564 Release')
+          $s=$s.Replace('Normalize V56.3 identities','Normalize V56.4 identities')
+          $s=$s.Replace('V.56.3','V.56.4')
+          $s=$s.Replace('V56.3','V56.4')
+          $s=$s.Replace('V.55.8','V.56.4')
+          $s=$s.Replace('V.55.9','V.56.4')
+          $s=$s.Replace("notes='V.56.4 fixes Fast Scalping repeat-call lifecycle and footer text rendering. Existing Bismillah and other working features are unchanged.'","notes='V.56.4 hardens validated signal execution, active-trade preservation, server-side reversal protection, Fast Scalping exposure safety, strict news/session/reference checks, and updater integrity. Existing working UI and trade settings are preserved.'")
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Validate V.56.4 source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Get-ChildItem -Path . -Filter *.go -File | ForEach-Object { gofmt -w $_.FullName }
+          foreach($js in @('web/app.js','web/runtime-fixes.js','web/auth.js','web/v31.js','web/v558-fast.js','web/v560-mode-guard.js','web/v562-text-fix.js','web/update-v001.js','web/ea-reversal-guard.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.4'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.4"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.4"')){throw 'updater version mismatch'}
+          $pub=Get-Content -Raw .github\workflows\publish-v563.yml
+          foreach($m in @('Publish V564 Release','V.56.4','MH-Analysis-Setup-V.56.4.exe','LIVE V.56.4 updater verification PASSED')){if(-not $pub.Contains($m)){throw "publisher V564 marker missing: $m"}}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -o "$env:RUNNER_TEMP\MH-Analysis-V564-check.exe" .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path "$env:RUNNER_TEMP\MH-Analysis-V564-check.exe")){throw 'Windows V564 build validation failed'}
+
+      - name: Commit V.56.4 source and remove one-time workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/release-v564-once.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION license_auth.go updater.go webview2_host.go web/index.html .github/workflows/publish-v563.yml .github/workflows/release-v564-once.yml
+          git commit -m 'Release MH Analysis V.56.4 source and updater'
+          git push origin HEAD:v56.3-release
