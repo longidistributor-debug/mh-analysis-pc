@@ -67,14 +67,18 @@ func marketConsensusHandler(w http.ResponseWriter, r *http.Request) {
 		go marketConsensusFetch(cli, "coingecko", "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", func(v any) float64 {
 			if m, ok := v.(map[string]any); ok {
 				if b, ok := m["bitcoin"].(map[string]any); ok {
-					if p, ok := fnum(b["usd"]); ok { return p }
+					if p, ok := fnum(b["usd"]); ok {
+						return p
+					}
 				}
 			}
 			return 0
 		}, ch, &wg)
 		go marketConsensusFetch(cli, "binance", "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", func(v any) float64 {
 			if m, ok := v.(map[string]any); ok {
-				if p, ok := fnum(m["price"]); ok { return p }
+				if p, ok := fnum(m["price"]); ok {
+					return p
+				}
 			}
 			return 0
 		}, ch, &wg)
@@ -86,7 +90,9 @@ func marketConsensusHandler(w http.ResponseWriter, r *http.Request) {
 	prices := make([]float64, 0, 2)
 	for s := range ch {
 		sources = append(sources, s)
-		if s.OK && s.Price > 0 { prices = append(prices, s.Price) }
+		if s.OK && s.Price > 0 {
+			prices = append(prices, s.Price)
+		}
 	}
 	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
 	available := len(prices) == 2
@@ -96,16 +102,18 @@ func marketConsensusHandler(w http.ResponseWriter, r *http.Request) {
 		medianPrice = (prices[0] + prices[1]) / 2
 		if medianPrice > 0 {
 			spreadPct = 100 * (prices[0] - prices[1]) / medianPrice
-			if spreadPct < 0 { spreadPct = -spreadPct }
+			if spreadPct < 0 {
+				spreadPct = -spreadPct
+			}
 		}
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": available,
-		"available": available,
-		"symbol": symbol,
-		"sources": sources,
-		"median_price": medianPrice,
+		"ok":                available,
+		"available":         available,
+		"symbol":            symbol,
+		"sources":           sources,
+		"median_price":      medianPrice,
 		"source_spread_pct": spreadPct,
-		"checked_at_unix": time.Now().Unix(),
+		"checked_at_unix":   time.Now().Unix(),
 	})
 }

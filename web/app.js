@@ -273,15 +273,83 @@ async function candlesForAnalysis(){
   return fetchCandles(symbol,timeframe,{allowCacheFallback:false,reason:'analysis'});
 }
 
+
+function marketSessionGate(sym,c){
+  const now=new Date(),day=now.getUTCDay(),mins=now.getUTCHours()*60+now.getUTCMinutes(),last=c?.at(-1),tfMin=({'1m':1,'5m':5,'15m':15,'20m':20,'30m':30,'1h':60})[String(timeframe).toLowerCase()]||15;
+  if(!last||!Number.isFinite(Number(last.t)))return{ok:false,name:'UNKNOWN',boost:99,reason:'Latest candle timestamp is unavailable'};
+  const ageSec=Math.max(0,Date.now()/1000-Number(last.t));
+  if(ageSec>Math.max(180,tfMin*60*2.5))return{ok:false,name:'STALE',boost:99,reason:`Market data is stale (${Math.round(ageSec/60)} min old)`};
+  const x=String(sym||'').toUpperCase();
+  if(x==='XAUUSD'){
+    const weekend=(day===6)||(day===0&&mins<22*60)||(day===5&&mins>=21*60);
+    if(weekend)return{ok:false,name:'CLOSED',boost:99,reason:'XAUUSD market/session is closed'};
+    if(mins>=21*60&&mins<22*60+15)return{ok:false,name:'ROLLOVER',boost:99,reason:'XAUUSD rollover/low-liquidity window'};
+    if(mins>=12*60&&mins<16*60)return{ok:true,name:'LONDON/NEW YORK OVERLAP',boost:0,reason:'Prime liquidity overlap'};
+    if(mins>=7*60&&mins<12*60)return{ok:true,name:'LONDON',boost:1,reason:'London session'};
+    if(mins>=16*60&&mins<21*60)return{ok:true,name:'NEW YORK',boost:1,reason:'New York session'};
+    return{ok:true,name:'ASIA/OFF-PEAK',boost:4,reason:'Lower-liquidity session requires stronger evidence'};
+  }
+  return{ok:true,name:'24/7 CRYPTO',boost:0,reason:'Crypto market open'};
+}
+function gatePeak(fs,dir,test){const a=fs.filter(x=>x.direction===dir&&test(String(x.name||''))).map(x=>Number(x.score)||0);return a.length?Math.max(...a):0}
+function strictEvidenceGate(c,d,session){
+  if(!d?.signal)return{ok:false,reason:'Base model produced NO TRADE',checks:{}};
+  const m=marketMap(c),st=stats(c),fs=[...trendFamilies(c,m,st),...structureFamilies(c,m,st),...liquidityFamilies(c,m,st),...breakoutFamilies(c,m,st),...reversalFamilies(c,m,st),...zoneFamilies(c,m,st),...momentumFamilies(c,m,st),...smcIctFamilies(c,m,st),...videoFamilies(c,m,st)],dir=d.signal.direction,opp=dir==='BUY'?'SELL':'BUY';
+  const test={trend:n=>n.startsWith('Trend /'),structure:n=>n.startsWith('Adaptive market structure'),liquidity:n=>n.startsWith('Liquidity sweep'),breakout:n=>n.startsWith('Breakout /'),zone:n=>n.startsWith('Order block / FVG'),momentum:n=>n.startsWith('Momentum /'),smc:n=>n.startsWith('SMC:'),ict:n=>n.startsWith('ICT:')};
+  const checks={};for(const [k,t] of Object.entries(test))checks[k]=gatePeak(fs,dir,t);
+  const oppChecks={};for(const [k,t] of Object.entries(test))oppChecks[k]=gatePeak(fs,opp,t);
+  const referenceTests=[n=>n.startsWith('Video: trendline'),n=>n.startsWith('Video: dominant wick'),n=>n.startsWith('Video: compression'),test.smc,test.ict,test.zone,test.breakout];
+  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;
+  const tacticalPass=['liquidity','breakout','zone','smc','ict'].filter(k=>checks[k]>=54).length;
+  const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
+  const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(7,Number(st.pressureUncertainty)||0),requiredScore=65+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
+  const critical=checks.trend>=52&&checks.structure>=52&&checks.momentum>=52;
+  const ok=critical&&tacticalPass>=3&&referencePass>=5&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+  let reason='Strict multi-layer confirmation passed';
+  if(!critical)reason='Critical trend / structure / momentum agreement failed';
+  else if(tacticalPass<3)reason=`Only ${tacticalPass}/5 tactical structure-liquidity confirmations passed`;
+  else if(referencePass<5)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
+  else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
+  else if(score<requiredScore)reason=`Signal quality ${score} is below strict ${requiredScore} requirement for ${session?.name||'current session'}`;
+  else if(edge<=requiredEdge)reason=`Directional edge ${two(edge)} is not above strict uncertainty requirement ${two(requiredEdge)}`;
+  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,oppositeConflicts,requiredScore,requiredEdge,edge};
+}
+async function independentMarketConsensus(c){
+  const last=c?.at(-1),close=Number(last?.c);
+  if(!(close>0))return{ok:false,reason:'Latest close unavailable'};
+  try{
+    const r=await fetch(`/api/market-consensus?symbol=${encodeURIComponent(symbol)}`,{cache:'no-store'});if(!r.ok)return{ok:false,reason:`Independent market consensus HTTP ${r.status}`};
+    const j=await r.json(),medianPrice=Number(j.median_price),spread=Number(j.source_spread_pct);
+    if(j.available!==true||!(medianPrice>0)||!Number.isFinite(spread))return{ok:false,reason:'Two independent market sources are not both available',raw:j};
+    const st=stats(c),base=String(symbol).toUpperCase()==='XAUUSD'?.006:.008,adaptive=Math.min(.025,Math.max(base,4*(Number(st.trMedian)||0)/close)),diff=Math.abs(close-medianPrice)/medianPrice;
+    const maxSourceSpread=String(symbol).toUpperCase()==='XAUUSD'?.8:1.0;
+    if(spread>maxSourceSpread)return{ok:false,reason:`Independent sources disagree by ${spread.toFixed(2)}%`,medianPrice,spread,diffPct:diff*100};
+    if(diff>adaptive)return{ok:false,reason:`FCS close differs ${(diff*100).toFixed(2)}% from independent consensus`,medianPrice,spread,diffPct:diff*100,tolerancePct:adaptive*100};
+    return{ok:true,reason:'FCS + two independent prices agree',medianPrice,spread,diffPct:diff*100,tolerancePct:adaptive*100,sources:j.sources||[]};
+  }catch(e){return{ok:false,reason:`Independent market consensus unavailable: ${e?.message||e}`}}
+}
+async function validateExecutionGate(c,d){
+  const session=marketSessionGate(symbol,c);if(!session.ok)return{ok:false,reason:session.reason,session,evidence:{ok:false},consensus:{ok:false}};
+  const evidence=strictEvidenceGate(c,d,session);if(!evidence.ok)return{ok:false,reason:evidence.reason,session,evidence,consensus:{ok:false}};
+  const consensus=await independentMarketConsensus(c);if(!consensus.ok)return{ok:false,reason:consensus.reason,session,evidence,consensus};
+  return{ok:true,reason:'STRICT VALIDATION PASSED',session,evidence,consensus};
+}
+function applyExecutionGate(d,g){
+  d.executionGate=g;
+  if(!g?.ok&&d.signal){d.blockedSignal=d.signal;d.signal=null;d.warnings=[`STRICT GATE: ${g?.reason||'validation failed'}`,...(d.warnings||[])];}
+  return d;
+}
+
 async function detectNewsRisk(c){
   const trs=trueRanges(c),base=Math.max(median(trs.slice(-120)),1e-9),recent=Math.max(...trs.slice(-3),0),ratio=recent/base;
-  let api={high:false,events:[],source:''};
+  let api={high:false,available:false,events:[],source:''};
   try{const r=await fetch('/api/news-risk',{cache:'no-store'});if(r.ok)api=await r.json()}catch(_){ }
   const eventNames=Array.isArray(api.events)?api.events.filter(Boolean):[];
   const empiricalHigh=ratio>=2.6;
-  const high=!!api.high||empiricalHigh;
-  const label=eventNames.length?eventNames.join(' / '):(empiricalHigh?'Abnormal candle volatility detected':'');
-  return{high,label,events:eventNames,ratio,calendarHigh:!!api.high,empiricalHigh};
+  const feedUnavailable=api.available!==true;
+  const high=!!api.high||empiricalHigh||feedUnavailable;
+  const label=feedUnavailable?'News calendar unavailable — fail-closed':(eventNames.length?eventNames.join(' / '):(empiricalHigh?'Abnormal candle volatility detected':''));
+  return{high,label,events:eventNames,ratio,calendarHigh:!!api.high,empiricalHigh,feedUnavailable};
 }
 function applyNewsRisk(d,risk){
   d.newsRisk=risk;
@@ -427,7 +495,7 @@ function updateSignalHeadline(d){
 }
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function renderDecision(d,reason,mode='NEW'){
-  lastDecision.set(keyFor(),d);chartDecision=d;renderSignalLevels();const sig=d.signal,b=$('#signalBadge'),q=$('#signalQuality'),plan=$('#plan'),card=$('#signalCard');
+  lastDecision.set(keyFor(),d);chartDecision=d;window.__MH_LAST_DECISION__=d;renderSignalLevels();const sig=d.signal,b=$('#signalBadge'),q=$('#signalQuality'),plan=$('#plan'),card=$('#signalCard');
   if(sig){
     const isBuy=sig.direction==='BUY';
     b.className=`signalBadge ${isBuy?'buy':'sell'}`;b.textContent=`${isBuy?'↗':'↘'} ${sig.direction} SIGNAL`;
@@ -773,6 +841,7 @@ async function executeNewAnalysis(fromAuto=false){
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
     const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
     applyNewsRisk(d,newsRisk);
+    const executionGate=await validateExecutionGate(c,d);applyExecutionGate(d,executionGate);
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
@@ -815,6 +884,8 @@ async function executeReevaluate(fromAuto=false){
   try{
     const f=await candlesForAnalysis(),c=f.candles,s=a.signal,current=analyze(c,s),newsRisk=await detectNewsRisk(c),age=signalBarsAge(c,s),life=adaptiveExpiryBars(c),last=c.at(-1),model=empiricalDistanceModel(c,s.direction,stats(c));
     current.newsRisk=newsRisk;
+    applyNewsRisk(current,newsRisk);
+    const executionGate=await validateExecutionGate(c,current);applyExecutionGate(current,executionGate);
     current._ranked=buildRankedForUi(c,current);current.originalSignal=s;let status='',keep=false,displayOriginal=false;
     const slHit=signalTouched(c,s,'sl'),tp2Hit=signalTouched(c,s,'tp2'),tp1Hit=signalTouched(c,s,'tp1'),same=current.signal?.direction===s.direction,opposite=current.signal&&current.signal.direction!==s.direction;
     const favorable=s.direction==='BUY'?last.c>=s.entry:last.c<=s.entry,entryRelevant=Math.abs(last.c-s.entry)<=model.entryTolerance;

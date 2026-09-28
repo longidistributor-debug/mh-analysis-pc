@@ -33,11 +33,11 @@ func newsRiskHandler(w http.ResponseWriter, r *http.Request) {
 	newsRiskMu.Unlock()
 
 	out := map[string]any{
-		"high":             false,
-		"available":        false,
-		"events":           []string{},
-		"source":           "ForexFactory weekly calendar",
-		"checked_at_unix":  time.Now().Unix(),
+		"high":            false,
+		"available":       false,
+		"events":          []string{},
+		"source":          "ForexFactory weekly calendar",
+		"checked_at_unix": time.Now().Unix(),
 	}
 
 	cli := &http.Client{Timeout: 8 * time.Second}

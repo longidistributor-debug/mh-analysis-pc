@@ -26,8 +26,8 @@ import (
 var webFS embed.FS
 
 type settings struct {
-	APIKey       string `json:"api_key"`
-	WhatsAppLink string `json:"whatsapp_link"`
+	APIKey        string `json:"api_key"`
+	WhatsAppLink  string `json:"whatsapp_link"`
 	WhatsAppLink2 string `json:"whatsapp_link2"`
 }
 
@@ -63,9 +63,11 @@ func getSettings() settings { settingsMu.RLock(); defer settingsMu.RUnlock(); re
 
 func warmStartupTickerV5413() {
 	c := loadUICacheV5411()
-	if len(c.Ticker) >= 5 { return }
+	if len(c.Ticker) >= 5 {
+		return
+	}
 	done := make(chan struct{})
-	go func(){ _ = refreshTickerV5411(); close(done) }()
+	go func() { _ = refreshTickerV5411(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(1600 * time.Millisecond):
@@ -92,6 +94,7 @@ func main() {
 	mux.HandleFunc("/api/ui-cache", uiCacheHandlerV5411)
 	mux.HandleFunc("/api/marketcap", marketcapHandler)
 	mux.HandleFunc("/api/news-risk", newsRiskHandler)
+	mux.HandleFunc("/api/market-consensus", marketConsensusHandler)
 	mux.HandleFunc("/api/economic-calendar", economicCalendarHandler)
 	mux.HandleFunc("/api/open-support-external", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -128,7 +131,7 @@ func main() {
 	})
 	registerRecordsRoutes(mux)        // MH_RECORDS_V796_PATCH
 	registerEASignalBridgeRoutes(mux) // V30 automatic unique-signal pending bridge
-	registerV558ModeRoutes(mux)      // V55.8 isolated SL/Fast controls
+	registerV558ModeRoutes(mux)       // V55.8 isolated SL/Fast controls
 	registerMT5PrefillRoutes(mux)     // MH_NATIVE_MT5_PREFILL_V796
 	registerRecordsV2Routes(mux)      // MH_RECORDS_MT5_LOCAL_V797
 	mux.HandleFunc("/api/send-whatsapp", sendWhatsappHandler)
@@ -176,10 +179,18 @@ func settingsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if p, ok := m["whatsapp_link"]; ok {
-			if p == nil { cfg.WhatsAppLink = "" } else { cfg.WhatsAppLink = strings.TrimSpace(*p) }
+			if p == nil {
+				cfg.WhatsAppLink = ""
+			} else {
+				cfg.WhatsAppLink = strings.TrimSpace(*p)
+			}
 		}
 		if p, ok := m["whatsapp_link2"]; ok {
-			if p == nil { cfg.WhatsAppLink2 = "" } else { cfg.WhatsAppLink2 = strings.TrimSpace(*p) }
+			if p == nil {
+				cfg.WhatsAppLink2 = ""
+			} else {
+				cfg.WhatsAppLink2 = strings.TrimSpace(*p)
+			}
 		}
 		settingsMu.Unlock()
 		_ = saveSettings()
@@ -421,18 +432,84 @@ var pubCache map[string]any
 func publicTickerHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	pubMu.Lock()
-	if time.Since(pubAt) < 30*time.Second && pubCache != nil { c := pubCache; pubMu.Unlock(); _ = json.NewEncoder(w).Encode(c); return }
+	if time.Since(pubAt) < 30*time.Second && pubCache != nil {
+		c := pubCache
+		pubMu.Unlock()
+		_ = json.NewEncoder(w).Encode(c)
+		return
+	}
 	pubMu.Unlock()
 	type tickerPart map[string]any
 	ch := make(chan tickerPart, 3)
 	cli := &http.Client{Timeout: 2 * time.Second}
-	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true", func(v any) { if m,ok:=v.(map[string]any);ok { if b,ok:=m["bitcoin"].(map[string]any);ok { part["btc_usd"],_=fnum(b["usd"]); part["btc_change_24h"],_=fnum(b["usd_24h_change"]) }; if e,ok:=m["ethereum"].(map[string]any);ok { part["eth_usd"],_=fnum(e["usd"]); part["eth_change_24h"],_=fnum(e["usd_24h_change"]) } } }); ch<-part }()
-	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://xaus.com/api/v1/spot", func(v any) { if g:=findNumberByKeys(v,"price","usd","gold","xau");g>0 { part["gold_usd"]=g } }); ch<-part }()
-	go func(){ part:=tickerPart{}; fetchJSON(cli, "https://api.frankfurter.app/latest?from=USD&to=EUR,JPY,GBP", func(v any) { if m,ok:=v.(map[string]any);ok { if rates,ok:=m["rates"].(map[string]any);ok { eur,_:=fnum(rates["EUR"]);jpy,_:=fnum(rates["JPY"]);gbp,_:=fnum(rates["GBP"]); if eur>0 {part["eurusd"]=1/eur}; if jpy>0 {part["usdjpy"]=jpy}; if gbp>0 {part["gbpusd"]=1/gbp} } } }); ch<-part }()
-	out:=map[string]any{}
-	timer:=time.NewTimer(2200*time.Millisecond); defer timer.Stop()
-	for i:=0;i<3;i++ { select { case part:=<-ch: for k,v:=range part {out[k]=v}; case <-timer.C: i=3 } }
-	pubMu.Lock(); pubAt=time.Now(); if len(out)>0 {pubCache=out} else if pubCache!=nil {out=pubCache}; pubMu.Unlock()
+	go func() {
+		part := tickerPart{}
+		fetchJSON(cli, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd&include_24hr_change=true", func(v any) {
+			if m, ok := v.(map[string]any); ok {
+				if b, ok := m["bitcoin"].(map[string]any); ok {
+					part["btc_usd"], _ = fnum(b["usd"])
+					part["btc_change_24h"], _ = fnum(b["usd_24h_change"])
+				}
+				if e, ok := m["ethereum"].(map[string]any); ok {
+					part["eth_usd"], _ = fnum(e["usd"])
+					part["eth_change_24h"], _ = fnum(e["usd_24h_change"])
+				}
+			}
+		})
+		ch <- part
+	}()
+	go func() {
+		part := tickerPart{}
+		fetchJSON(cli, "https://xaus.com/api/v1/spot", func(v any) {
+			if g := findNumberByKeys(v, "price", "usd", "gold", "xau"); g > 0 {
+				part["gold_usd"] = g
+			}
+		})
+		ch <- part
+	}()
+	go func() {
+		part := tickerPart{}
+		fetchJSON(cli, "https://api.frankfurter.app/latest?from=USD&to=EUR,JPY,GBP", func(v any) {
+			if m, ok := v.(map[string]any); ok {
+				if rates, ok := m["rates"].(map[string]any); ok {
+					eur, _ := fnum(rates["EUR"])
+					jpy, _ := fnum(rates["JPY"])
+					gbp, _ := fnum(rates["GBP"])
+					if eur > 0 {
+						part["eurusd"] = 1 / eur
+					}
+					if jpy > 0 {
+						part["usdjpy"] = jpy
+					}
+					if gbp > 0 {
+						part["gbpusd"] = 1 / gbp
+					}
+				}
+			}
+		})
+		ch <- part
+	}()
+	out := map[string]any{}
+	timer := time.NewTimer(2200 * time.Millisecond)
+	defer timer.Stop()
+	for i := 0; i < 3; i++ {
+		select {
+		case part := <-ch:
+			for k, v := range part {
+				out[k] = v
+			}
+		case <-timer.C:
+			i = 3
+		}
+	}
+	pubMu.Lock()
+	pubAt = time.Now()
+	if len(out) > 0 {
+		pubCache = out
+	} else if pubCache != nil {
+		out = pubCache
+	}
+	pubMu.Unlock()
 	_ = json.NewEncoder(w).Encode(out)
 }
 func fetchJSON(cli *http.Client, u string, fn func(any)) {
@@ -544,7 +621,9 @@ func sendWhatsappHandler(w http.ResponseWriter, r *http.Request) {
 	saved := []string{strings.TrimSpace(v.WhatsAppLink), strings.TrimSpace(v.WhatsAppLink2)}
 	targets := make([]string, 0, 2)
 	for _, raw := range saved {
-		if raw == "" { continue }
+		if raw == "" {
+			continue
+		}
 		target := ""
 		if u, err := url.Parse(raw); err == nil && (u.Scheme == "https" || u.Scheme == "http") && (strings.EqualFold(u.Host, "chat.whatsapp.com") || strings.EqualFold(u.Host, "web.whatsapp.com") || strings.EqualFold(u.Host, "wa.me") || strings.HasSuffix(strings.ToLower(u.Host), ".whatsapp.com")) {
 			target = raw
@@ -564,7 +643,9 @@ func sendWhatsappHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	waMu.Lock()
-	for _, target := range targets { waQueue = append(waQueue, waTask{target: target, message: q.Message}) }
+	for _, target := range targets {
+		waQueue = append(waQueue, waTask{target: target, message: q.Message})
+	}
 	waMu.Unlock()
 	postMessage(hostHWND, wmWhatsAppSend, 0, 0)
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "queued": true, "destinations": len(targets)})
