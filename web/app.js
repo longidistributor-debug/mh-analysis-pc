@@ -845,7 +845,8 @@ async function executeNewAnalysis(fromAuto=false){
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
-    if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
+    const mt5ExistingState=prev?await readMT5ActiveStateV552(symbol):null;
+if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
     if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
