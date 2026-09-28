@@ -54,7 +54,7 @@ jobs:
           if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.16"')){throw 'license version mismatch'}
           if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.16"')){throw 'updater version mismatch'}
           $display=Get-Content -Raw web\v562-text-fix.js
-          foreach($m in @('fixTickerIcons','₿','EURUSD','USDJPY','GBPUSD')){if(-not $display.Contains($m)){throw "display fix missing: $m"}}
+          foreach($m in @('V56.16','fixTickerIcons','EURUSD','USDJPY','GBPUSD','BTCUSD','ETHUSD')){if(-not $display.Contains($m)){throw "display fix missing: $m"}}
           $app=Get-Content -Raw web\app.js
           foreach($m in @('STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5')){if(-not $app.Contains($m)){throw "signal safety marker missing: $m"}}
           go test ./...
