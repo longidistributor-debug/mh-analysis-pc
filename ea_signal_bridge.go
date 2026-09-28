@@ -188,8 +188,8 @@ func eaSignalSendHandler(w http.ResponseWriter, r *http.Request) {
 	// V.55.8: SL Adjustment is isolated here, after validation and before the normal mailbox write.
 	// With the mode OFF, this path is byte-for-byte equivalent to the clean runtime behavior.
 	if v558Snapshot().SLAdjustment && q.Lot >= 0.02 {
-		add := 12.0
-		if q.Lot <= 0.02 { add = 6 } else if q.Lot <= 0.03 { add = 7 } else if q.Lot <= 0.04 { add = 8 } else if q.Lot <= 0.05 { add = 9 }
+		add := 6.99
+		if q.Lot <= 0.02 { add = 3.88 } else if q.Lot <= 0.03 { add = 4.99 } else if q.Lot <= 0.04 { add = 5.99 } else if q.Lot <= 0.05 { add = 6.99 }
 		if strings.HasPrefix(q.Type,"BUY") { q.SL -= add } else if strings.HasPrefix(q.Type,"SELL") { q.SL += add }
 	}
 
