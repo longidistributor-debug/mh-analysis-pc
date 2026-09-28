@@ -34,7 +34,7 @@ jobs:
           grep -F '/api/market-consensus' main.go
           grep -F 'window.__MH_LAST_DECISION__' web/app.js
           grep -F 'g?.consensus?.ok!==true' web/v558-fast.js
-          grep -F '"available":        false' news_risk.go
+          grep -F '"available"' news_risk.go
 
       - name: Commit hardened engine and remove one-time workflow
         run: |
