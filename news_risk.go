@@ -33,9 +33,11 @@ func newsRiskHandler(w http.ResponseWriter, r *http.Request) {
 	newsRiskMu.Unlock()
 
 	out := map[string]any{
-		"high":   false,
-		"events": []string{},
-		"source": "ForexFactory weekly calendar",
+		"high":             false,
+		"available":        false,
+		"events":           []string{},
+		"source":           "ForexFactory weekly calendar",
+		"checked_at_unix":  time.Now().Unix(),
 	}
 
 	cli := &http.Client{Timeout: 8 * time.Second}
@@ -47,6 +49,7 @@ func newsRiskHandler(w http.ResponseWriter, r *http.Request) {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			var events []ffCalendarEvent
 			if json.NewDecoder(resp.Body).Decode(&events) == nil {
+				out["available"] = true
 				now := time.Now()
 				names := make([]string, 0, 3)
 				for _, ev := range events {
