@@ -1,0 +1,71 @@
+name: Update lot score mapping once
+
+on:
+  push:
+    branches:
+      - v56.3-release
+    paths:
+      - .github/workflows/update-lot-mapping-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update-lot-mapping:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+      - name: Replace only lot score thresholds
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('web/app.js')
+          s = p.read_text(encoding='utf-8')
+          old = '''function lotForSignalScore(score){
+            if(!lotSizeEnabled)return 0.02;
+            const n=Math.max(0,Math.min(100,Number(score)||0));
+            if(n>=95)return 0.06;
+            if(n>=90)return 0.05;
+            if(n>=85)return 0.05;
+            if(n>=80)return 0.04;
+            if(n>=70)return 0.04;
+            if(n>=65)return 0.03;
+            return 0.02;
+          }'''
+          new = '''function lotForSignalScore(score){
+            if(!lotSizeEnabled)return 0.02;
+            const n=Math.max(0,Math.min(100,Number(score)||0));
+            if(n>=83)return 0.05;
+            if(n>=73)return 0.04;
+            if(n>=66)return 0.03;
+            return 0.02;
+          }'''
+          if old not in s:
+              raise SystemExit('Expected lotForSignalScore block not found; no changes made')
+          if s.count(old) != 1:
+              raise SystemExit(f'Expected exactly one matching block, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+      - name: Verify exact new mapping
+        shell: python
+        run: |
+          from pathlib import Path
+          s = Path('web/app.js').read_text(encoding='utf-8')
+          checks = [
+              'if(n>=83)return 0.05;',
+              'if(n>=73)return 0.04;',
+              'if(n>=66)return 0.03;',
+              'if(!lotSizeEnabled)return 0.02;'
+          ]
+          for x in checks:
+              assert x in s, x
+          assert 'if(n>=95)return 0.06;' not in s
+      - name: Commit source change and remove one-time workflow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/update-lot-mapping-once.yml
+          git add web/app.js
+          git commit -m "Update automatic lot score ranges"
+          git push origin HEAD:v56.3-release
