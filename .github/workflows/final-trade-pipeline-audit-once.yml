@@ -23,7 +23,7 @@ jobs:
           go-version: '1.23.2'
           cache: false
       - name: Apply final execution-safety fixes
-        shell: python
+        shell: python {0}
         run: |
           from pathlib import Path
 
@@ -31,7 +31,7 @@ jobs:
           s = app.read_text(encoding='utf-8')
           old = """    if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}"""
           new = """    const mt5ExistingState=prev?await readMT5ActiveStateV552(symbol):null;
-    if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}"""
+          if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}"""
           if new not in s:
               if old not in s:
                   raise SystemExit('app active-preservation anchor missing')
