@@ -24,12 +24,8 @@ jobs:
           from pathlib import Path
           p = Path('ea_signal_bridge.go')
           s = p.read_text(encoding='utf-8')
-          old = '''\t\tadd := 12.0
-\t\tif q.Lot <= 0.02 { add = 6 } else if q.Lot <= 0.03 { add = 7 } else if q.Lot <= 0.04 { add = 8 } else if q.Lot <= 0.05 { add = 9 }
-'''
-          new = '''\t\tadd := 6.99
-\t\tif q.Lot <= 0.02 { add = 3.88 } else if q.Lot <= 0.03 { add = 4.99 } else if q.Lot <= 0.04 { add = 5.99 } else if q.Lot <= 0.05 { add = 6.99 }
-'''
+          old = "\t\tadd := 12.0\n\t\tif q.Lot <= 0.02 { add = 6 } else if q.Lot <= 0.03 { add = 7 } else if q.Lot <= 0.04 { add = 8 } else if q.Lot <= 0.05 { add = 9 }\n"
+          new = "\t\tadd := 6.99\n\t\tif q.Lot <= 0.02 { add = 3.88 } else if q.Lot <= 0.03 { add = 4.99 } else if q.Lot <= 0.04 { add = 5.99 } else if q.Lot <= 0.05 { add = 6.99 }\n"
           if old not in s:
               raise SystemExit('Expected SL adjustment block not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
@@ -39,14 +35,10 @@ jobs:
         run: |
           from pathlib import Path
           s = Path('ea_signal_bridge.go').read_text(encoding='utf-8')
-          required = [
-              'if q.Lot <= 0.02 { add = 3.88 }',
-              'else if q.Lot <= 0.03 { add = 4.99 }',
-              'else if q.Lot <= 0.04 { add = 5.99 }',
-              'else if q.Lot <= 0.05 { add = 6.99 }',
-          ]
-          for x in required:
-              assert x in s, x
+          assert 'if q.Lot <= 0.02 { add = 3.88 }' in s
+          assert 'else if q.Lot <= 0.03 { add = 4.99 }' in s
+          assert 'else if q.Lot <= 0.04 { add = 5.99 }' in s
+          assert 'else if q.Lot <= 0.05 { add = 6.99 }' in s
           assert 'if strings.HasPrefix(q.Type,"BUY") { q.SL -= add } else if strings.HasPrefix(q.Type,"SELL") { q.SL += add }' in s
 
       - name: Commit source change and remove one-time workflow
