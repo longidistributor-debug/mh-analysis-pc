@@ -1,6 +1,7 @@
 (()=>{
 'use strict';
 // V56.18: display-only repair for legacy/dynamic mojibake and missing ticker symbols.
+// Supersedes the V56.17 display hotfix while retaining its updater-safe observer behavior.
 // All DOM writes are change-only and observer work is debounced.
 // Trading, signal, EA, lot-size and SL logic are intentionally untouched.
 const root=document.querySelector('.appShell');
@@ -47,7 +48,6 @@ function cleanText(value){
     [/Ã¢â‚¬â€/g,'—'],[/Ã¢â‚¬Â¢/g,' • '],[/Ã¢â‚¬Â¦/g,'...'],[/Ã¢â€šÂ¬/g,'€'],[/Â¥/g,'¥'],[/Â£/g,'£'],[/Â©/g,'©']
   ];
   for(const [re,to] of replacements)s=s.replace(re,to);
-  // If a legacy placeholder remains corrupted after decode, show a clean dash instead of garbage.
   if(mojibakeScore(s)&&s.trim().length<40)s='—';
   return s;
 }
