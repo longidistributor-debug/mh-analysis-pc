@@ -43,15 +43,13 @@ jobs:
             $html=[regex]::Replace($html,$pattern,'$1&mdash;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
           }
 
-          $html=[regex]::Replace($html,'(<i class="assetIcon goldAsset">).*?(</i>)','$1&#9679;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
-          $html=[regex]::Replace($html,'(<i class="assetIcon btcAsset">).*?(</i>)','$1&#8383;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
-          $html=[regex]::Replace($html,'(<i class="assetIcon ethAsset">).*?(</i>)','$1&#9670;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+          $html=[regex]::Replace($html,'(<i class="assetIcon goldAsset">)[^<]*(</i>)','$1&#9679;$2')
+          $html=[regex]::Replace($html,'(<i class="assetIcon btcAsset">)[^<]*(</i>)','$1&#8383;$2')
+          $html=[regex]::Replace($html,'(<i class="assetIcon ethAsset">)[^<]*(</i>)','$1&#9670;$2')
 
           function Set-FxIcon([string]$pair,[string]$entity){
-            $script:html=[regex]::Replace($script:html,
-              '(<div class="tickerCell"><i class="assetIcon fxAsset">).*?(</i><div><b>'+[regex]::Escape($pair)+'</b>)',
-              ('$1'+$entity+'$2'),
-              [System.Text.RegularExpressions.RegexOptions]::Singleline)
+            $pattern='(<div class="tickerCell"><i class="assetIcon fxAsset">)[^<]*(</i><div><b>'+[regex]::Escape($pair)+'</b>)'
+            $script:html=[regex]::Replace($script:html,$pattern,('$1'+$entity+'$2'))
           }
           Set-FxIcon 'EURUSD' '&euro;'
           Set-FxIcon 'USDJPY' '&yen;'
