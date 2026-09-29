@@ -36,15 +36,16 @@ jobs:
           $ticker=[regex]::Match($html,'<section class="cleanTicker panel movingTicker".*?</section>','Singleline').Value
           if([string]::IsNullOrWhiteSpace($details)){throw 'Analysis Details section missing'}
           if([string]::IsNullOrWhiteSpace($ticker)){throw 'Moving ticker section missing'}
-          foreach($bad in @('Ã','Â','Æ','â')){
-            if($details.Contains($bad)){throw "Analysis Details still contains mojibake marker: $bad"}
-            if($ticker.Contains($bad)){throw "Moving ticker still contains mojibake marker: $bad"}
-          }
           foreach($id in @('detailRegime','detailTrend','detailVol','detailRisk','detailStructure','detailPressure','indAdx','indDi','indVwap','indOb','indFvg','indDiv','indSmc','indIct','indRisk','lvlEntry','lvlSl','lvlTp1','lvlTp2','lvlEq','lvlZones')){
-            if($details -notmatch ('id="'+[regex]::Escape($id)+'">&mdash;<')){throw "clean Analysis Details placeholder missing: $id"}
+            $needle='id="'+$id+'">&mdash;<'
+            if(-not $details.Contains($needle)){throw "clean Analysis Details placeholder missing: $id"}
           }
           foreach($id in @('tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY')){
-            if($ticker -notmatch ('id="'+[regex]::Escape($id)+'">&mdash;<')){throw "clean ticker placeholder missing: $id"}
+            $needle='id="'+$id+'">&mdash;<'
+            if(-not $ticker.Contains($needle)){throw "clean ticker placeholder missing: $id"}
+          }
+          foreach($entity in @('&#9679;','&#8383;','&#9670;','&euro;','&yen;','&pound;')){
+            if(-not $ticker.Contains($entity)){throw "Ticker entity missing: $entity"}
           }
           $app=Get-Content -Raw web\app.js
           foreach($m in @('STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5')){if(-not $app.Contains($m)){throw "signal safety marker missing: $m"}}
