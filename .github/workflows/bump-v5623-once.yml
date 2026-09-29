@@ -18,114 +18,169 @@ jobs:
         with:
           ref: v56.3-release
           fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - uses: actions/setup-go@v5
         with:
           go-version: '1.23.2'
           cache: false
 
-      - name: Apply only V.56.23 requested analysis fixes
-        shell: powershell
+      - name: Apply only V.56.23 requested changes
+        shell: bash
         run: |
-          $ErrorActionPreference='Stop'
-          function Decode([string]$b){[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b))}
-          $appPath='web/app.js'
-          $app=Get-Content -Raw -Encoding UTF8 $appPath
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
 
-          $rStart="  `$('#reasons').className='detailText';"
-          $rs=$app.IndexOf($rStart)
-          if($rs -lt 0){throw 'reasons render start not found'}
-          $rEnd="||'—';"
-          $re=$app.IndexOf($rEnd,$rs)
-          if($re -lt 0){throw 'reasons render end not found'}
-          $re += $rEnd.Length
-          $newReasons=Decode('ICBjb25zdCBiZXN0TWF0Y2hlcz0oZC5yZWFzb25zfHxbXSkuZmlsdGVyKEJvb2xlYW4pLnNsaWNlKDAsMyk7CiAgY29uc3QgdG9wV2FybmluZ3M9KGQud2FybmluZ3N8fFtdKS5maWx0ZXIoQm9vbGVhbikuc2xpY2UoMCwxKTsKICAkKCcjcmVhc29ucycpLmNsYXNzTmFtZT0nZGV0YWlsVGV4dCc7CiAgJCgnI3JlYXNvbnMnKS50ZXh0Q29udGVudD1bLi4uYmVzdE1hdGNoZXMsLi4udG9wV2FybmluZ3MubWFwKHg9PmBXYXJuaW5nOiAke3h9YCldLmpvaW4oJyDigJQgJyl8fCfigJQnOw==')
-          $app=$app.Substring(0,$rs)+$newReasons+$app.Substring($re)
+          app_path=Path('web/app.js')
+          app=app_path.read_text(encoding='utf-8')
 
-          if(-not $app.Contains('function waitForUiCommitV5623(){')){
-            $anchor='async function executeNewAnalysis(fromAuto=false){'
-            $ai=$app.IndexOf($anchor)
-            if($ai -lt 0){throw 'NEW analysis function anchor not found'}
-            $helper=Decode('ZnVuY3Rpb24gd2FpdEZvclVpQ29tbWl0VjU2MjMoKXsKICByZXR1cm4gbmV3IFByb21pc2UocmVzb2x2ZT0+ewogICAgaWYodHlwZW9mIHJlcXVlc3RBbmltYXRpb25GcmFtZT09PSdmdW5jdGlvbicpcmVxdWVzdEFuaW1hdGlvbkZyYW1lKCgpPT5yZXF1ZXN0QW5pbWF0aW9uRnJhbWUocmVzb2x2ZSkpOwogICAgZWxzZSBzZXRUaW1lb3V0KHJlc29sdmUsMCk7CiAgfSk7Cn0K')
-            $app=$app.Substring(0,$ai)+$helper+$app.Substring($ai)
+          # 1. Compact direct confirmations; no bullet-per-line renderer.
+          start="  $('#reasons').className='detailText';"
+          rs=app.find(start)
+          if rs < 0: raise SystemExit('reasons render start not found')
+          end="||'—';"
+          re_=app.find(end,rs)
+          if re_ < 0: raise SystemExit('reasons render end not found')
+          re_ += len(end)
+          new_reasons="""  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
+          const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
+          $('#reasons').className='detailText';
+          $('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';"""
+          app=app[:rs]+new_reasons+app[re_:]
+
+          # 2. Visible analysis completes before Record/EA/WhatsApp handoff.
+          anchor='async function executeNewAnalysis(fromAuto=false){'
+          if 'function waitForUiCommitV5623(){' not in app:
+              ai=app.find(anchor)
+              if ai < 0: raise SystemExit('NEW analysis function anchor not found')
+              helper="""function waitForUiCommitV5623(){
+            return new Promise(resolve=>{
+              if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(resolve));
+              else setTimeout(resolve,0);
+            });
           }
-          $oldNew="    renderDecision(d,reason,'NEW');busy=false;setBusy(false);"
-          if(-not $app.Contains($oldNew)){throw 'NEW completion line not found'}
-          $app=$app.Replace($oldNew,$oldNew+"`n    await waitForUiCommitV5623();")
-          $oldDispatch="    if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT"
-          if(-not $app.Contains($oldDispatch)){throw 'background signal fanout line not found'}
-          $newDispatch=Decode('ICAgIGlmKGQuc2lnbmFsJiYhZC5fc2FtZUFjdGl2ZVNpZ25hbCl7CiAgICAgIHRyeXthd2FpdCBkaXNwYXRjaFVuaXF1ZVNpZ25hbFYzNihkKX1jYXRjaChlKXtjb25zb2xlLndhcm4oJ1JlY29yZC9FQSBoYW5kb2ZmIGZhaWxlZCBhZnRlciBhbmFseXNpcyBjb21wbGV0ZWQnLGUpfQogICAgfSAvLyBWNTYyM19VSV9DT01NSVRfQkVGT1JFX1NJR05BTF9GQU5PVVQ=')
-          $app=$app.Replace($oldDispatch,$newDispatch)
-          $oldReeval=Decode('cmVuZGVyRGVjaXNpb24oY3VycmVudCxgUkUtRVZBTFVBVEUgU0lHTkFMOiAke3N0YXR1c30uICR7Y3VycmVudC5leHBsYW5hdGlvbn1gLCdSRUVWQUwnKTtidXN5PWZhbHNlO3NldEJ1c3koZmFsc2UpOw==')
-          if(-not $app.Contains($oldReeval)){throw 'RE-EVALUATE completion line not found'}
-          $app=$app.Replace($oldReeval,$oldReeval+"`n    await waitForUiCommitV5623();")
+          """
+              app=app[:ai]+helper+app[ai:]
 
-          $oldBase='const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);'
-          if(-not $app.Contains($oldBase)){throw 'base edge rule not found'}
-          $app=$app.Replace($oldBase,'const minEdge=Math.max(3,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);')
-          $oldExplain='difference ${two(edge)} is inside this timeframe''s measured uncertainty ${two(s.pressureUncertainty)}.'
-          if(-not $app.Contains($oldExplain)){throw 'base no-edge explanation not found'}
-          $app=$app.Replace($oldExplain,'difference ${two(edge)} does not exceed the adaptive edge requirement ${two(minEdge)} (measured uncertainty ${two(s.pressureUncertainty)}).')
+          old_new="    renderDecision(d,reason,'NEW');busy=false;setBusy(false);"
+          if old_new not in app: raise SystemExit('NEW completion line not found')
+          app=app.replace(old_new,old_new+"\n    await waitForUiCommitV5623();",1)
 
-          $gateStart='  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;'
-          $gs=$app.IndexOf($gateStart)
-          if($gs -lt 0){throw 'strict evidence block start not found'}
-          $gateEnd='  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,oppositeConflicts,requiredScore,requiredEdge,edge};'
-          $ge=$app.IndexOf($gateEnd,$gs)
-          if($ge -lt 0){throw 'strict evidence block end not found'}
-          $ge += $gateEnd.Length
-          $newGate=Decode('ICBjb25zdCByZWZlcmVuY2VTY29yZXM9cmVmZXJlbmNlVGVzdHMubWFwKHQ9PmdhdGVQZWFrKGZzLGRpcix0KSkscmVmZXJlbmNlUGFzcz1yZWZlcmVuY2VTY29yZXMuZmlsdGVyKHg9Png+PTUyKS5sZW5ndGg7CiAgY29uc3QgdGFjdGljYWxQYXNzPVsnbGlxdWlkaXR5JywnYnJlYWtvdXQnLCd6b25lJywnc21jJywnaWN0J10uZmlsdGVyKGs9PmNoZWNrc1trXT49NTQpLmxlbmd0aDsKICBjb25zdCBzdHJ1Y3R1cmFsUGFzcz1bJ3N0cnVjdHVyZScsJ2JyZWFrb3V0Jywnem9uZScsJ3NtYycsJ2ljdCddLmZpbHRlcihrPT5jaGVja3Nba10+PTU2KS5sZW5ndGg7CiAgY29uc3QgY29yZVBhc3M9Wyd0cmVuZCcsJ3N0cnVjdHVyZScsJ21vbWVudHVtJ10uZmlsdGVyKGs9PmNoZWNrc1trXT49NTIpLmxlbmd0aDsKICBjb25zdCBzdHJvbmdSZWZlcmVuY2U9TWF0aC5tYXgoMCwuLi5yZWZlcmVuY2VTY29yZXMpPj02MjsKICBjb25zdCBvcHBvc2l0ZUNvbmZsaWN0cz1PYmplY3Qua2V5cyhjaGVja3MpLmZpbHRlcihrPT5vcHBDaGVja3Nba10+PTcwJiZvcHBDaGVja3Nba10+PWNoZWNrc1trXSsxMCkubGVuZ3RoOwogIGNvbnN0IGVkZ2U9TWF0aC5hYnMoKE51bWJlcihkLmJ1eVNjb3JlKXx8MCktKE51bWJlcihkLnNlbGxTY29yZSl8fDApKSxyZXF1aXJlZEVkZ2U9TWF0aC5tYXgoMywoTnVtYmVyKHN0LnByZXNzdXJlVW5jZXJ0YWludHkpfHwwKSouODUpLHJlcXVpcmVkU2NvcmU9NjIrKE51bWJlcihzZXNzaW9uPy5ib29zdCl8fDApLHNjb3JlPU51bWJlcihkLnNpZ25hbC5zY29yZSl8fDA7CiAgY29uc3Qgb2s9Y29yZVBhc3M+PTImJnRhY3RpY2FsUGFzcz49MiYmc3RydWN0dXJhbFBhc3M+PTImJnJlZmVyZW5jZVBhc3M+PTMmJnN0cm9uZ1JlZmVyZW5jZSYmb3Bwb3NpdGVDb25mbGljdHM8PTEmJnNjb3JlPj1yZXF1aXJlZFNjb3JlJiZlZGdlPnJlcXVpcmVkRWRnZTsKICBsZXQgcmVhc29uPSdSZWZlcmVuY2Utd2VpZ2h0ZWQgY29uZmlybWF0aW9uIHBhc3NlZCc7CiAgaWYoY29yZVBhc3M8MilyZWFzb249YE9ubHkgJHtjb3JlUGFzc30vMyBjb3JlIGRpcmVjdGlvbiBjb25maXJtYXRpb25zIHBhc3NlZGA7CiAgZWxzZSBpZih0YWN0aWNhbFBhc3M8MilyZWFzb249YE9ubHkgJHt0YWN0aWNhbFBhc3N9LzUgdGFjdGljYWwgY29uZmlybWF0aW9ucyBwYXNzZWRgOwogIGVsc2UgaWYoc3RydWN0dXJhbFBhc3M8MilyZWFzb249YE9ubHkgJHtzdHJ1Y3R1cmFsUGFzc30vNSBzdHJ1Y3R1cmFsL3JlZmVyZW5jZSBjb25maXJtYXRpb25zIHBhc3NlZGA7CiAgZWxzZSBpZihyZWZlcmVuY2VQYXNzPDMpcmVhc29uPWBPbmx5ICR7cmVmZXJlbmNlUGFzc30vNyBydW50aW1lIHJlZmVyZW5jZSBjaGVja3MgYWxpZ25lZGA7CiAgZWxzZSBpZighc3Ryb25nUmVmZXJlbmNlKXJlYXNvbj0nTm8gc3Ryb25nIHJ1bnRpbWUgcmVmZXJlbmNlIGNvbmZpcm1hdGlvbiByZWFjaGVkIDYyLzEwMCc7CiAgZWxzZSBpZihvcHBvc2l0ZUNvbmZsaWN0cz4xKXJlYXNvbj1gJHtvcHBvc2l0ZUNvbmZsaWN0c30gc3Ryb25nIG9wcG9zaXRlLWRpcmVjdGlvbiBjb25mbGljdHMgZGV0ZWN0ZWRgOwogIGVsc2UgaWYoc2NvcmU8cmVxdWlyZWRTY29yZSlyZWFzb249YFNpZ25hbCBxdWFsaXR5ICR7c2NvcmV9IGlzIGJlbG93IGFkYXB0aXZlICR7cmVxdWlyZWRTY29yZX0gcmVxdWlyZW1lbnQgZm9yICR7c2Vzc2lvbj8ubmFtZXx8J2N1cnJlbnQgc2Vzc2lvbid9YDsKICBlbHNlIGlmKGVkZ2U8PXJlcXVpcmVkRWRnZSlyZWFzb249YERpcmVjdGlvbmFsIGVkZ2UgJHt0d28oZWRnZSl9IGlzIG5vdCBhYm92ZSBhZGFwdGl2ZSB1bmNlcnRhaW50eSByZXF1aXJlbWVudCAke3R3byhyZXF1aXJlZEVkZ2UpfWA7CiAgcmV0dXJue29rLHJlYXNvbixjaGVja3Msb3BwQ2hlY2tzLHJlZmVyZW5jZVBhc3MscmVmZXJlbmNlVG90YWw6Nyx0YWN0aWNhbFBhc3Msc3RydWN0dXJhbFBhc3MsY29yZVBhc3Msc3Ryb25nUmVmZXJlbmNlLG9wcG9zaXRlQ29uZmxpY3RzLHJlcXVpcmVkU2NvcmUscmVxdWlyZWRFZGdlLGVkZ2V9Ow==')
-          $app=$app.Substring(0,$gs)+$newGate+$app.Substring($ge)
-          [IO.File]::WriteAllText((Join-Path $PWD $appPath),$app,(New-Object Text.UTF8Encoding($false)))
+          old_dispatch="    if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT"
+          if old_dispatch not in app: raise SystemExit('background signal fanout line not found')
+          new_dispatch="""    if(d.signal&&!d._sameActiveSignal){
+              try{await dispatchUniqueSignalV36(d)}catch(e){console.warn('Record/EA handoff failed after analysis completed',e)}
+            } // V5623_UI_COMMIT_BEFORE_SIGNAL_FANOUT"""
+          app=app.replace(old_dispatch,new_dispatch,1)
 
-          $cssPath='web/styles.css'
-          $css=Get-Content -Raw -Encoding UTF8 $cssPath
-          $oldCss='.confirmationsInside .detailText{max-height:230px;overflow:auto;padding-right:4px}'
-          if(-not $css.Contains($oldCss)){throw 'confirmation scroll CSS rule not found'}
-          $css=$css.Replace($oldCss,'.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}')
-          [IO.File]::WriteAllText((Join-Path $PWD $cssPath),$css,(New-Object Text.UTF8Encoding($false)))
+          old_reeval="renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);"
+          if old_reeval not in app: raise SystemExit('RE-EVALUATE completion line not found')
+          app=app.replace(old_reeval,old_reeval+"\n    await waitForUiCommitV5623();",1)
 
-      - name: Update application identities and publisher to V.56.23
-        shell: powershell
+          # 3. Reference-weighted adaptive gate: easier for genuine best setups, still blocks random trades.
+          old_base='const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);'
+          if old_base not in app: raise SystemExit('base edge rule not found')
+          app=app.replace(old_base,'const minEdge=Math.max(3,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);',1)
+          old_explain="difference ${two(edge)} is inside this timeframe's measured uncertainty ${two(s.pressureUncertainty)}."
+          if old_explain not in app: raise SystemExit('base no-edge explanation not found')
+          app=app.replace(old_explain,'difference ${two(edge)} does not exceed the adaptive edge requirement ${two(minEdge)} (measured uncertainty ${two(s.pressureUncertainty)}).',1)
+
+          gate_start='  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;'
+          gs=app.find(gate_start)
+          if gs < 0: raise SystemExit('strict evidence block start not found')
+          gate_end='  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,oppositeConflicts,requiredScore,requiredEdge,edge};'
+          ge=app.find(gate_end,gs)
+          if ge < 0: raise SystemExit('strict evidence block end not found')
+          ge += len(gate_end)
+          new_gate="""  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;
+          const tacticalPass=['liquidity','breakout','zone','smc','ict'].filter(k=>checks[k]>=54).length;
+          const structuralPass=['structure','breakout','zone','smc','ict'].filter(k=>checks[k]>=56).length;
+          const corePass=['trend','structure','momentum'].filter(k=>checks[k]>=52).length;
+          const strongReference=Math.max(0,...referenceScores)>=62;
+          const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
+          const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(3,(Number(st.pressureUncertainty)||0)*.85),requiredScore=62+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
+          const ok=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+          let reason='Reference-weighted confirmation passed';
+          if(corePass<2)reason=`Only ${corePass}/3 core direction confirmations passed`;
+          else if(tacticalPass<2)reason=`Only ${tacticalPass}/5 tactical confirmations passed`;
+          else if(structuralPass<2)reason=`Only ${structuralPass}/5 structural/reference confirmations passed`;
+          else if(referencePass<3)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
+          else if(!strongReference)reason='No strong runtime reference confirmation reached 62/100';
+          else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
+          else if(score<requiredScore)reason=`Signal quality ${score} is below adaptive ${requiredScore} requirement for ${session?.name||'current session'}`;
+          else if(edge<=requiredEdge)reason=`Directional edge ${two(edge)} is not above adaptive uncertainty requirement ${two(requiredEdge)}`;
+          return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,structuralPass,corePass,strongReference,oppositeConflicts,requiredScore,requiredEdge,edge};"""
+          app=app[:gs]+new_gate+app[ge:]
+          app_path.write_text(app,encoding='utf-8',newline='\n')
+
+          css_path=Path('web/styles.css')
+          css=css_path.read_text(encoding='utf-8')
+          old_css='.confirmationsInside .detailText{max-height:230px;overflow:auto;padding-right:4px}'
+          if old_css not in css: raise SystemExit('confirmation scroll CSS rule not found')
+          css=css.replace(old_css,'.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}',1)
+          css_path.write_text(css,encoding='utf-8',newline='\n')
+
+          Path('VERSION').write_text('V.56.23\n',encoding='utf-8',newline='\n')
+          replacements={
+              'license_auth.go':(r'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.23"'),
+              'updater.go':(r'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.23"'),
+              'webview2_host.go':(r'Version: V\.[0-9.]+','Version: V.56.23'),
+              'web/index.html':(r'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.23<'),
+          }
+          for fn,(pat,rep) in replacements.items():
+              p=Path(fn); s=p.read_text(encoding='utf-8'); s,n=re.subn(pat,rep,s,count=1)
+              if n != 1: raise SystemExit(f'version replacement failed: {fn}')
+              p.write_text(s,encoding='utf-8',newline='\n')
+
+          pub_path=Path('.github/workflows/publish-v563.yml')
+          pub=pub_path.read_text(encoding='utf-8')
+          pub=pub.replace('V.56.22','V.56.23').replace('V5622','V5623')
+          old_markers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5'"
+          new_markers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623'"
+          if old_markers not in pub: raise SystemExit('publisher old safety markers not found')
+          pub=pub.replace(old_markers,new_markers,1)
+          pub,n=re.subn(r"notes='[^']*'","notes='V.56.23 restores compact direct best-match confirmations without an internal scrollbar, finishes the visible analysis before signal handoff, and rebalances signal qualification around core direction, structure and reference evidence while preserving independent market consensus, active-trade safety, lot-size, SL adjustment, Partial TP and Fast Scalping.'",pub,count=1)
+          if n != 1: raise SystemExit('publisher release notes update failed')
+          pub_path.write_text(pub,encoding='utf-8',newline='\n')
+          PY
+
+      - name: Validate V.56.23 source and unchanged protected controls
+        shell: bash
         run: |
-          $ErrorActionPreference='Stop'
-          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.56.23'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
-          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.23"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
-          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.23"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
-          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'Version: V\.[0-9.]+','Version: V.56.23');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
-          $p='web/index.html';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.23<',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
-          $p='.github/workflows/publish-v563.yml';$y=Get-Content -Raw -Encoding UTF8 $p
-          $y=$y.Replace('V.56.22','V.56.23').Replace('V5622','V5623')
-          $oldMarkers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5'"
-          $newMarkers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623'"
-          if(-not $y.Contains($oldMarkers)){throw 'publisher old safety markers not found'}
-          $y=$y.Replace($oldMarkers,$newMarkers)
-          $notesPattern="notes='[^']*'"
-          $notes="notes='V.56.23 restores compact direct best-match confirmations without an internal scrollbar, finishes the visible analysis before signal handoff, and rebalances signal qualification around core direction, structure and reference evidence while preserving independent market consensus, active-trade safety, lot-size, SL adjustment, Partial TP and Fast Scalping.'"
-          $y=[regex]::Replace($y,$notesPattern,$notes,1)
-          [IO.File]::WriteAllText((Join-Path $PWD $p),$y,(New-Object Text.UTF8Encoding($false)))
-
-      - name: Validate only requested V.56.23 changes
-        shell: powershell
-        run: |
-          $ErrorActionPreference='Stop'
+          set -euo pipefail
           node --check web/app.js
-          if($LASTEXITCODE -ne 0){throw 'app.js syntax validation failed'}
-          $app=Get-Content -Raw web\app.js
-          foreach($m in @('bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3)','join('' — '')','waitForUiCommitV5623','try{await dispatchUniqueSignalV36(d)}','const minEdge=Math.max(3,s.pressureUncertainty*.75)','corePass>=2','tacticalPass>=2','structuralPass>=2','referencePass>=3','strongReference','independentMarketConsensus','STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','feedUnavailable')){if(-not $app.Contains($m)){throw "V.56.23 marker missing: $m"}}
-          $css=Get-Content -Raw web\styles.css
-          if(-not $css.Contains('.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}')){throw 'compact confirmations CSS missing'}
-          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.23'){throw 'VERSION mismatch'}
-          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.23"')){throw 'license version mismatch'}
-          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.23"')){throw 'updater version mismatch'}
-          $html=Get-Content -Raw web\index.html
-          if($html.Contains('/v562-text-fix.js')){throw 'runtime text patch must remain disabled'}
-          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot mapping changed unexpectedly: $m"}}
-          if(-not (Get-Content -Raw ea_signal_bridge.go).Contains('ACTIVE_TRADE_REVERSAL_LOCK')){throw 'EA reversal lock missing'}
-          if(-not (Get-Content -Raw ea_modes_v558.go).Contains('FAST_ACTIVE_EXPOSURE_LOCK')){throw 'Fast exposure lock missing'}
-          $pub=Get-Content -Raw .github\workflows\publish-v563.yml
-          foreach($m in @('V.56.23','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623')){if(-not $pub.Contains($m)){throw "publisher validation missing: $m"}}
+          python - <<'PY'
+          from pathlib import Path
+          app=Path('web/app.js').read_text(encoding='utf-8')
+          css=Path('web/styles.css').read_text(encoding='utf-8')
+          required=[
+              'bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3)',
+              "join(' — ')",
+              'waitForUiCommitV5623',
+              'try{await dispatchUniqueSignalV36(d)}',
+              'const minEdge=Math.max(3,s.pressureUncertainty*.75)',
+              'corePass>=2','tacticalPass>=2','structuralPass>=2','referencePass>=3','strongReference',
+              'independentMarketConsensus','STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','feedUnavailable',
+              'if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;'
+          ]
+          missing=[x for x in required if x not in app]
+          if missing: raise SystemExit('missing V.56.23/protected markers: '+repr(missing))
+          if '.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}' not in css:
+              raise SystemExit('compact confirmations CSS missing')
+          if Path('VERSION').read_text(encoding='utf-8').strip()!='V.56.23': raise SystemExit('VERSION mismatch')
+          if 'const licAppVersion = "V.56.23"' not in Path('license_auth.go').read_text(encoding='utf-8'): raise SystemExit('license version mismatch')
+          if 'const mhPublicVersionV001 = "V.56.23"' not in Path('updater.go').read_text(encoding='utf-8'): raise SystemExit('updater version mismatch')
+          if '/v562-text-fix.js' in Path('web/index.html').read_text(encoding='utf-8'): raise SystemExit('runtime text patch must remain disabled')
+          if 'ACTIVE_TRADE_REVERSAL_LOCK' not in Path('ea_signal_bridge.go').read_text(encoding='utf-8'): raise SystemExit('EA reversal lock missing')
+          if 'FAST_ACTIVE_EXPOSURE_LOCK' not in Path('ea_modes_v558.go').read_text(encoding='utf-8'): raise SystemExit('Fast exposure lock missing')
+          pub=Path('.github/workflows/publish-v563.yml').read_text(encoding='utf-8')
+          for x in ['V.56.23','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623']:
+              if x not in pub: raise SystemExit('publisher marker missing: '+x)
+          PY
           go test ./...
-          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
 
       - name: Commit V.56.23 source
         shell: bash
