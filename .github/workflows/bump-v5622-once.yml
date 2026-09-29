@@ -1,0 +1,116 @@
+name: Fix source characters and bump V5622 once
+
+on:
+  push:
+    branches: [v56.3-release]
+    paths:
+      - '.github/workflows/bump-v5622-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Permanently fix Analysis Details and moving ticker source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $path='web/index.html'
+          $html=Get-Content -Raw -Encoding UTF8 $path
+
+          # Do not load any runtime character-repair patch.
+          $html=$html.Replace('<script src="/v562-text-fix.js"></script>','')
+
+          # Analysis Details: all initial placeholders are clean HTML entities in source.
+          $detailIds=@('detailRegime','detailTrend','detailVol','detailRisk','detailStructure','detailPressure','indAdx','indDi','indVwap','indOb','indFvg','indDiv','indSmc','indIct','indRisk','lvlEntry','lvlSl','lvlTp1','lvlTp2','lvlEq','lvlZones')
+          foreach($id in $detailIds){
+            $pattern='(<b id="'+[regex]::Escape($id)+'">).*?(</b>)'
+            $html=[regex]::Replace($html,$pattern,'$1&mdash;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+          }
+
+          # Moving price bar values: clean dash before live prices arrive.
+          $tickerIds=@('tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY')
+          foreach($id in $tickerIds){
+            $pattern='(<span id="'+[regex]::Escape($id)+'">).*?(</span>)'
+            $html=[regex]::Replace($html,$pattern,'$1&mdash;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+          }
+
+          # Moving price bar icons: use ASCII-safe HTML entities directly in source.
+          $html=[regex]::Replace($html,'(<i class="assetIcon goldAsset">).*?(</i>)','$1&#9679;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+          $html=[regex]::Replace($html,'(<i class="assetIcon btcAsset">).*?(</i>)','$1&#8383;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+          $html=[regex]::Replace($html,'(<i class="assetIcon ethAsset">).*?(</i>)','$1&#9670;$2',[System.Text.RegularExpressions.RegexOptions]::Singleline)
+
+          function Set-FxIcon([string]$pair,[string]$entity){
+            $script:html=[regex]::Replace($script:html,
+              '(<div class="tickerCell"><i class="assetIcon fxAsset">).*?(</i><div><b>'+[regex]::Escape($pair)+'</b>)',
+              ('$1'+$entity+'$2'),
+              [System.Text.RegularExpressions.RegexOptions]::Singleline)
+          }
+          Set-FxIcon 'EURUSD' '&euro;'
+          Set-FxIcon 'USDJPY' '&yen;'
+          Set-FxIcon 'GBPUSD' '&pound;'
+          Set-FxIcon 'GBPJPY' '&pound;'
+
+          [IO.File]::WriteAllText((Join-Path $PWD $path),$html,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Update application identities to V.56.22
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.56.22'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.22"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.22"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'Version: V\.[0-9.]+','Version: V.56.22');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.22<',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Validate permanent source fix and unchanged trading engine
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $html=Get-Content -Raw web\index.html
+          if($html.Contains('/v562-text-fix.js')){throw 'runtime character patch is still referenced'}
+          $details=[regex]::Match($html,'<section class="panel detailsPanel">.*?</section>','Singleline').Value
+          $ticker=[regex]::Match($html,'<section class="cleanTicker panel movingTicker".*?</section>','Singleline').Value
+          if([string]::IsNullOrWhiteSpace($details)){throw 'Analysis Details section missing'}
+          if([string]::IsNullOrWhiteSpace($ticker)){throw 'Moving ticker section missing'}
+          foreach($bad in @('Ã','Â','Æ','â')){
+            if($details.Contains($bad)){throw "Analysis Details still contains mojibake: $bad"}
+            if($ticker.Contains($bad)){throw "Moving ticker still contains mojibake: $bad"}
+          }
+          foreach($id in @('detailRegime','detailTrend','detailVol','detailRisk','detailStructure','detailPressure','indAdx','indDi','indVwap','indOb','indFvg','indDiv','indSmc','indIct','indRisk','lvlEntry','lvlSl','lvlTp1','lvlTp2','lvlEq','lvlZones')){
+            if($details -notmatch ('id="'+[regex]::Escape($id)+'">&mdash;<')){throw "Analysis Details placeholder not fixed: $id"}
+          }
+          foreach($id in @('tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY')){
+            if($ticker -notmatch ('id="'+[regex]::Escape($id)+'">&mdash;<')){throw "Ticker placeholder not fixed: $id"}
+          }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.22'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.22"')){throw 'license mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.22"')){throw 'updater mismatch'}
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5')){if(-not $app.Contains($m)){throw "signal safety marker missing: $m"}}
+          if(-not (Get-Content -Raw ea_signal_bridge.go).Contains('ACTIVE_TRADE_REVERSAL_LOCK')){throw 'EA reversal lock missing'}
+          if(-not (Get-Content -Raw ea_modes_v558.go).Contains('FAST_ACTIVE_EXPOSURE_LOCK')){throw 'Fast exposure lock missing'}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Commit V.56.22 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION license_auth.go updater.go webview2_host.go web/index.html
+          git commit -m 'Fix initial characters in source and bump MH Analysis V.56.22'
+          git push origin HEAD:v56.3-release
