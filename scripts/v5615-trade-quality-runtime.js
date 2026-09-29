@@ -28,15 +28,15 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   s=s.replace(old,neu);write(p,s);
 }
 
-// V56.15: keep the signal selective without a blunt hard threshold. Top setups
-// still lead, but broader indications/reference families now contribute so one
-// isolated spike cannot dominate the whole decision.
+// V56.15: keep the signal selective without a blunt hard threshold. V56.9 already
+// calibrates family/direction weights; retain that calibration while adding broader
+// indication/reference consensus so one isolated top-family spike cannot dominate.
 {
   const p='web/app.js';let s=read(p);
-  const old="function aggregate(fs){if(!fs.length)return[50,[]];const r=fs.slice().sort((a,b)=>b.score-a.score),top=r.slice(0,5),weights=top.map((_,i)=>top.length-i),score=top.reduce((s,x,i)=>s+x.score*weights[i],0)/weights.reduce((a,b)=>a+b,0);return[score,r]}";
-  must(s,old,'aggregate');
-  const neu="function aggregate(fs){if(!fs.length)return[50,[]];const r=fs.slice().sort((a,b)=>b.score-a.score),top=r.slice(0,5),weights=top.map((_,i)=>top.length-i),topScore=top.reduce((z,x,i)=>z+x.score*weights[i],0)/Math.max(1,weights.reduce((a,b)=>a+b,0)),broad=r.slice(0,Math.min(12,r.length)),broadAvg=avg(broad.map(x=>x.score)),support=broad.filter(x=>x.score>=58).length/Math.max(1,broad.length),consensus=40+support*60,score=topScore*.78+broadAvg*.17+consensus*.05;return[score,r]}";
-  s=s.replace(old,neu);write(p,s);
+  const re=/function aggregate\(fs\)\{[^\n]*\}/;
+  if(!re.test(s))throw new Error('aggregate function not found');
+  const neu="function aggregate(fs){if(!fs.length)return[50,[]];const r=fs.slice().sort((a,b)=>b.score-a.score),top=r.slice(0,5),weights=top.map((x,i)=>(top.length-i)*v569FamilyMultiplier(x)),topScore=top.reduce((z,x,i)=>z+x.score*weights[i],0)/Math.max(1,weights.reduce((a,b)=>a+b,0)),broad=r.slice(0,Math.min(12,r.length)),broadAvg=avg(broad.map(x=>x.score)),support=broad.filter(x=>x.score>=58).length/Math.max(1,broad.length),consensus=40+support*60,blended=topScore*.78+broadAvg*.17+consensus*.05,dir=top[0]?.direction||'',score=50+(blended-50)*v569DirectionalMultiplier(dir);return[smooth(score),r]}";
+  s=s.replace(re,neu);write(p,s);
 }
 
 // V56.15: EA handoff is the primary action. A Records write must never prevent a
@@ -58,7 +58,8 @@ function must(s,n,l){if(!s.includes(n))throw new Error(l+' marker not found')}
   must(s,'[70,30].forEach','RSI 70/30 guides');
   must(s,'Number(x?.t)>born','post-signal lifecycle touch');
   must(s,'topScore*.78+broadAvg*.17+consensus*.05','holistic aggregate');
+  must(s,'v569DirectionalMultiplier(dir)','V56.9 calibration preserved');
   must(s,'Pending handoff first: local Records bookkeeping is not allowed to block MT5.','EA-first handoff');
-  must(s,"generatedBase=`MH${stable}_${symbol}_${timeframe}`",'stable timeframe-ending signal id');
+  must(s,'generatedBase=`MH${stable}_${symbol}_${timeframe}`','stable timeframe-ending signal id');
 }
 console.log('V56.15 RSI + lifecycle + holistic signal + reliable EA handoff patch applied');
