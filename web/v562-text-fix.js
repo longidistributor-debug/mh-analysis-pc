@@ -1,15 +1,14 @@
 (()=>{
 'use strict';
-// V56.16: display-only repair for legacy mojibake text and missing market-ticker symbols.
+// V56.17: display-only repair for legacy mojibake text and missing market-ticker symbols.
+// Important: every DOM write is change-only and observer work is debounced so the
+// updater/login UI can never be starved by a self-triggering MutationObserver loop.
 // Trading, signal, EA, lot-size and SL logic are intentionally untouched.
 const root=document.querySelector('.appShell');
 if(!root)return;
 
 function cleanText(value){
   let s=String(value??'');
-
-  // Exact multi-encoded strings present in the legacy HTML/runtime output.
-  // Handle these first because they are the strings visible as Ãƒ.../EURÂ... in WebView2.
   const exact=[
     ['ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â','—'],
     ['ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢','•'],
@@ -23,8 +22,6 @@ function cleanText(value){
     ['ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¿','₿']
   ];
   for(const [from,to] of exact)s=s.split(from).join(to);
-
-  // Single/double encoded fallbacks retained for dynamic strings generated after load.
   const replacements=[
     [/\u2014/g,'—'],[/\u2013/g,'-'],[/\u2022/g,' • '],[/\u2026/g,'...'],
     [/\u00e2\u20ac\u201d/g,'—'],[/\u00e2\u20ac\u201c/g,'-'],[/\u00e2\u20ac\u00a2/g,' • '],[/\u00e2\u20ac\u00a6/g,'...'],
@@ -35,39 +32,32 @@ function cleanText(value){
     [/Ã¢â€šÂ¬/g,'€'],[/Â¥/g,'¥'],[/Â£/g,'£'],[/Â©/g,'©']
   ];
   for(const [re,to] of replacements)s=s.replace(re,to);
-
-  // Never leave the known broken encoding markers visible in normal UI text.
   if(/Ãƒ|Ã‚|Ã¢|Â¬|Â¢|Â|Âƒ/.test(s)){
-    s=s
-      .replace(/Ãƒ/g,'')
-      .replace(/Ã‚/g,'')
-      .replace(/Ã¢/g,'')
-      .replace(/Â¬/g,'')
-      .replace(/Â¢/g,'')
-      .replace(/Â/g,'')
-      .replace(/Âƒ/g,'');
+    s=s.replace(/Ãƒ/g,'').replace(/Ã‚/g,'').replace(/Ã¢/g,'').replace(/Â¬/g,'').replace(/Â¢/g,'').replace(/Â/g,'').replace(/Âƒ/g,'');
   }
   return s;
 }
 
-function set(selector,text){const el=document.querySelector(selector);if(el&&el.textContent!==text)el.textContent=text;}
+function setText(el,text){if(el&&el.textContent!==text){el.textContent=text;return true;}return false;}
+function set(selector,text){return setText(document.querySelector(selector),text);}
 
 function fixTickerIcons(){
-  document.querySelectorAll('.goldIcon,.goldAsset').forEach(el=>el.textContent='●');
-  document.querySelectorAll('.btcIcon,.btcAsset').forEach(el=>el.textContent='₿');
-  document.querySelectorAll('.ethAsset').forEach(el=>el.textContent='◆');
-  document.querySelectorAll('.capTitle .globe').forEach(el=>el.textContent='◉');
-
+  document.querySelectorAll('.goldIcon,.goldAsset').forEach(el=>setText(el,'●'));
+  document.querySelectorAll('.btcIcon,.btcAsset').forEach(el=>setText(el,'₿'));
+  document.querySelectorAll('.ethAsset').forEach(el=>setText(el,'◆'));
+  document.querySelectorAll('.capTitle .globe').forEach(el=>setText(el,'◉'));
   document.querySelectorAll('.tickerCell').forEach(cell=>{
     const label=(cell.querySelector('b')?.textContent||'').trim().toUpperCase();
     const icon=cell.querySelector('.assetIcon');
     if(!icon)return;
-    if(label==='GOLD')icon.textContent='●';
-    else if(label==='BTCUSD')icon.textContent='₿';
-    else if(label==='ETHUSD')icon.textContent='◆';
-    else if(label==='EURUSD')icon.textContent='€';
-    else if(label==='USDJPY')icon.textContent='¥';
-    else if(label==='GBPUSD'||label==='GBPJPY')icon.textContent='£';
+    let wanted='';
+    if(label==='GOLD')wanted='●';
+    else if(label==='BTCUSD')wanted='₿';
+    else if(label==='ETHUSD')wanted='◆';
+    else if(label==='EURUSD')wanted='€';
+    else if(label==='USDJPY')wanted='¥';
+    else if(label==='GBPUSD'||label==='GBPJPY')wanted='£';
+    if(wanted)setText(icon,wanted);
   });
 }
 
@@ -79,15 +69,13 @@ function fixKnownLabels(){
   set('.topSetupPanel h3','TOP SETUP');
   set('.recentPanel h3','RECENT SIGNALS');
   set('.liveDot','Interactive');
-
-  // Known empty-state placeholders that were stored as mojibake em-dashes.
   ['#mapRegime','#mapAdx','#mapVwap','#mapBullOb','#mapBearOb','#mapFvg','#mapEq','#mapRisk',
    '#buyScoreTop','#sellScoreTop','#signalQuality','#lastUpdate','#candleCount','#reasons',
    '#btcMarketCap','#totalMarketCap','#btcDominance','#btcChange']
-    .forEach(sel=>{const el=document.querySelector(sel);if(el&&/Ã|Â/.test(el.textContent))el.textContent='—';});
-
+    .forEach(sel=>{const el=document.querySelector(sel);if(el&&/Ã|Â/.test(el.textContent))setText(el,'—');});
   const footer=document.querySelector('.mhMainCopyright');
-  if(footer)footer.innerHTML='MH ANALYSIS By: Muhammad Hammad Shaukat - &copy; All Rights Reserved 2026';
+  const footerText='MH ANALYSIS By: Muhammad Hammad Shaukat - © All Rights Reserved 2026';
+  if(footer&&footer.textContent!==footerText)footer.textContent=footerText;
   fixTickerIcons();
 }
 
@@ -96,19 +84,24 @@ function walk(node){
   let n;
   while((n=w.nextNode())){
     const parent=n.parentElement;
-    // Preserve the Arabic Bismillah block exactly as authored.
     if(!parent||parent.closest('.bismillahArea'))continue;
     const next=cleanText(n.nodeValue);
     if(next!==n.nodeValue)n.nodeValue=next;
   }
 }
 
-let applying=false;
+let applying=false,queued=false;
 function apply(){
   if(applying)return;
   applying=true;
   try{fixKnownLabels();walk(root);}finally{applying=false;}
 }
+function queueApply(){
+  if(queued)return;
+  queued=true;
+  setTimeout(()=>{queued=false;apply();},40);
+}
 apply();
-new MutationObserver(()=>apply()).observe(root,{subtree:true,childList:true,characterData:true});
+const observer=new MutationObserver(queueApply);
+observer.observe(root,{subtree:true,childList:true,characterData:true});
 })();
