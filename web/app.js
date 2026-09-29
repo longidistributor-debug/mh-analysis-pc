@@ -306,8 +306,10 @@ const corePass=['trend','structure','momentum'].filter(k=>checks[k]>=52).length;
 const strongReference=Math.max(0,...referenceScores)>=62;
 const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
 const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(3,(Number(st.pressureUncertainty)||0)*.85),requiredScore=62+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
-const ok=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
-let reason='Reference-weighted confirmation passed';
+const standardSetupV5624=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+const bestSetupV5624=score>=70&&corePass>=2&&structuralPass>=2&&referencePass>=3&&oppositeConflicts===0&&edge>requiredEdge;
+const ok=standardSetupV5624||bestSetupV5624;
+let reason=bestSetupV5624&&!standardSetupV5624?'Best setup confirmed by direction, structure and references':'Reference-weighted confirmation passed';
 if(corePass<2)reason=`Only ${corePass}/3 core direction confirmations passed`;
 else if(tacticalPass<2)reason=`Only ${tacticalPass}/5 tactical confirmations passed`;
 else if(structuralPass<2)reason=`Only ${structuralPass}/5 structural/reference confirmations passed`;
@@ -498,6 +500,34 @@ function updateSignalHeadline(d){
   el.textContent=`${sig.direction} ${sig.score}/100 • ENTRY ${fmt(sig.entry)} • SL ${fmt(sig.sl)} • TP1 ${fmt(sig.tp1)} • TP2 ${fmt(sig.tp2)} • RR ${rr.toFixed(2)} : 1 • ${d.bestFamily||'Best current setup'}   `;
 }
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function cleanConfirmationTextV5624(v){
+  return String(v??'')
+    .replace(/\bvideos?\b/gi,'reference')
+    .replace(/\bfcs\b/gi,'market data')
+    .replace(/\bapis?\b/gi,'market data')
+    .replace(/\bwidgets?\b/gi,'market view')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function renderConfirmationsV5624(d){
+  const root=$('#reasons');if(!root)return;
+  const confirmations=(d?.reasons||[]).filter(Boolean).slice(0,5);
+  const warnings=(d?.warnings||[]).filter(Boolean).slice(0,2);
+  const rows=[
+    ...confirmations.map((text,i)=>({label:`CONFIRMATION ${i+1}`,text,warn:false})),
+    ...warnings.map((text,i)=>({label:`WARNING ${i+1}`,text,warn:true}))
+  ];
+  root.className='detailText confirmationRowsV5624';
+  root.replaceChildren();
+  if(!rows.length){root.textContent='—';return}
+  for(const row of rows){
+    const line=document.createElement('div');line.className=`confirmationRowV5624${row.warn?' warningRowV5624':''}`;
+    const head=document.createElement('span');head.className='confirmationHeadV5624';head.textContent=row.label;
+    const arrow=document.createElement('span');arrow.className='confirmationArrowV5624';arrow.textContent='>';
+    const detail=document.createElement('span');detail.className='confirmationDetailV5624';detail.textContent=cleanConfirmationTextV5624(row.text);
+    line.append(head,arrow,detail);root.appendChild(line);
+  }
+}
 function renderDecision(d,reason,mode='NEW'){
   lastDecision.set(keyFor(),d);chartDecision=d;window.__MH_LAST_DECISION__=d;renderSignalLevels();const sig=d.signal,b=$('#signalBadge'),q=$('#signalQuality'),plan=$('#plan'),card=$('#signalCard');
   if(sig){
@@ -514,10 +544,7 @@ function renderDecision(d,reason,mode='NEW'){
   }
   $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');
   $('#explanation').className='detailText';$('#explanation').textContent=reason||d.explanation;
-  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
-const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
-$('#reasons').className='detailText';
-$('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';
+  renderConfirmationsV5624(d);
   renderTopMap(d);renderTopSetups(d);if(mode!=='VIEW')addRecent(d,mode);updateSignalHeadline(d);
 }
 function buildRankedForUi(c,d){try{const m=d.map,s=stats(c),fs=[...trendFamilies(c,m,s),...structureFamilies(c,m,s),...liquidityFamilies(c,m,s),...breakoutFamilies(c,m,s),...reversalFamilies(c,m,s),...zoneFamilies(c,m,s),...momentumFamilies(c,m,s),...smcIctFamilies(c,m,s),...videoFamilies(c,m,s)];const dir=d.signal?.direction||(d.buyScore>=d.sellScore?'BUY':'SELL');return fs.filter(x=>x.direction===dir).sort((a,b)=>b.score-a.score)}catch(e){return[]}}
@@ -581,7 +608,7 @@ async function refreshPublicTicker(){
     if(r.ok){
       try{localStorage.setItem('mh-public-ticker-stable',JSON.stringify(j));applyTickerCacheV549(j)}catch(e){}
       savePersistentUICacheV5411({ticker:j});
-      if(Number.isFinite(Number(j.gold_usd))&&Number(j.gold_usd)>0){publicGoldPrice=Number(j.gold_usd);$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`;if(symbol==='XAUUSD')renderGoldMetrics();}
+      if(Number.isFinite(Number(j.gold_usd))&&Number(j.gold_usd)>0){publicGoldPrice=Number(j.gold_usd);$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`;if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624();}
       if(Number.isFinite(Number(j.btc_usd)))$('#tickerBTC').textContent=`$${Number(j.btc_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.btc_change_24h))?` • ${Number(j.btc_change_24h)>=0?'+':''}${Number(j.btc_change_24h).toFixed(2)}%`:''}`;
       if(Number.isFinite(Number(j.eth_usd)))$('#tickerETH').textContent=`$${Number(j.eth_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.eth_change_24h))?` • ${Number(j.eth_change_24h)>=0?'+':''}${Number(j.eth_change_24h).toFixed(2)}%`:''}`;
       if(Number.isFinite(Number(j.eurusd)))$('#tickerEURUSD').textContent=Number(j.eurusd).toFixed(5);
@@ -625,7 +652,24 @@ function renderGoldMetrics(){
   const last=arr.at(-1),cut=last.t-86400,day=arr.filter(x=>x.t>=cut),w=day.length?day:arr.slice(-Math.min(arr.length,96)),first=w[0],hi=Math.max(...w.map(x=>x.h)),lo=Math.min(...w.map(x=>x.l)),base=Number(first?.o)||Number(first?.c)||last.c,ch=base?((last.c-base)/base)*100:0;
   $('#btcMarketCap').textContent=`$${fmt(last.c)}`;$('#totalMarketCap').textContent=`$${fmt(hi)}`;$('#btcDominance').textContent=`$${fmt(lo)}`;const el=$('#btcChange');el.textContent=`${ch>=0?'+':''}${ch.toFixed(2)}%`;el.className=ch>=0?'good':'bad';$('#tickerGold').textContent=`$${fmt(last.c)}`;
 }
-async function refreshMarketCap(){if(symbol==='XAUUSD'){renderGoldMetrics();return}setTopMetricLabels('CRYPTO DATA','BTC M.CAP','TOTAL CRYPTO','BTC.D','BTC 24H');try{const r=await fetch('/api/marketcap',{cache:'no-store'}),j=await r.json();if(!r.ok)throw new Error();$('#btcMarketCap').textContent=capFmt(j.btc_market_cap);$('#totalMarketCap').textContent=capFmt(j.total_market_cap);$('#btcDominance').textContent=Number.isFinite(Number(j.btc_dominance))?`${Number(j.btc_dominance).toFixed(1)}%`:'—';const ch=Number(j.btc_change_24h),el=$('#btcChange');el.textContent=Number.isFinite(ch)?`${ch>=0?'+':''}${ch.toFixed(2)}%`:'—';el.className=Number.isFinite(ch)?(ch>=0?'good':'bad'):''}catch(e){$('#btcMarketCap').textContent='Unavailable';$('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—'}}
+function renderBTCMetricsV5624(){
+  setTopMetricLabels('BTCUSDT DATA','PRICE','24H HIGH','24H LOW','24H CHANGE');
+  const k=`BTCUSDT|${timeframe}`;
+  const arr=(candleCache.get(k)||restoreCandles(k)||[]).map(normalizeCandle).filter(Boolean).sort((a,b)=>a.t-b.t);
+  if(!arr.length){
+    $('#btcMarketCap').textContent='—';$('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—';$('#btcChange').className='';
+    return;
+  }
+  const last=arr.at(-1),cut=last.t-86400,day=arr.filter(x=>x.t>=cut),w=day.length?day:arr.slice(-Math.min(arr.length,96)),first=w[0];
+  const hi=Math.max(...w.map(x=>x.h)),lo=Math.min(...w.map(x=>x.l)),base=Number(first?.o)||Number(first?.c)||last.c,ch=base?((last.c-base)/base)*100:0;
+  $('#btcMarketCap').textContent=`$${fmt(last.c)}`;$('#totalMarketCap').textContent=`$${fmt(hi)}`;$('#btcDominance').textContent=`$${fmt(lo)}`;
+  const el=$('#btcChange');el.textContent=`${ch>=0?'+':''}${ch.toFixed(2)}%`;el.className=ch>=0?'good':'bad';
+  const ticker=$('#tickerBTC');if(ticker)ticker.textContent=`$${fmt(last.c)}`;
+}
+async function refreshMarketCap(){
+  if(symbol==='XAUUSD'){renderGoldMetrics();return}
+  if(symbol==='BTCUSDT'){renderBTCMetricsV5624();return}
+}
 
 
 function lotForSignalScore(score){
@@ -1067,6 +1111,7 @@ async function contextChanged(){
   // fetchCandles/loadContextChart/refreshMarketCap or any history endpoint here.
   loadChart();
   resetViewForContext();
+  if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624(); // V5624_SELECTED_SYMBOL_METRICS
   const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
 }
 

@@ -89,7 +89,7 @@ func main() {
 	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
 	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
 	mux.HandleFunc("/api/settings", settingsHandler)
-	mux.HandleFunc("/api/history", historyHandler)
+	mux.HandleFunc("/api/history", desktopHistoryHandler) // V5624_SYMBOL_SCOPED_HISTORY_CACHE
 	mux.HandleFunc("/api/public-ticker", publicTickerHandlerV5411)
 	mux.HandleFunc("/api/ui-cache", uiCacheHandlerV5411)
 	mux.HandleFunc("/api/marketcap", marketcapHandler)
@@ -255,7 +255,7 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sym := strings.ToUpper(strings.TrimSpace(q.Symbol))
-	per := normalizePeriod(q.Period)
+	per := normalizeHistoryPeriodV5624(sym, q.Period)
 	var endpoint string
 	var fcsSym, typ string
 	if sym == "XAUUSD" {
@@ -265,7 +265,7 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	} else if sym == "BTCUSDT" {
 		endpoint = "https://api-v4.fcsapi.com/crypto/history"
 		fcsSym = "BINANCE:BTCUSDT"
-		typ = "crypto"
+		typ = "" // V5624: crypto history uses exchange-prefixed symbol; no redundant type filter
 	} else {
 		w.WriteHeader(400)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "Unsupported symbol"})
@@ -276,7 +276,9 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 	z.Set("access_key", v.APIKey)
 	z.Set("symbol", fcsSym)
 	z.Set("period", per)
-	z.Set("type", typ)
+	if typ != "" {
+		z.Set("type", typ)
+	}
 	z.Set("length", "300")
 	z.Set("is_chart", "0")
 	u.RawQuery = z.Encode()
@@ -311,6 +313,19 @@ func historyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"candles": cs, "meta": map[string]any{"source": "direct history", "symbol": sym, "period": q.Period, "count": len(cs)}})
+}
+func normalizeHistoryPeriodV5624(sym, s string) string {
+	tf := strings.ToLower(strings.TrimSpace(s))
+	if strings.EqualFold(strings.TrimSpace(sym), "BTCUSDT") {
+		if tf == "60m" {
+			return "1h"
+		}
+		switch tf {
+		case "1m", "5m", "15m", "30m", "1h":
+			return tf
+		}
+	}
+	return normalizePeriod(tf)
 }
 func normalizePeriod(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))

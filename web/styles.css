@@ -43,3 +43,12 @@
 
 /* v79.4 editable settings */
 .clearSettingsRow{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}.dangerBtn{border-color:#71323b!important;color:#ff9ba4!important;background:#16090c!important}.modalCard input{user-select:text!important;-webkit-user-select:text!important;pointer-events:auto!important;caret-color:#30e89a}.modalCard input:focus{outline:2px solid #1f8d70;outline-offset:1px}
+/* V.56.24 organized confirmation/warning rows */
+.confirmationsInside h4{color:#5ee7a2!important}
+.confirmationRowsV5624{display:flex!important;flex-direction:column;gap:7px;max-height:none!important;overflow:visible!important;padding-right:0!important}
+.confirmationRowV5624{display:grid;grid-template-columns:minmax(112px,max-content) 14px minmax(0,1fr);align-items:start;gap:7px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06);line-height:1.35}
+.confirmationRowV5624:last-child{border-bottom:0}
+.confirmationHeadV5624{color:#5ee7a2;font-weight:800;font-size:11px;letter-spacing:.35px;white-space:nowrap}
+.confirmationArrowV5624{color:#5ee7a2;font-weight:900;text-align:center}
+.confirmationDetailV5624{color:#eef5ff;min-width:0;overflow-wrap:anywhere}
+.warningRowV5624 .confirmationHeadV5624,.warningRowV5624 .confirmationArrowV5624{color:#ffbd72}
