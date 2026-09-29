@@ -53,25 +53,30 @@
     }catch(e){starting=false;title.textContent='Update Failed';sub.textContent='Update could not start.';btn.style.display='inline-block';btn.disabled=false;btn.textContent='Retry Update';state.textContent='Your saved MH Analysis data remains unchanged.';}
   }
 
-  async function checkVersion(){
+  async function checkVersion(silent=false){
     if(checking||starting)return;checking=true;
-    document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking for Updates';sub.textContent='Please wait…';btn.style.display='none';retry.classList.remove('show');wrap.classList.remove('show');state.textContent='Checking the MH Analysis update manifest before login…';
+    if(!silent){
+      document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking for Updates';sub.textContent='Please wait…';btn.style.display='none';retry.classList.remove('show');wrap.classList.remove('show');state.textContent='Checking the MH Analysis update manifest before login…';
+    }
     try{
       const r=await fetch('/api/update/status',{cache:'no-store'});
       if(!r.ok)throw new Error('offline');
       const j=await r.json();
       setLatest(j.latest);
-      if(!j.verified){noInternet();return}
+      if(!j.verified){if(!silent)noInternet();return}
       if(j.required){
         showGate();title.textContent='Update Available';sub.textContent=`${j.latest||'A newer version'} is available. Updating MH Analysis now…`;state.textContent='Your login, Records, WhatsApp settings and saved data will remain unchanged.';
         checking=false;await startUpdate();return;
       }
-      hideGate();document.body.classList.remove('mhUpdateCheckingV001');
-    }catch(_){noInternet()}
+      if(!silent){hideGate();document.body.classList.remove('mhUpdateCheckingV001');}
+    }catch(_){if(!silent)noInternet()}
     finally{checking=false}
   }
 
   btn.addEventListener('click',startUpdate);
-  retry.addEventListener('click',checkVersion);
-  checkVersion();
+  retry.addEventListener('click',()=>checkVersion(false));
+  checkVersion(false);
+  setInterval(()=>checkVersion(true),60000);
+  window.addEventListener('focus',()=>checkVersion(true));
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkVersion(true)});
 })();
