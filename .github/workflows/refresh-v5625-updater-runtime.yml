@@ -1,3 +1,4 @@
+# trigger: refreshed updater runtime build
 name: Refresh V5625 Updater Runtime
 
 on:
