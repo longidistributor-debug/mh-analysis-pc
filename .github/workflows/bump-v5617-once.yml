@@ -71,4 +71,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add VERSION license_auth.go updater.go web/index.html webview2_host.go
           git commit -m 'Release MH Analysis V.56.17 source' || true
-          git push origin v56.3-release
+          git fetch origin v56.3-release
+          git rebase origin/v56.3-release
+          git push origin HEAD:v56.3-release
