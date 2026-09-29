@@ -1,0 +1,276 @@
+name: BTC chart confirmations and balanced signal bump V5624 once
+
+on:
+  push:
+    branches: [v56.3-release]
+    paths:
+      - '.github/workflows/bump-v5624-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply only V.56.24 requested changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          app_path=Path('web/app.js')
+          app=app_path.read_text(encoding='utf-8')
+
+          # 1) Confirmation/Warning rows: organized green labels + > + details.
+          # Display-only wording scrub for this box: never show video/FCS/API/widget words.
+          helper_anchor='function renderDecision(d,reason,mode=\'NEW\'){'
+          if 'function cleanConfirmationTextV5624(' not in app:
+              if helper_anchor not in app:
+                  raise SystemExit('renderDecision anchor not found')
+              helper="""function cleanConfirmationTextV5624(v){
+            return String(v??'')
+              .replace(/\\bvideos?\\b/gi,'reference')
+              .replace(/\\bfcs\\b/gi,'market data')
+              .replace(/\\bapis?\\b/gi,'market data')
+              .replace(/\\bwidgets?\\b/gi,'market view')
+              .replace(/\\s+/g,' ')
+              .trim();
+          }
+          function renderConfirmationsV5624(d){
+            const root=$('#reasons');if(!root)return;
+            const confirmations=(d?.reasons||[]).filter(Boolean).slice(0,5);
+            const warnings=(d?.warnings||[]).filter(Boolean).slice(0,2);
+            const rows=[
+              ...confirmations.map((text,i)=>({label:`CONFIRMATION ${i+1}`,text,warn:false})),
+              ...warnings.map((text,i)=>({label:`WARNING ${i+1}`,text,warn:true}))
+            ];
+            root.className='detailText confirmationRowsV5624';
+            root.replaceChildren();
+            if(!rows.length){root.textContent='—';return}
+            for(const row of rows){
+              const line=document.createElement('div');line.className=`confirmationRowV5624${row.warn?' warningRowV5624':''}`;
+              const head=document.createElement('span');head.className='confirmationHeadV5624';head.textContent=row.label;
+              const arrow=document.createElement('span');arrow.className='confirmationArrowV5624';arrow.textContent='>';
+              const detail=document.createElement('span');detail.className='confirmationDetailV5624';detail.textContent=cleanConfirmationTextV5624(row.text);
+              line.append(head,arrow,detail);root.appendChild(line);
+            }
+          }
+          """
+              app=app.replace(helper_anchor,helper+helper_anchor,1)
+
+          old_confirm="""  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
+          const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
+          $('#reasons').className='detailText';
+          $('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';"""
+          # V.56.23 indentation became partially flattened, so accept exact flattened form too.
+          old_confirm_flat="""  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
+          const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
+          $('#reasons').className='detailText';
+          $('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';"""
+          if "renderConfirmationsV5624(d);" not in app:
+              pattern=re.compile(r"  const bestMatches=\(d\.reasons\|\|\[\]\)\.filter\(Boolean\)\.slice\(0,3\);\s*const topWarnings=\(d\.warnings\|\|\[\]\)\.filter\(Boolean\)\.slice\(0,1\);\s*\$\('#reasons'\)\.className='detailText';\s*\$\('#reasons'\)\.textContent=\[\.\.\.bestMatches,\.\.\.topWarnings\.map\(x=>`Warning: \$\{x\}`\)\]\.join\(' — '\)\|\|'—';")
+              app,n=pattern.subn("  renderConfirmationsV5624(d);",app,count=1)
+              if n!=1:
+                  raise SystemExit('V.56.23 confirmation paragraph renderer not found')
+
+          # 2) BTC selected-symbol top bar. Never leave XAU values visible after BTC selection.
+          metric_anchor='async function refreshMarketCap()'
+          if 'function renderBTCMetricsV5624(){' not in app:
+              if metric_anchor not in app:
+                  raise SystemExit('refreshMarketCap anchor not found')
+              btc_helper="""function renderBTCMetricsV5624(){
+            setTopMetricLabels('BTCUSDT DATA','PRICE','24H HIGH','24H LOW','24H CHANGE');
+            const k=`BTCUSDT|${timeframe}`;
+            const arr=(candleCache.get(k)||restoreCandles(k)||[]).map(normalizeCandle).filter(Boolean).sort((a,b)=>a.t-b.t);
+            if(!arr.length){
+              $('#btcMarketCap').textContent='—';$('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—';$('#btcChange').className='';
+              return;
+            }
+            const last=arr.at(-1),cut=last.t-86400,day=arr.filter(x=>x.t>=cut),w=day.length?day:arr.slice(-Math.min(arr.length,96)),first=w[0];
+            const hi=Math.max(...w.map(x=>x.h)),lo=Math.min(...w.map(x=>x.l)),base=Number(first?.o)||Number(first?.c)||last.c,ch=base?((last.c-base)/base)*100:0;
+            $('#btcMarketCap').textContent=`$${fmt(last.c)}`;$('#totalMarketCap').textContent=`$${fmt(hi)}`;$('#btcDominance').textContent=`$${fmt(lo)}`;
+            const el=$('#btcChange');el.textContent=`${ch>=0?'+':''}${ch.toFixed(2)}%`;el.className=ch>=0?'good':'bad';
+            const ticker=$('#tickerBTC');if(ticker)ticker.textContent=`$${fmt(last.c)}`;
+          }
+          """
+              app=app.replace(metric_anchor,btc_helper+metric_anchor,1)
+
+          # Use selected BTC candle data for the top bar instead of stale XAU/market-cap values.
+          old_refresh=re.compile(r"async function refreshMarketCap\(\)\{if\(symbol==='XAUUSD'\)\{renderGoldMetrics\(\);return\}setTopMetricLabels\('CRYPTO DATA'.*?\}\}\n",re.S)
+          new_refresh="""async function refreshMarketCap(){
+            if(symbol==='XAUUSD'){renderGoldMetrics();return}
+            if(symbol==='BTCUSDT'){renderBTCMetricsV5624();return}
+          }
+          """
+          app,n=old_refresh.subn(new_refresh,app,count=1)
+          if n!=1:
+              raise SystemExit('old refreshMarketCap body not found')
+
+          old_chart="if(symbol==='XAUUSD')renderGoldMetrics();"
+          if old_chart not in app:
+              raise SystemExit('setChartData metric hook not found')
+          app=app.replace(old_chart,"if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624();",1)
+
+          old_context="""  loadChart();
+            resetViewForContext();
+            const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';"""
+          if old_context not in app:
+              # tolerate current two-space source indentation
+              old_context="""  loadChart();
+            resetViewForContext();
+            const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';"""
+          if old_context not in app:
+              # simple exact current form
+              old_context="""  loadChart();
+            resetViewForContext();
+            const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';"""
+          # Regex fallback handles formatting safely inside contextChanged only.
+          if "V5624_SELECTED_SYMBOL_METRICS" not in app:
+              pat=re.compile(r"(async function contextChanged\(\)\{.*?loadChart\(\);\s*resetViewForContext\(\);)(\s*const feed=\$\('#nativeFeedStatus'\);)",re.S)
+              repl=r"\1\n  if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624(); // V5624_SELECTED_SYMBOL_METRICS\2"
+              app,n=pat.subn(repl,app,count=1)
+              if n!=1: raise SystemExit('contextChanged selected metric hook not found')
+
+          # 3) Balanced signal gate: preserve current standard safety path, plus a best-setup path.
+          # Best path requires high score, core/structure/reference agreement, zero strong opposite conflicts and real directional edge.
+          old_ok="const ok=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;"
+          if old_ok not in app:
+              raise SystemExit('V.56.23 signal gate not found')
+          new_ok="""const standardSetupV5624=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+          const bestSetupV5624=score>=70&&corePass>=2&&structuralPass>=2&&referencePass>=3&&oppositeConflicts===0&&edge>requiredEdge;
+          const ok=standardSetupV5624||bestSetupV5624;"""
+          app=app.replace(old_ok,new_ok,1)
+          app=app.replace("let reason='Reference-weighted confirmation passed';","let reason=bestSetupV5624&&!standardSetupV5624?'Best setup confirmed by direction, structure and references':'Reference-weighted confirmation passed';",1)
+
+          app_path.write_text(app,encoding='utf-8',newline='\n')
+
+          # Confirmation row styling.
+          css_path=Path('web/styles.css')
+          css=css_path.read_text(encoding='utf-8')
+          style="""
+          /* V.56.24 organized confirmation/warning rows */
+          .confirmationsInside h4{color:#5ee7a2!important}
+          .confirmationRowsV5624{display:flex!important;flex-direction:column;gap:7px;max-height:none!important;overflow:visible!important;padding-right:0!important}
+          .confirmationRowV5624{display:grid;grid-template-columns:minmax(112px,max-content) 14px minmax(0,1fr);align-items:start;gap:7px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06);line-height:1.35}
+          .confirmationRowV5624:last-child{border-bottom:0}
+          .confirmationHeadV5624{color:#5ee7a2;font-weight:800;font-size:11px;letter-spacing:.35px;white-space:nowrap}
+          .confirmationArrowV5624{color:#5ee7a2;font-weight:900;text-align:center}
+          .confirmationDetailV5624{color:#eef5ff;min-width:0;overflow-wrap:anywhere}
+          .warningRowV5624 .confirmationHeadV5624,.warningRowV5624 .confirmationArrowV5624{color:#ffbd72}
+          """
+          if 'confirmationRowsV5624' not in css:
+              css += style
+          css_path.write_text(css,encoding='utf-8',newline='\n')
+
+          # 4) Backend BTC chart/history flow: use exact crypto timeframe format and chart cache proxy.
+          main_path=Path('main.go')
+          main=main_path.read_text(encoding='utf-8')
+          old_route='mux.HandleFunc("/api/history", historyHandler)'
+          if old_route not in main:
+              raise SystemExit('history route not found')
+          main=main.replace(old_route,'mux.HandleFunc("/api/history", desktopHistoryHandler) // V5624_SYMBOL_SCOPED_HISTORY_CACHE',1)
+
+          old_per='per := normalizePeriod(q.Period)'
+          if old_per not in main:
+              raise SystemExit('history period assignment not found')
+          main=main.replace(old_per,'per := normalizeHistoryPeriodV5624(sym, q.Period)',1)
+
+          # BTC historical endpoint follows provider-documented exchange:symbol + text timeframe request.
+          old_btc='''\t} else if sym == "BTCUSDT" {\n\t\tendpoint = "https://api-v4.fcsapi.com/crypto/history"\n\t\tfcsSym = "BINANCE:BTCUSDT"\n\t\ttyp = "crypto"'''
+          new_btc='''\t} else if sym == "BTCUSDT" {\n\t\tendpoint = "https://api-v4.fcsapi.com/crypto/history"\n\t\tfcsSym = "BINANCE:BTCUSDT"\n\t\ttyp = "" // V5624: crypto history uses exchange-prefixed symbol; no redundant type filter'''
+          if old_btc not in main:
+              raise SystemExit('BTC history configuration not found')
+          main=main.replace(old_btc,new_btc,1)
+
+          old_type='z.Set("type", typ)'
+          if old_type not in main:
+              raise SystemExit('history type query not found')
+          main=main.replace(old_type,'if typ != "" {\n\t\tz.Set("type", typ)\n\t}',1)
+
+          norm_anchor='func normalizePeriod(s string) string {'
+          if 'func normalizeHistoryPeriodV5624(' not in main:
+              helper_go='''func normalizeHistoryPeriodV5624(sym, s string) string {\n\ttf := strings.ToLower(strings.TrimSpace(s))\n\tif strings.EqualFold(strings.TrimSpace(sym), "BTCUSDT") {\n\t\tif tf == "60m" {\n\t\t\treturn "1h"\n\t\t}\n\t\tswitch tf {\n\t\tcase "1m", "5m", "15m", "30m", "1h":\n\t\t\treturn tf\n\t\t}\n\t}\n\treturn normalizePeriod(tf)\n}\n'''
+              if norm_anchor not in main:
+                  raise SystemExit('normalizePeriod anchor not found')
+              main=main.replace(norm_anchor,helper_go+norm_anchor,1)
+          main_path.write_text(main,encoding='utf-8',newline='\n')
+
+          # Version identities: every user-facing update gets the next version.
+          Path('VERSION').write_text('V.56.24\n',encoding='utf-8',newline='\n')
+          replacements={
+              'license_auth.go':(r'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.24"'),
+              'updater.go':(r'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.24"'),
+              'webview2_host.go':(r'Version: V\.[0-9.]+','Version: V.56.24'),
+              'web/index.html':(r'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.24<'),
+          }
+          for fn,(pat,rep) in replacements.items():
+              p=Path(fn);s=p.read_text(encoding='utf-8');s,n=re.subn(pat,rep,s,count=1)
+              if n!=1: raise SystemExit(f'version replacement failed: {fn}')
+              p.write_text(s,encoding='utf-8',newline='\n')
+          PY
+          gofmt -w main.go license_auth.go updater.go webview2_host.go
+
+      - name: Validate V.56.24 source and protected trading controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check web/app.js
+          python - <<'PY'
+          from pathlib import Path
+          app=Path('web/app.js').read_text(encoding='utf-8')
+          css=Path('web/styles.css').read_text(encoding='utf-8')
+          main=Path('main.go').read_text(encoding='utf-8')
+          required_app=[
+              'renderConfirmationsV5624(d)','cleanConfirmationTextV5624','confirmationRowV5624',
+              "setTopMetricLabels('BTCUSDT DATA','PRICE','24H HIGH','24H LOW','24H CHANGE')",
+              "else if(symbol==='BTCUSDT')renderBTCMetricsV5624()",'V5624_SELECTED_SYMBOL_METRICS',
+              'standardSetupV5624','bestSetupV5624=score>=70','oppositeConflicts===0',
+              'independentMarketConsensus','STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','feedUnavailable',
+              'if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;'
+          ]
+          missing=[x for x in required_app if x not in app]
+          if missing: raise SystemExit('missing V.56.24/protected app markers: '+repr(missing))
+          if "join(' — ')" in app and 'bestMatches' in app: raise SystemExit('old confirmation paragraph renderer still active')
+          for forbidden in ['videos?','\\bfcs\\b','apis?','widgets?']:
+              if forbidden not in app.lower(): raise SystemExit('confirmation display scrub marker missing: '+forbidden)
+          if 'confirmationRowsV5624' not in css or '.confirmationsInside h4{color:#5ee7a2!important}' not in css:
+              raise SystemExit('organized green confirmation row CSS missing')
+          for marker in ['desktopHistoryHandler) // V5624_SYMBOL_SCOPED_HISTORY_CACHE','normalizeHistoryPeriodV5624','BINANCE:BTCUSDT','return "1h"']:
+              if marker not in main: raise SystemExit('BTC history marker missing: '+marker)
+          if '\ttyp = "crypto"' in main: raise SystemExit('redundant BTC history type filter still present')
+          if Path('VERSION').read_text(encoding='utf-8').strip()!='V.56.24': raise SystemExit('VERSION mismatch')
+          if 'const licAppVersion = "V.56.24"' not in Path('license_auth.go').read_text(encoding='utf-8'): raise SystemExit('license version mismatch')
+          if 'const mhPublicVersionV001 = "V.56.24"' not in Path('updater.go').read_text(encoding='utf-8'): raise SystemExit('updater version mismatch')
+          if '/v562-text-fix.js' in Path('web/index.html').read_text(encoding='utf-8'): raise SystemExit('runtime text patch must remain disabled')
+          if 'ACTIVE_TRADE_REVERSAL_LOCK' not in Path('ea_signal_bridge.go').read_text(encoding='utf-8'): raise SystemExit('EA reversal lock missing')
+          if 'FAST_ACTIVE_EXPOSURE_LOCK' not in Path('ea_modes_v558.go').read_text(encoding='utf-8'): raise SystemExit('Fast exposure lock missing')
+          PY
+          go test ./...
+
+      - name: Commit V.56.24 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js web/styles.css main.go VERSION license_auth.go updater.go webview2_host.go web/index.html
+          git commit -m 'Release MH Analysis V.56.24 BTC and signal fixes'
+          git fetch origin v56.3-release
+          git rebase origin/v56.3-release
+          git push origin HEAD:v56.3-release
