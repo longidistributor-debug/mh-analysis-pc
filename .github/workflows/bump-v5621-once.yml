@@ -1,0 +1,79 @@
+name: Restore V5616 UI and bump V5621 once
+
+on:
+  push:
+    branches: [v56.3-release]
+    paths:
+      - '.github/workflows/bump-v5621-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+      - name: Restore exact V.56.16 UI baseline
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $base='9c3c69f917b5c1b7b0b6df7594f165445fab38b1'
+          git cat-file -e "$base^{commit}"
+          if($LASTEXITCODE -ne 0){throw 'V.56.16 baseline commit unavailable'}
+          git checkout $base -- web/index.html web/v562-text-fix.js
+          $css=@(git ls-tree -r --name-only $base -- web | Where-Object { $_ -match '\.css$' })
+          foreach($p in $css){ git checkout $base -- $p; if($LASTEXITCODE -ne 0){throw "failed to restore $p"} }
+          $displayHash=(git hash-object web/v562-text-fix.js).Trim()
+          if($displayHash -ne '520a76544d367674db1fb59e197b88458e4cfddb'){throw "display baseline mismatch: $displayHash"}
+      - name: Update application identities to V.56.21
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.56.21'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.21"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.21"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'Version: V\.[0-9.]+','Version: V.56.21');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.21<',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+      - name: Validate V.56.21 UI restore and unchanged trading engine
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/v562-text-fix.js
+          if($LASTEXITCODE -ne 0){throw 'display JS validation failed'}
+          $displayHash=(git hash-object web/v562-text-fix.js).Trim()
+          if($displayHash -ne '520a76544d367674db1fb59e197b88458e4cfddb'){throw "V.56.16 display script mismatch: $displayHash"}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.21'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.21"')){throw 'license mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.21"')){throw 'updater mismatch'}
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5')){if(-not $app.Contains($m)){throw "signal safety marker missing: $m"}}
+          if(-not (Get-Content -Raw ea_signal_bridge.go).Contains('ACTIVE_TRADE_REVERSAL_LOCK')){throw 'EA reversal lock missing'}
+          if(-not (Get-Content -Raw ea_modes_v558.go).Contains('FAST_ACTIVE_EXPOSURE_LOCK')){throw 'Fast exposure lock missing'}
+          $changed=@(git diff --name-only)
+          foreach($p in $changed){
+            $ok=($p -eq 'VERSION' -or $p -eq 'license_auth.go' -or $p -eq 'updater.go' -or $p -eq 'webview2_host.go' -or $p -eq 'web/index.html' -or $p -eq 'web/v562-text-fix.js' -or $p -match '^web/.*\.css$')
+            if(-not $ok){throw "unexpected file changed: $p"}
+          }
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o "$env:RUNNER_TEMP\MH Analysis V.56.21.exe" .
+          if($LASTEXITCODE -ne 0){throw 'Windows build failed'}
+      - name: Commit V.56.21 application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION license_auth.go updater.go webview2_host.go web/index.html web/v562-text-fix.js 'web/*.css'
+          git commit -m 'Restore V.56.16 UI baseline and bump MH Analysis V.56.21'
+          git push origin HEAD:v56.3-release
