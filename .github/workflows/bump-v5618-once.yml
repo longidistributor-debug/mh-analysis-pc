@@ -1,0 +1,76 @@
+name: Bump V5618 source once
+
+on:
+  push:
+    branches: [v56.3-release]
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Update application identities to V.56.18
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          'V.56.18' | Set-Content -Encoding ascii VERSION
+
+          $p='license_auth.go'
+          $s=Get-Content -Raw $p
+          $s=$s -replace 'const licAppVersion = "V\.56\.17"','const licAppVersion = "V.56.18"'
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          $p='updater.go'
+          $s=Get-Content -Raw $p
+          $s=$s -replace 'const mhPublicVersionV001 = "V\.56\.17"','const mhPublicVersionV001 = "V.56.18"'
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          foreach($p in @('web/index.html','webview2_host.go')) {
+            if(Test-Path $p) {
+              $s=Get-Content -Raw $p
+              $s=$s.Replace('V.56.17','V.56.18')
+              [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+            }
+          }
+
+      - name: Validate V.56.18 source and unchanged trading engine
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($js in @('web/app.js','web/runtime-fixes.js','web/auth.js','web/v31.js','web/v558-fast.js','web/v560-mode-guard.js','web/v562-text-fix.js','web/update-v001.js','web/ea-reversal-guard.js')) { node --check $js; if($LASTEXITCODE -ne 0){throw "JavaScript validation failed: $js"} }
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.18'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.18"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.18"')){throw 'updater version mismatch'}
+          $display=Get-Content -Raw web\v562-text-fix.js
+          foreach($m in @('V56.17','queueApply','setText')){if(-not $display.Contains($m)){throw "display hotfix marker missing: $m"}}
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5')){if(-not $app.Contains($m)){throw "signal safety marker missing: $m"}}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o "$env:RUNNER_TEMP\MH Analysis V.56.18.exe" .
+          if($LASTEXITCODE -ne 0){throw 'Windows build failed'}
+
+      - name: Commit V.56.18 application source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add VERSION license_auth.go updater.go web/index.html webview2_host.go
+          git commit -m 'Release MH Analysis V.56.18 source' || true
+          git fetch origin v56.3-release
+          git rebase origin/v56.3-release
+          git push origin HEAD:v56.3-release
