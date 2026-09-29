@@ -1,0 +1,120 @@
+name: Build MH Analysis V.56.25 Once
+
+on:
+  push:
+    branches: [v56.25-release]
+    paths:
+      - '.github/workflows/build-v5625-once.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-build:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.25-release
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply only requested V.56.25 fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v5625_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V.56.25 patch script failed'}
+          gofmt -w ea_signal_bridge.go license_auth.go updater.go webview2_host.go
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'web/app.js syntax validation failed'}
+
+      - name: Verify V.56.25 surgical scope and safety locks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $app=Get-Content -Raw web\app.js
+          $ea=Get-Content -Raw ea_signal_bridge.go
+          $modes=Get-Content -Raw ea_modes_v558.go
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.25'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.25"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.25"')){throw 'updater version mismatch'}
+          foreach($m in @('TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','bestSetupV5625=score>=74','reconcileRecordDuplicateV5625','managed_position_active','modeState?.sl_adjustment===true','gain=(gain*(p-1)+g)/p')){if(-not $app.Contains($m)){throw "V.56.25 app marker missing: $m"}}
+          if($app.Contains('if(move>=originalRisk)')){throw 'legacy generic 1R breakeven remains'}
+          if($app.Contains('Math.max(0,c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime)))')){throw 'historical target-hit scan remains'}
+          foreach($m in @('Magic   string','Managed bool','managedExposureFor','NO_MANAGED_EA_POSITION','SL_ADJUSTMENT_OFF','managed_position_active')){if(-not $ea.Contains($m)){throw "EA ownership marker missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "existing lot mapping changed: $m"}}
+          foreach($m in @('ACTIVE_TRADE_REVERSAL_LOCK','FAST_ACTIVE_EXPOSURE_LOCK')){if(-not (($ea+$modes).Contains($m))){throw "existing exposure safety regressed: $m"}}
+          if(-not $modes.Contains('if v558Modes.FastScalping {') -or -not $modes.Contains('v558Modes.SLAdjustment = false')){throw 'Fast Scalping isolation changed'}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Commit V.56.25 source to isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js ea_signal_bridge.go VERSION license_auth.go updater.go webview2_host.go web/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'Release MH Analysis V.56.25 EA pending, SL, RSI and signal fixes'
+            git push origin HEAD:v56.25-release
+          fi
+
+      - name: Build V.56.25 EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup installation failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.25' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.25' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer compilation failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.25.exe'
+          if(-not(Test-Path $installer)){throw 'V.56.25 installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.25'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.25 only: restores auto-pending reliability by preventing stale Records from blocking MT5 handoff; isolates SL management to SL Adjustment ON + EA-owned live POSITION; applies TP2 40% -> Entry +/- $2.50 and TP1 + $6.50 -> SL at TP1; excludes manual Magic=0 and pending/floating states; restores Wilder RSI; prevents pre-signal candle highs/lows from falsely marking TP1/TP2/SL hit; keeps the standard strict signal gate and adds a high-quality non-impossible best-setup path.'
+          $m=[ordered]@{version='V.56.25';mandatory=$false;download_url='';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.25.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.25
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.25.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.25.exe
+          if-no-files-found: error
+
+      - name: Publish isolated V.56.25 GitHub release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.25 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.25 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.25.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.25.exe' --target v56.25-release --title 'MH Analysis V.56.25' --notes 'Requested fixes only: auto pending reliability; EA-only SL adjustment with TP2 40% protected breakeven at Entry +/- $2.50 and TP1 + $6.50 lock; manual/pending/floating isolation; Wilder RSI correction; post-signal-only TP/SL hit tracking; balanced high-quality signal exception without weakening the normal anti-spam gate. Production updater channel is not changed.'
+          if($LASTEXITCODE -ne 0){throw 'V.56.25 GitHub release publish failed'}
