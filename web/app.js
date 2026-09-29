@@ -193,7 +193,7 @@ function analyze(c,prev){
   const s=stats(c),families=[...trendFamilies(c,m,s),...structureFamilies(c,m,s),...liquidityFamilies(c,m,s),...breakoutFamilies(c,m,s),...reversalFamilies(c,m,s),...zoneFamilies(c,m,s),...momentumFamilies(c,m,s),...smcIctFamilies(c,m,s),...videoFamilies(c,m,s)];
   const [buy,bf]=aggregate(families.filter(x=>x.direction==='BUY')),[sell,sf]=aggregate(families.filter(x=>x.direction==='SELL')),buyScore=Math.round(buy),sellScore=Math.round(sell),edge=Math.abs(buy-sell),bestDir=buy>=sell?'BUY':'SELL',winner=bestDir==='BUY'?bf:sf,loser=bestDir==='BUY'?sf:bf,best=winner[0]?.name||'Composite market structure',runner=winner[1]?.name||loser[0]?.name||'-',reasons=winner.slice(0,6).flatMap(f=>[`${f.name} ${Math.round(f.score)}/100`,...f.reasons.slice(0,2)]).filter(Boolean),warnings=[];
   if(m.fvgType&&m.fvgFillPct>=90)warnings.push(`Latest ${m.fvgType} FVG is almost fully mitigated.`);
-  const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);if(winnerScore<57||edge<=minEdge)return{signal:null,map:m,buyScore,sellScore,bestFamily:best,runnerUpFamily:runner,explanation:`No clear current directional edge: BUY ${buyScore} vs SELL ${sellScore}; difference ${two(edge)} is inside this timeframe's measured uncertainty ${two(s.pressureUncertainty)}.`,reasons,warnings};
+  const minEdge=Math.max(3,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);if(winnerScore<57||edge<=minEdge)return{signal:null,map:m,buyScore,sellScore,bestFamily:best,runnerUpFamily:runner,explanation:`No clear current directional edge: BUY ${buyScore} vs SELL ${sellScore}; difference ${two(edge)} does not exceed the adaptive edge requirement ${two(minEdge)} (measured uncertainty ${two(s.pressureUncertainty)}).`,reasons,warnings};
   let signal=buildSignal(symbol,timeframe,c,m,s,bestDir,buyScore,sellScore,winner);const recon=classifyReconfirmation(prev,signal,c);if(recon)signal=preserveReconfirmedSignal(prev,signal,recon,c);
   const reconText=signal.reconfirmed?` This is a reconfirmation of the earlier ${signal.direction} setup: entry-zone drift ${fmt(recon.distance)} is within current adaptive relevance ${fmt(recon.tolerance)}; entry is preserved while protective SL/TP are refreshed from current ${timeframe} structure.`:'';
   return{signal,map:m,buyScore,sellScore,bestFamily:best,runnerUpFamily:runner,explanation:`${bestDir} is the strongest CURRENT ${timeframe} thesis. BUY ${buyScore} vs SELL ${sellScore}; edge ${two(edge)} is larger than measured same-timeframe uncertainty ${two(s.pressureUncertainty)}. Best family: ${best}.${reconText}`,reasons,warnings};
@@ -300,19 +300,23 @@ function strictEvidenceGate(c,d,session){
   const oppChecks={};for(const [k,t] of Object.entries(test))oppChecks[k]=gatePeak(fs,opp,t);
   const referenceTests=[n=>n.startsWith('Video: trendline'),n=>n.startsWith('Video: dominant wick'),n=>n.startsWith('Video: compression'),test.smc,test.ict,test.zone,test.breakout];
   const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;
-  const tacticalPass=['liquidity','breakout','zone','smc','ict'].filter(k=>checks[k]>=54).length;
-  const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
-  const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(7,Number(st.pressureUncertainty)||0),requiredScore=65+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
-  const critical=checks.trend>=52&&checks.structure>=52&&checks.momentum>=52;
-  const ok=critical&&tacticalPass>=3&&referencePass>=5&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
-  let reason='Strict multi-layer confirmation passed';
-  if(!critical)reason='Critical trend / structure / momentum agreement failed';
-  else if(tacticalPass<3)reason=`Only ${tacticalPass}/5 tactical structure-liquidity confirmations passed`;
-  else if(referencePass<5)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
-  else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
-  else if(score<requiredScore)reason=`Signal quality ${score} is below strict ${requiredScore} requirement for ${session?.name||'current session'}`;
-  else if(edge<=requiredEdge)reason=`Directional edge ${two(edge)} is not above strict uncertainty requirement ${two(requiredEdge)}`;
-  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,oppositeConflicts,requiredScore,requiredEdge,edge};
+const tacticalPass=['liquidity','breakout','zone','smc','ict'].filter(k=>checks[k]>=54).length;
+const structuralPass=['structure','breakout','zone','smc','ict'].filter(k=>checks[k]>=56).length;
+const corePass=['trend','structure','momentum'].filter(k=>checks[k]>=52).length;
+const strongReference=Math.max(0,...referenceScores)>=62;
+const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
+const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(3,(Number(st.pressureUncertainty)||0)*.85),requiredScore=62+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
+const ok=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+let reason='Reference-weighted confirmation passed';
+if(corePass<2)reason=`Only ${corePass}/3 core direction confirmations passed`;
+else if(tacticalPass<2)reason=`Only ${tacticalPass}/5 tactical confirmations passed`;
+else if(structuralPass<2)reason=`Only ${structuralPass}/5 structural/reference confirmations passed`;
+else if(referencePass<3)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
+else if(!strongReference)reason='No strong runtime reference confirmation reached 62/100';
+else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
+else if(score<requiredScore)reason=`Signal quality ${score} is below adaptive ${requiredScore} requirement for ${session?.name||'current session'}`;
+else if(edge<=requiredEdge)reason=`Directional edge ${two(edge)} is not above adaptive uncertainty requirement ${two(requiredEdge)}`;
+return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,structuralPass,corePass,strongReference,oppositeConflicts,requiredScore,requiredEdge,edge};
 }
 async function independentMarketConsensus(c){
   const last=c?.at(-1),close=Number(last?.c);
@@ -510,7 +514,10 @@ function renderDecision(d,reason,mode='NEW'){
   }
   $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');
   $('#explanation').className='detailText';$('#explanation').textContent=reason||d.explanation;
-  $('#reasons').className='detailText';$('#reasons').textContent=[...d.reasons,...d.warnings].map(x=>`• ${x}`).join('\n')||'—';
+  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
+const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
+$('#reasons').className='detailText';
+$('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';
   renderTopMap(d);renderTopSetups(d);if(mode!=='VIEW')addRecent(d,mode);updateSignalHeadline(d);
 }
 function buildRankedForUi(c,d){try{const m=d.map,s=stats(c),fs=[...trendFamilies(c,m,s),...structureFamilies(c,m,s),...liquidityFamilies(c,m,s),...breakoutFamilies(c,m,s),...reversalFamilies(c,m,s),...zoneFamilies(c,m,s),...momentumFamilies(c,m,s),...smcIctFamilies(c,m,s),...videoFamilies(c,m,s)];const dir=d.signal?.direction||(d.buyScore>=d.sellScore?'BUY':'SELL');return fs.filter(x=>x.direction===dir).sort((a,b)=>b.score-a.score)}catch(e){return[]}}
@@ -835,6 +842,12 @@ async function dispatchUniqueSignalV36(d){
   setAutoStatus(`Signal recorded • MT5 pending sent • ${pending} • Lot ${selectedLot.toFixed(2)} • Partial TP ${partialTpEnabled?'ON':'OFF'}`,'good');
   return {record:rj,ea:ej,signal_id:signalId};
 }
+function waitForUiCommitV5623(){
+  return new Promise(resolve=>{
+    if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(resolve));
+    else setTimeout(resolve,0);
+  });
+}
 async function executeNewAnalysis(fromAuto=false){
   if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
@@ -848,7 +861,10 @@ async function executeNewAnalysis(fromAuto=false){
     const mt5ExistingState=prev?await readMT5ActiveStateV552(symbol):null;
 if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
-    if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT
+    await waitForUiCommitV5623();
+    if(d.signal&&!d._sameActiveSignal){
+    try{await dispatchUniqueSignalV36(d)}catch(e){console.warn('Record/EA handoff failed after analysis completed',e)}
+  } // V5623_UI_COMMIT_BEFORE_SIGNAL_FANOUT
     if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
     else{
       try{
@@ -903,6 +919,7 @@ async function executeReevaluate(fromAuto=false){
     else{current.signal=null;current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Run NEW ANALYZE if you want a new setup.`}
     if(keep){const obj={signal:displayOriginal?current.signal:s,state:status,candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);
+    await waitForUiCommitV5623();
     if(keep&&displayOriginal&&current.signal)await manageExistingMT5TradeV552(s,current.signal,status);
     if(autoSignalEnabled)await autoSendAndSchedule(current,'RE-EVALUATE',status);
     else{
