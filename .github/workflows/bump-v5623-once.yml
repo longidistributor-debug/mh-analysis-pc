@@ -1,0 +1,184 @@
+name: Targeted analysis fixes and bump V5623 once
+
+on:
+  push:
+    branches: [v56.3-release]
+    paths:
+      - '.github/workflows/bump-v5623-once.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.3-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply only V.56.23 requested analysis fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $appPath='web/app.js'
+          $app=Get-Content -Raw -Encoding UTF8 $appPath
+
+          # 1) Restore compact direct best-match confirmations. No bullets/newline list and no internal scroll.
+          $rStart="  `$('#reasons').className='detailText';"
+          $rs=$app.IndexOf($rStart)
+          if($rs -lt 0){throw 'reasons render start not found'}
+          $rEnd="||'—';"
+          $re=$app.IndexOf($rEnd,$rs)
+          if($re -lt 0){throw 'reasons render end not found'}
+          $re += $rEnd.Length
+          $newReasons=@'
+  const bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3);
+  const topWarnings=(d.warnings||[]).filter(Boolean).slice(0,1);
+  $('#reasons').className='detailText';
+  $('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';
+'@
+          $app=$app.Substring(0,$rs)+$newReasons+$app.Substring($re)
+
+          # 2) Let the completed analysis render/paint before any Record/EA/WhatsApp signal handoff.
+          if(-not $app.Contains('function waitForUiCommitV5623(){')){
+            $anchor='async function executeNewAnalysis(fromAuto=false){'
+            $ai=$app.IndexOf($anchor)
+            if($ai -lt 0){throw 'NEW analysis function anchor not found'}
+            $helper=@'
+function waitForUiCommitV5623(){
+  return new Promise(resolve=>{
+    if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>requestAnimationFrame(resolve));
+    else setTimeout(resolve,0);
+  });
+}
+'@
+            $app=$app.Substring(0,$ai)+$helper+$app.Substring($ai)
+          }
+          $oldNew="    renderDecision(d,reason,'NEW');busy=false;setBusy(false);"
+          if(-not $app.Contains($oldNew)){throw 'NEW completion line not found'}
+          $app=$app.Replace($oldNew,$oldNew+"`n    await waitForUiCommitV5623();")
+          $oldDispatch="    if(d.signal&&!d._sameActiveSignal){dispatchUniqueSignalV36(d).catch(e=>console.warn('Background Record/EA handoff failed',e));} // V546_BACKGROUND_FANOUT"
+          if(-not $app.Contains($oldDispatch)){throw 'background signal fanout line not found'}
+          $newDispatch=@'
+    if(d.signal&&!d._sameActiveSignal){
+      try{await dispatchUniqueSignalV36(d)}catch(e){console.warn('Record/EA handoff failed after analysis completed',e)}
+    } // V5623_UI_COMMIT_BEFORE_SIGNAL_FANOUT
+'@
+          $app=$app.Replace($oldDispatch,$newDispatch.TrimEnd())
+
+          $oldReeval=@'
+renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);
+'@
+          $oldReeval=$oldReeval.Trim()
+          if(-not $app.Contains($oldReeval)){throw 'RE-EVALUATE completion line not found'}
+          $app=$app.Replace($oldReeval,$oldReeval+"`n    await waitForUiCommitV5623();")
+
+          # 3) Rebalance the gate: best valid setups survive, random trades still require structure, references and independent consensus.
+          $oldBase='const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);'
+          if(-not $app.Contains($oldBase)){throw 'base edge rule not found'}
+          $app=$app.Replace($oldBase,'const minEdge=Math.max(3,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);')
+          $oldExplain='difference ${two(edge)} is inside this timeframe''s measured uncertainty ${two(s.pressureUncertainty)}.'
+          if(-not $app.Contains($oldExplain)){throw 'base no-edge explanation not found'}
+          $app=$app.Replace($oldExplain,'difference ${two(edge)} does not exceed the adaptive edge requirement ${two(minEdge)} (measured uncertainty ${two(s.pressureUncertainty)}).')
+
+          $gateStart='  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;'
+          $gs=$app.IndexOf($gateStart)
+          if($gs -lt 0){throw 'strict evidence block start not found'}
+          $gateEnd='  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,oppositeConflicts,requiredScore,requiredEdge,edge};'
+          $ge=$app.IndexOf($gateEnd,$gs)
+          if($ge -lt 0){throw 'strict evidence block end not found'}
+          $ge += $gateEnd.Length
+          $newGate=@'
+  const referenceScores=referenceTests.map(t=>gatePeak(fs,dir,t)),referencePass=referenceScores.filter(x=>x>=52).length;
+  const tacticalPass=['liquidity','breakout','zone','smc','ict'].filter(k=>checks[k]>=54).length;
+  const structuralPass=['structure','breakout','zone','smc','ict'].filter(k=>checks[k]>=56).length;
+  const corePass=['trend','structure','momentum'].filter(k=>checks[k]>=52).length;
+  const strongReference=Math.max(0,...referenceScores)>=62;
+  const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
+  const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(3,(Number(st.pressureUncertainty)||0)*.85),requiredScore=62+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
+  const ok=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
+  let reason='Reference-weighted confirmation passed';
+  if(corePass<2)reason=`Only ${corePass}/3 core direction confirmations passed`;
+  else if(tacticalPass<2)reason=`Only ${tacticalPass}/5 tactical confirmations passed`;
+  else if(structuralPass<2)reason=`Only ${structuralPass}/5 structural/reference confirmations passed`;
+  else if(referencePass<3)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
+  else if(!strongReference)reason='No strong runtime reference confirmation reached 62/100';
+  else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
+  else if(score<requiredScore)reason=`Signal quality ${score} is below adaptive ${requiredScore} requirement for ${session?.name||'current session'}`;
+  else if(edge<=requiredEdge)reason=`Directional edge ${two(edge)} is not above adaptive uncertainty requirement ${two(requiredEdge)}`;
+  return{ok,reason,checks,oppChecks,referencePass,referenceTotal:7,tacticalPass,structuralPass,corePass,strongReference,oppositeConflicts,requiredScore,requiredEdge,edge};
+'@
+          $app=$app.Substring(0,$gs)+$newGate.TrimEnd()+$app.Substring($ge)
+          [IO.File]::WriteAllText((Join-Path $PWD $appPath),$app,(New-Object Text.UTF8Encoding($false)))
+
+          $cssPath='web/styles.css'
+          $css=Get-Content -Raw -Encoding UTF8 $cssPath
+          $oldCss='.confirmationsInside .detailText{max-height:230px;overflow:auto;padding-right:4px}'
+          if(-not $css.Contains($oldCss)){throw 'confirmation scroll CSS rule not found'}
+          $css=$css.Replace($oldCss,'.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}')
+          [IO.File]::WriteAllText((Join-Path $PWD $cssPath),$css,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Update application identities and publisher to V.56.23
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          [IO.File]::WriteAllText((Join-Path $PWD 'VERSION'),'V.56.23'+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+          $p='license_auth.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const licAppVersion = "V\.[0-9.]+"','const licAppVersion = "V.56.23"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='updater.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'const mhPublicVersionV001 = "V\.[0-9.]+"','const mhPublicVersionV001 = "V.56.23"',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='webview2_host.go';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'Version: V\.[0-9.]+','Version: V.56.23');[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+          $p='web/index.html';$s=Get-Content -Raw $p;$s=[regex]::Replace($s,'id="mhUpdateVersionV001">V\.[0-9.]+<','id="mhUpdateVersionV001">V.56.23<',1);[IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          $p='.github/workflows/publish-v563.yml'
+          $y=Get-Content -Raw -Encoding UTF8 $p
+          $y=$y.Replace('V.56.22','V.56.23').Replace('V5622','V5623')
+          $oldMarkers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5'"
+          $newMarkers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623'"
+          if(-not $y.Contains($oldMarkers)){throw 'publisher old safety markers not found'}
+          $y=$y.Replace($oldMarkers,$newMarkers)
+          $notesPattern="notes='[^']*'"
+          $notes="notes='V.56.23 restores compact direct best-match confirmations without an internal scrollbar, finishes the visible analysis before signal handoff, and rebalances signal qualification around core direction, structure and reference evidence while preserving independent market consensus, active-trade safety, lot-size, SL adjustment, Partial TP and Fast Scalping.'"
+          $y=[regex]::Replace($y,$notesPattern,$notes,1)
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$y,(New-Object Text.UTF8Encoding($false)))
+
+      - name: Validate only requested V.56.23 changes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/app.js
+          if($LASTEXITCODE -ne 0){throw 'app.js syntax validation failed'}
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3)','join('' — '')','waitForUiCommitV5623','try{await dispatchUniqueSignalV36(d)}','const minEdge=Math.max(3,s.pressureUncertainty*.75)','corePass>=2','tacticalPass>=2','structuralPass>=2','referencePass>=3','strongReference','independentMarketConsensus','STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','feedUnavailable')){if(-not $app.Contains($m)){throw "V.56.23 marker missing: $m"}}
+          if($app.Contains("map(x=>``• `${x}``)")){throw 'old bullet renderer still present'}
+          $css=Get-Content -Raw web\styles.css
+          if(-not $css.Contains('.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}')){throw 'compact confirmations CSS missing'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.23'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.23"')){throw 'license version mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.23"')){throw 'updater version mismatch'}
+          $html=Get-Content -Raw web\index.html
+          if($html.Contains('/v562-text-fix.js')){throw 'runtime text patch must remain disabled'}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot mapping changed unexpectedly: $m"}}
+          if(-not (Get-Content -Raw ea_signal_bridge.go).Contains('ACTIVE_TRADE_REVERSAL_LOCK')){throw 'EA reversal lock missing'}
+          if(-not (Get-Content -Raw ea_modes_v558.go).Contains('FAST_ACTIVE_EXPOSURE_LOCK')){throw 'Fast exposure lock missing'}
+          $pub=Get-Content -Raw .github\workflows\publish-v563.yml
+          foreach($m in @('V.56.23','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623')){if(-not $pub.Contains($m)){throw "publisher validation missing: $m"}}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Commit V.56.23 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js web/styles.css VERSION license_auth.go updater.go webview2_host.go web/index.html .github/workflows/publish-v563.yml
+          git commit -m 'Release MH Analysis V.56.23 targeted analysis fixes'
+          git fetch origin v56.3-release
+          git rebase origin/v56.3-release
+          git push origin HEAD:v56.3-release
