@@ -50,6 +50,8 @@ type eaActiveTrade struct {
 	Type    string  `json:"type"`
 	Ticket  string  `json:"ticket"`
 	State   string  `json:"state"`
+	Magic   string  `json:"magic,omitempty"`
+	Managed bool    `json:"managed"`
 	Entry   float64 `json:"entry"`
 	SL      float64 `json:"sl"`
 	TP      float64 `json:"tp"`
@@ -134,7 +136,12 @@ func readEAActiveTrades() ([]eaActiveTrade, error) {
 		p := strings.Split(line, "|")
 		// Decoder V1.21+: ACTIVE|DIRECTION|SYMBOL|POSITION/PENDING|TICKET|MAGIC
 		if len(p) >= 5 && strings.EqualFold(strings.TrimSpace(p[0]), "ACTIVE") {
-			t := eaActiveTrade{Type: strings.ToUpper(strings.TrimSpace(p[1])), Symbol: normalizeEABridgeSymbol(p[2]), State: strings.ToUpper(strings.TrimSpace(p[3])), Ticket: strings.TrimSpace(p[4])}
+			magic := ""
+			if len(p) >= 6 {
+				magic = strings.TrimSpace(p[5])
+			}
+			managed := magic != "" && magic != "0"
+			t := eaActiveTrade{Type: strings.ToUpper(strings.TrimSpace(p[1])), Symbol: normalizeEABridgeSymbol(p[2]), State: strings.ToUpper(strings.TrimSpace(p[3])), Ticket: strings.TrimSpace(p[4]), Magic: magic, Managed: managed}
 			if t.Symbol != "" && eaDirection(t.Type) != "" {
 				out = append(out, t)
 			}
@@ -178,6 +185,35 @@ func activeExposureFor(symbol string) ([]eaActiveTrade, string, error) {
 	return matches, dir, nil
 }
 
+func managedExposureFor(symbol string, positionsOnly bool) ([]eaActiveTrade, string, error) {
+	all, err := readEAActiveTrades()
+	if err != nil {
+		return nil, "", err
+	}
+	symbol = normalizeEABridgeSymbol(symbol)
+	matches := []eaActiveTrade{}
+	dir := ""
+	for _, t := range all {
+		if t.Symbol != symbol || !t.Managed {
+			continue
+		}
+		if positionsOnly && !strings.EqualFold(strings.TrimSpace(t.State), "POSITION") {
+			continue
+		}
+		d := eaDirection(t.Type)
+		if d == "" {
+			continue
+		}
+		matches = append(matches, t)
+		if dir == "" {
+			dir = d
+		} else if dir != d {
+			dir = "MIXED"
+		}
+	}
+	return matches, dir, nil
+}
+
 func eaActiveStateHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method != http.MethodGet {
@@ -192,7 +228,19 @@ func eaActiveStateHandler(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "symbol": sym, "active": len(trades) > 0, "direction": dir, "trades": trades})
+		managed, managedDir, err := managedExposureFor(sym, false)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		positions, positionDir, err := managedExposureFor(sym, true)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "symbol": sym, "active": len(trades) > 0, "direction": dir, "trades": trades, "managed_active": len(managed) > 0, "managed_direction": managedDir, "managed_trades": managed, "managed_position_active": len(positions) > 0, "managed_position_direction": positionDir, "managed_positions": positions})
 		return
 	}
 	trades, err := readEAActiveTrades()
@@ -236,6 +284,22 @@ func eaManageHandler(w http.ResponseWriter, r *http.Request) {
 	if q.Direction != "BUY" && q.Direction != "SELL" {
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "direction must be BUY or SELL"})
+		return
+	}
+	if !v558Snapshot().SLAdjustment {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "SL Adjustment is OFF", "code": "SL_ADJUSTMENT_OFF"})
+		return
+	}
+	positions, positionDir, exposureErr := managedExposureFor(q.Symbol, true)
+	if exposureErr != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": exposureErr.Error()})
+		return
+	}
+	if len(positions) == 0 || positionDir == "MIXED" || positionDir != q.Direction {
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": "no matching EA-owned live position to manage", "code": "NO_MANAGED_EA_POSITION"})
 		return
 	}
 	if q.SL <= 0 || q.TP <= 0 {

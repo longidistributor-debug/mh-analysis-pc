@@ -39,7 +39,16 @@ function quantile(a,q=.5){const s=a.filter(Number.isFinite).slice().sort((x,y)=>
 function rank01(x,a){const v=a.filter(Number.isFinite);if(!v.length)return .5;return Math.max(0,Math.min(1,v.filter(y=>y<=x).length/v.length))}
 function ema(v,p){if(!v.length)return[];p=Math.max(1,Math.min(p,v.length));const k=2/(p+1),o=[v[0]];for(let i=1;i<v.length;i++)o.push(v[i]*k+o[i-1]*(1-k));return o}
 function sma(v,p){p=Math.max(1,Math.min(p,v.length));return avg(v.slice(-p))}
-function rsi(v,p=14){if(v.length<2)return 50;p=Math.max(1,Math.min(p,v.length-1));let g=0,l=0;for(let i=v.length-p;i<v.length;i++){const d=v[i]-v[i-1];if(d>0)g+=d;else l-=d}if(l<1e-12)return 100;const rs=g/l;return 100-100/(1+rs)}
+function rsi(v,p=14){
+  if(v.length<2)return 50;
+  p=Math.max(1,Math.min(p,v.length-1));
+  let gain=0,loss=0;
+  for(let i=1;i<=p;i++){const d=v[i]-v[i-1];if(d>0)gain+=d;else if(d<0)loss-=d}
+  gain/=p;loss/=p;
+  for(let i=p+1;i<v.length;i++){const d=v[i]-v[i-1],g=d>0?d:0,l=d<0?-d:0;gain=(gain*(p-1)+g)/p;loss=(loss*(p-1)+l)/p}
+  if(loss<1e-12)return gain<1e-12?50:100;
+  const rs=gain/loss;return 100-100/(1+rs);
+}
 function trueRanges(c){if(!c.length)return[];const o=[c[0].h-c[0].l];for(let i=1;i<c.length;i++){const x=c[i],p=c[i-1].c;o.push(Math.max(x.h-x.l,Math.abs(x.h-p),Math.abs(x.l-p)))}return o}
 function atr(c,p=14){return avg(trueRanges(c).slice(-Math.min(p,c.length)))}
 function pivots(c,high,span){const out=[];if(c.length<span*2+3)return out;for(let i=span;i<c.length-span;i++){const p=high?c[i].h:c[i].l;let ok=true;for(let j=i-span;j<=i+span;j++){if(j===i)continue;const q=high?c[j].h:c[j].l;if(high?q>p:q<p){ok=false;break}}if(ok)out.push({index:i,price:p})}return out}
@@ -162,14 +171,14 @@ function managedReconfirmedLevelsV552(prev,fresh,c){
   let sl=prev.direction==='BUY'?prev.entry-freshRisk:prev.entry+freshRisk;
   let tp1=prev.direction==='BUY'?prev.entry+freshTp1:prev.entry-freshTp1;
   let tp2=prev.direction==='BUY'?prev.entry+freshTp2:prev.entry-freshTp2;
-  const originalRisk=Math.max(Math.abs(prev.entry-prev.sl),1e-9),move=prev.direction==='BUY'?last.c-prev.entry:prev.entry-last.c;
+  const move=prev.direction==='BUY'?last.c-prev.entry:prev.entry-last.c;
   if(prev.direction==='BUY'){
     sl=Math.max(Number(prev.sl),sl);
-    if(move>=originalRisk)sl=Math.max(sl,prev.entry);
+    // V.56.25 staged TP2 protection is applied only to an EA-owned live POSITION.
     sl=Math.min(sl,last.c-Math.max(model.noise*.25,profile.riskFloor*.12));
   }else{
     sl=Math.min(Number(prev.sl),sl);
-    if(move>=originalRisk)sl=Math.min(sl,prev.entry);
+    // V.56.25 staged TP2 protection is applied only to an EA-owned live POSITION.
     sl=Math.max(sl,last.c+Math.max(model.noise*.25,profile.riskFloor*.12));
   }
   return{...fresh,entry:prev.entry,sl,tp1,tp2,managedLevels:true,previousLevels:{sl:prev.sl,tp1:prev.tp1,tp2:prev.tp2}};
@@ -182,9 +191,38 @@ function protectOnReversalV552(prev,c){
   return{...prev,sl,managedLevels:true,reversalProtection:true,previousLevels:{sl:prev.sl,tp1:prev.tp1,tp2:prev.tp2}};
 }
 
+const TP2_BE_PROGRESS_V5625=.40;
+const TP2_BE_LOCK_USD_V5625=2.50;
+const TP1_LOCK_OFFSET_USD_V5625=6.50;
+function applyTP2ProtectionV5625(original,managed,c){
+  if(!partialTpEnabled||!original||!managed||original.direction!==managed.direction)return managed;
+  const last=Number(c?.at(-1)?.c),entry=Number(original.entry),tp1=Number(original.tp1),tp2=Number(original.tp2),buy=String(original.direction).toUpperCase()==='BUY';
+  if(![last,entry,tp1,tp2].every(Number.isFinite))return managed;
+  const total=buy?tp2-entry:entry-tp2,moved=buy?last-entry:entry-last;if(!(total>0))return managed;
+  let sl=Number(managed.reversalProtection?managed.sl:original.sl);if(!Number.isFinite(sl))sl=Number(original.sl);
+  const improve=level=>{if(!Number.isFinite(level))return;sl=buy?Math.max(sl,level):Math.min(sl,level)};
+  let stage='NONE';
+  if(moved/total>=TP2_BE_PROGRESS_V5625){improve(entry+(buy?TP2_BE_LOCK_USD_V5625:-TP2_BE_LOCK_USD_V5625));stage='PROTECTED_BE'}
+  const beyondTp1=buy?last-tp1:tp1-last;
+  if(beyondTp1>=TP1_LOCK_OFFSET_USD_V5625){improve(tp1);stage='TP1_LOCK'}
+  const gap=Math.max((Number(stats(c)?.trMedian)||0)*.05,.01);
+  sl=buy?Math.min(sl,last-gap):Math.max(sl,last+gap);
+  return{...managed,sl,protectionStageV5625:stage,protectionProgressV5625:moved/total};
+}
 function adaptiveExpiryBars(c){const sp=adaptiveSpan(c.length),pts=[...pivots(c,true,sp),...pivots(c,false,sp)].sort((a,b)=>a.index-b.index),gaps=[];for(let i=1;i<pts.length;i++){const g=pts[i].index-pts[i-1].index;if(g>0)gaps.push(g)}if(!gaps.length)return Math.max(3,Math.round(Math.sqrt(c.length)));const med=median(gaps),mad=median(gaps.map(x=>Math.abs(x-med)));return Math.max(3,Math.round(med+mad))}
 function signalBarsAge(c,s){let idx=c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime));if(idx<0)idx=Math.max(0,c.length-adaptiveExpiryBars(c));return Math.max(0,c.length-1-idx)}
-function signalTouched(c,s,field){const idx=Math.max(0,c.findIndex(x=>Number(x.t)>=Number(s.createdCandleTime)));const w=c.slice(idx<0?0:idx),p=Number(s[field]);if(!Number.isFinite(p))return false;if(field==='sl')return s.direction==='BUY'?w.some(x=>x.l<=p):w.some(x=>x.h>=p);return s.direction==='BUY'?w.some(x=>x.h>=p):w.some(x=>x.l<=p)}
+function signalTouched(c,s,field){
+  const created=Number(s?.createdCandleTime),p=Number(s?.[field]);
+  if(!Number.isFinite(created)||!Number.isFinite(p))return false;
+  const idx=c.findIndex(x=>Number(x.t)>=created);if(idx<0)return false;
+  const buy=String(s.direction||'').toUpperCase()==='BUY',creationClose=Number(c[idx]?.c),after=c.slice(idx+1);
+  if(field==='sl'){
+    if(Number.isFinite(creationClose)&&(buy?creationClose<=p:creationClose>=p))return true;
+    return buy?after.some(x=>x.l<=p):after.some(x=>x.h>=p);
+  }
+  if(Number.isFinite(creationClose)&&(buy?creationClose>=p:creationClose<=p))return true;
+  return buy?after.some(x=>x.h>=p):after.some(x=>x.l<=p);
+}
 function classifyReconfirmation(prev,fresh,c){if(!prev||!fresh||prev.direction!==fresh.direction)return null;if(signalTouched(c,prev,'sl')||signalTouched(c,prev,'tp1'))return null;const model=empiricalDistanceModel(c,prev.direction,stats(c)),d=Math.abs(Number(prev.entry)-Number(fresh.entry));if(d>model.entryTolerance)return null;const age=signalBarsAge(c,prev),life=adaptiveExpiryBars(c);return{distance:d,tolerance:model.entryTolerance,age,life}}
 function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
 
@@ -307,13 +345,13 @@ const strongReference=Math.max(0,...referenceScores)>=62;
 const oppositeConflicts=Object.keys(checks).filter(k=>oppChecks[k]>=70&&oppChecks[k]>=checks[k]+10).length;
 const edge=Math.abs((Number(d.buyScore)||0)-(Number(d.sellScore)||0)),requiredEdge=Math.max(3,(Number(st.pressureUncertainty)||0)*.85),requiredScore=62+(Number(session?.boost)||0),score=Number(d.signal.score)||0;
 const standardSetupV5624=corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=3&&strongReference&&oppositeConflicts<=1&&score>=requiredScore&&edge>requiredEdge;
-const bestSetupV5624=score>=70&&corePass>=2&&structuralPass>=2&&referencePass>=3&&oppositeConflicts===0&&edge>requiredEdge;
-const ok=standardSetupV5624||bestSetupV5624;
-let reason=bestSetupV5624&&!standardSetupV5624?'Best setup confirmed by direction, structure and references':'Reference-weighted confirmation passed';
+const bestSetupV5625=score>=74&&corePass>=2&&tacticalPass>=2&&structuralPass>=2&&referencePass>=2&&strongReference&&oppositeConflicts<=1&&edge>Math.max(3,requiredEdge*.85);
+const ok=standardSetupV5624||bestSetupV5625;
+let reason=bestSetupV5625&&!standardSetupV5624?'Best setup confirmed by strong direction, structure and references':'Reference-weighted confirmation passed';
 if(corePass<2)reason=`Only ${corePass}/3 core direction confirmations passed`;
 else if(tacticalPass<2)reason=`Only ${tacticalPass}/5 tactical confirmations passed`;
 else if(structuralPass<2)reason=`Only ${structuralPass}/5 structural/reference confirmations passed`;
-else if(referencePass<3)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
+else if(referencePass<3&&!bestSetupV5625)reason=`Only ${referencePass}/7 runtime reference checks aligned`;
 else if(!strongReference)reason='No strong runtime reference confirmation reached 62/100';
 else if(oppositeConflicts>1)reason=`${oppositeConflicts} strong opposite-direction conflicts detected`;
 else if(score<requiredScore)reason=`Signal quality ${score} is below adaptive ${requiredScore} requirement for ${session?.name||'current session'}`;
@@ -460,6 +498,16 @@ async function checkSameSignalV30(d){
     const r=await fetch('/api/records-v2/duplicate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol,timeframe,direction:sig.direction,entry:sig.entry,sl:sig.sl,tp1:sig.tp1,tp2:sig.tp2})});
     const j=await r.json();d._sameActiveSignal=!!j.duplicate;d._sameSignalStatus=j.existing_status||'';return j;
   }catch(_){d._sameActiveSignal=false;return null}
+}
+function managedDirectionV5625(st){return String(st?.managed_direction||'').toUpperCase()}
+function hasManagedSignalExposureV5625(st,sig){const dir=managedDirectionV5625(st),want=String(sig?.direction||'').toUpperCase();return st?.managed_active===true&&(dir==='MIXED'||dir===want)}
+function hasManagedPositionV5625(st,sig){const dir=String(st?.managed_position_direction||'').toUpperCase(),want=String(sig?.direction||'').toUpperCase();return st?.managed_position_active===true&&dir===want}
+async function readMT5ModesV5625(){try{const r=await fetch('/api/mt5/modes',{cache:'no-store'}),j=await r.json();return r.ok?j:null}catch(_){return null}}
+async function reconcileRecordDuplicateV5625(d){
+  const same=await checkSameSignalV30(d);if(!same?.duplicate)return same;
+  const st=await readMT5ActiveStateV552(symbol);
+  if(!hasManagedSignalExposureV5625(st,d?.signal)){d._sameActiveSignal=false;d._sameSignalStatus='';d._staleRecordDuplicate=true}
+  return same;
 }
 function sameSignalMessageV30(d){
   const s=d?.signal;return s?`SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`:'NO NEW SIGNAL';
@@ -860,7 +908,7 @@ async function manageExistingMT5TradeV552(original,managed,status=''){
   if(!original||!managed||original.direction!==managed.direction)return null;
   const changed=Math.abs(Number(original.sl)-Number(managed.sl))>1e-9||Math.abs(Number(original.tp1)-Number(managed.tp1))>1e-9;
   if(!changed)return null;
-  const st=await readMT5ActiveStateV552(symbol);if(!st?.active||String(st.direction||'').toUpperCase()!==String(managed.direction||'').toUpperCase())return null;
+  const st=await readMT5ActiveStateV552(symbol);if(!hasManagedPositionV5625(st,managed))return null;const modes=await readMT5ModesV5625();if(modes?.sl_adjustment!==true)return null;
   try{
     const r=await fetch('/api/mt5/ea/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manage_id:`MHM${Date.now()}_${symbol}_${timeframe}`,symbol,direction:managed.direction,sl:Number(managed.sl),tp:partialTpEnabled?Number(managed.tp2):Number(managed.tp1),tp1:Number(managed.tp1),tp2:Number(managed.tp2),partial_tp:partialTpEnabled,reason:status||'RE-EVALUATE'})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`EA manage HTTP ${r.status}`);
@@ -871,20 +919,18 @@ async function manageExistingMT5TradeV552(original,managed,status=''){
 // V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
 async function dispatchUniqueSignalV36(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
+  const live=await readMT5ActiveStateV552(symbol);
+  if(hasManagedSignalExposureV5625(live,sig)){d._sameActiveSignal=true;d._sameSignalStatus='ACTIVE IN MT5';setAutoStatus('Same EA trade/pending is active in MT5 • no duplicate pending','warn');return{duplicate:true,source:'mt5'};}
   const baseSignalId=`MH${Date.now()}_${symbol}_${timeframe}`,selectedLot=lotForSignalScore(sig.score),signalId=partialTpEnabled?`${baseSignalId}__PT1_${Number(sig.tp1).toFixed(10)}`:baseSignalId,finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1);
-  const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry);
-  const pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
-  const recordPayload={signal_id:signalId,symbol,timeframe,direction:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp1:Number(sig.tp1),tp2:Number(sig.tp2),score:Number(sig.score)||0,setup:d.bestFamily||sig.setupReason||'',action:'NEW'};
-  const rr=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recordPayload)});
-  let rj={};try{rj=await rr.json()}catch(_){}
-  if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`);
-  if(rj.duplicate||rj.same_signal){d._sameActiveSignal=true;d._sameSignalStatus=rj.existing_status||'';setAutoStatus('Same signal still active • no duplicate Record / MT5 pending','warn');return rj;}
+  const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry),pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
   const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:pending,entry:Number(sig.entry),sl:Number(sig.sl),tp:finalTp,lot:selectedLot,expiry:0})});
-  let ej={};try{ej=await er.json()}catch(_){}
-  if(!er.ok)throw new Error(ej.error||`EA bridge HTTP ${er.status}`);
+  let ej={};try{ej=await er.json()}catch(_){}if(!er.ok)throw new Error(ej.error||`EA bridge HTTP ${er.status}`);
+  const recordPayload={signal_id:signalId,symbol,timeframe,direction:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp1:Number(sig.tp1),tp2:Number(sig.tp2),score:Number(sig.score)||0,setup:d.bestFamily||sig.setupReason||'',action:'NEW'};
+  let rj=null,recordError='';
+  try{const rr=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recordPayload)});try{rj=await rr.json()}catch(_){rj={}}if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`)}catch(e){recordError=String(e?.message||e);console.warn('Record sync failed after MT5 pending was sent',e)}
   try{await prepareMT5SignalV796(d,'NEW')}catch(_){}
-  setAutoStatus(`Signal recorded • MT5 pending sent • ${pending} • Lot ${selectedLot.toFixed(2)} • Partial TP ${partialTpEnabled?'ON':'OFF'}`,'good');
-  return {record:rj,ea:ej,signal_id:signalId};
+  setAutoStatus(recordError?`MT5 pending sent • ${pending} • Record sync pending`:`Signal recorded • MT5 pending sent • ${pending} • Lot ${selectedLot.toFixed(2)} • Partial TP ${partialTpEnabled?'ON':'OFF'}`,recordError?'warn':'good');
+  return{record:rj,ea:ej,signal_id:signalId,record_error:recordError};
 }
 function waitForUiCommitV5623(){
   return new Promise(resolve=>{
@@ -901,7 +947,7 @@ async function executeNewAnalysis(fromAuto=false){
     const executionGate=await validateExecutionGate(c,d);applyExecutionGate(d,executionGate);
     await applyActiveTradeSafetyV552(d);
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
-    if(d.signal){const same=await checkSameSignalV30(d);if(same?.duplicate)reason=sameSignalMessageV30(d);}
+    if(d.signal){const same=await reconcileRecordDuplicateV5625(d);if(same?.duplicate&&d._sameActiveSignal)reason=sameSignalMessageV30(d);}
     const mt5ExistingState=prev?await readMT5ActiveStateV552(symbol):null;
 if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
@@ -961,6 +1007,7 @@ async function executeReevaluate(fromAuto=false){
     else{status='WEAKENING — no fresh opposite signal, but directional confirmation is no longer clear';keep=true;displayOriginal=true;}
     if(displayOriginal){const sideScore=s.direction==='BUY'?current.buyScore:current.sellScore;if(same&&current.signal)current.signal={...current.signal,score:sideScore,status};else current.signal={...(current.signal||s),score:sideScore,status};current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Age ${age} bars; adaptive lifecycle ${life} bars.`}
     else{current.signal=null;current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Run NEW ANALYZE if you want a new setup.`}
+    if(displayOriginal&&current.signal){const [protectState,modeState]=await Promise.all([readMT5ActiveStateV552(symbol),readMT5ModesV5625()]);if(modeState?.sl_adjustment===true&&hasManagedPositionV5625(protectState,s))current.signal=applyTP2ProtectionV5625(s,current.signal,c);else current.signal={...current.signal,sl:Number(s.sl)}}
     if(keep){const obj={signal:displayOriginal?current.signal:s,state:status,candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(current,`RE-EVALUATE SIGNAL: ${status}. ${current.explanation}`,'REEVAL');busy=false;setBusy(false);
     await waitForUiCommitV5623();

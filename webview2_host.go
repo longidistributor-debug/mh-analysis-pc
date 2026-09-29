@@ -674,7 +674,7 @@ func runWebView2Host() {
 		return
 	}
 	chSetWindowDisplayAffinityV31.Call(hostHWND, chWDAExcludeFromCaptureV31)
-	wv2VersionLabel, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("STATIC"))), uintptr(unsafe.Pointer(chWstr("Version: V.56.24"))), chWSChild|chWSVisible, 1040, 10, 160, 24, hostHWND, 0, inst, 0)
+	wv2VersionLabel, _, _ = chCreateWindowEx.Call(0, uintptr(unsafe.Pointer(chWstr("STATIC"))), uintptr(unsafe.Pointer(chWstr("Version: V.56.25"))), chWSChild|chWSVisible, 1040, 10, 160, 24, hostHWND, 0, inst, 0)
 	wv2VersionFont, _, _ = wv2CreateFontV545.Call(^uintptr(14), 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 5, 0, uintptr(unsafe.Pointer(chWstr("Segoe UI"))))
 	if wv2VersionFont != 0 {
 		wv2SendMessageV545.Call(wv2VersionLabel, 0x0030, wv2VersionFont, 1)
