@@ -37,7 +37,6 @@ jobs:
           app_path=Path('web/app.js')
           app=app_path.read_text(encoding='utf-8')
 
-          # 1. Compact direct confirmations; no bullet-per-line renderer.
           start="  $('#reasons').className='detailText';"
           rs=app.find(start)
           if rs < 0: raise SystemExit('reasons render start not found')
@@ -51,7 +50,6 @@ jobs:
           $('#reasons').textContent=[...bestMatches,...topWarnings.map(x=>`Warning: ${x}`)].join(' — ')||'—';"""
           app=app[:rs]+new_reasons+app[re_:]
 
-          # 2. Visible analysis completes before Record/EA/WhatsApp handoff.
           anchor='async function executeNewAnalysis(fromAuto=false){'
           if 'function waitForUiCommitV5623(){' not in app:
               ai=app.find(anchor)
@@ -80,7 +78,6 @@ jobs:
           if old_reeval not in app: raise SystemExit('RE-EVALUATE completion line not found')
           app=app.replace(old_reeval,old_reeval+"\n    await waitForUiCommitV5623();",1)
 
-          # 3. Reference-weighted adaptive gate: easier for genuine best setups, still blocks random trades.
           old_base='const minEdge=Math.max(4.5,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);'
           if old_base not in app: raise SystemExit('base edge rule not found')
           app=app.replace(old_base,'const minEdge=Math.max(3,s.pressureUncertainty*.75),winnerScore=Math.max(buyScore,sellScore);',1)
@@ -134,17 +131,6 @@ jobs:
               p=Path(fn); s=p.read_text(encoding='utf-8'); s,n=re.subn(pat,rep,s,count=1)
               if n != 1: raise SystemExit(f'version replacement failed: {fn}')
               p.write_text(s,encoding='utf-8',newline='\n')
-
-          pub_path=Path('.github/workflows/publish-v563.yml')
-          pub=pub_path.read_text(encoding='utf-8')
-          pub=pub.replace('V.56.22','V.56.23').replace('V5622','V5623')
-          old_markers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=5'"
-          new_markers="'STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','independentMarketConsensus','feedUnavailable','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623'"
-          if old_markers not in pub: raise SystemExit('publisher old safety markers not found')
-          pub=pub.replace(old_markers,new_markers,1)
-          pub,n=re.subn(r"notes='[^']*'","notes='V.56.23 restores compact direct best-match confirmations without an internal scrollbar, finishes the visible analysis before signal handoff, and rebalances signal qualification around core direction, structure and reference evidence while preserving independent market consensus, active-trade safety, lot-size, SL adjustment, Partial TP and Fast Scalping.'",pub,count=1)
-          if n != 1: raise SystemExit('publisher release notes update failed')
-          pub_path.write_text(pub,encoding='utf-8',newline='\n')
           PY
 
       - name: Validate V.56.23 source and unchanged protected controls
@@ -158,9 +144,7 @@ jobs:
           css=Path('web/styles.css').read_text(encoding='utf-8')
           required=[
               'bestMatches=(d.reasons||[]).filter(Boolean).slice(0,3)',
-              "join(' — ')",
-              'waitForUiCommitV5623',
-              'try{await dispatchUniqueSignalV36(d)}',
+              "join(' — ')",'waitForUiCommitV5623','try{await dispatchUniqueSignalV36(d)}',
               'const minEdge=Math.max(3,s.pressureUncertainty*.75)',
               'corePass>=2','tacticalPass>=2','structuralPass>=2','referencePass>=3','strongReference',
               'independentMarketConsensus','STRICT VALIDATION PASSED','ACTIVE TRADE PRESERVED','feedUnavailable',
@@ -168,17 +152,13 @@ jobs:
           ]
           missing=[x for x in required if x not in app]
           if missing: raise SystemExit('missing V.56.23/protected markers: '+repr(missing))
-          if '.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}' not in css:
-              raise SystemExit('compact confirmations CSS missing')
+          if '.confirmationsInside .detailText{max-height:none;overflow:visible;padding-right:0;white-space:normal}' not in css: raise SystemExit('compact confirmations CSS missing')
           if Path('VERSION').read_text(encoding='utf-8').strip()!='V.56.23': raise SystemExit('VERSION mismatch')
           if 'const licAppVersion = "V.56.23"' not in Path('license_auth.go').read_text(encoding='utf-8'): raise SystemExit('license version mismatch')
           if 'const mhPublicVersionV001 = "V.56.23"' not in Path('updater.go').read_text(encoding='utf-8'): raise SystemExit('updater version mismatch')
           if '/v562-text-fix.js' in Path('web/index.html').read_text(encoding='utf-8'): raise SystemExit('runtime text patch must remain disabled')
           if 'ACTIVE_TRADE_REVERSAL_LOCK' not in Path('ea_signal_bridge.go').read_text(encoding='utf-8'): raise SystemExit('EA reversal lock missing')
           if 'FAST_ACTIVE_EXPOSURE_LOCK' not in Path('ea_modes_v558.go').read_text(encoding='utf-8'): raise SystemExit('Fast exposure lock missing')
-          pub=Path('.github/workflows/publish-v563.yml').read_text(encoding='utf-8')
-          for x in ['V.56.23','referencePass>=3','structuralPass>=2','strongReference','waitForUiCommitV5623']:
-              if x not in pub: raise SystemExit('publisher marker missing: '+x)
           PY
           go test ./...
 
@@ -188,7 +168,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add web/app.js web/styles.css VERSION license_auth.go updater.go webview2_host.go web/index.html .github/workflows/publish-v563.yml
+          git add web/app.js web/styles.css VERSION license_auth.go updater.go webview2_host.go web/index.html
           git commit -m 'Release MH Analysis V.56.23 targeted analysis fixes'
           git fetch origin v56.3-release
           git rebase origin/v56.3-release
