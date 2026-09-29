@@ -1,0 +1,114 @@
+name: Refresh V5625 Updater Runtime
+
+on:
+  push:
+    branches: [v56.25-release]
+    paths:
+      - '.github/workflows/refresh-v5625-updater-runtime.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebuild-publish:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.25-release
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Verify V.56.25 updater runtime and source
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/update-v001.js
+          if($LASTEXITCODE -ne 0){throw 'update-v001.js syntax failed'}
+          $u=Get-Content -Raw web\update-v001.js
+          foreach($m in @('setInterval(()=>checkVersion(true),60000)','window.addEventListener(''focus'',()=>checkVersion(true))','visibilitychange')){if(-not $u.Contains($m)){throw "updater runtime marker missing: $m"}}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.25'){throw 'VERSION mismatch'}
+          if(-not (Get-Content -Raw updater.go).Contains('const mhPublicVersionV001 = "V.56.25"')){throw 'updater version mismatch'}
+          if(-not (Get-Content -Raw license_auth.go).Contains('const licAppVersion = "V.56.25"')){throw 'license version mismatch'}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+
+      - name: Build refreshed V.56.25 EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup installation failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.25' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.25' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.25.exe'
+          if(-not(Test-Path $installer)){throw 'installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.25'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.25 fixes auto-pending reliability, EA-owned SL Adjustment management, TP2 40% protected breakeven at Entry +/- $2.50, TP1 + $6.50 SL lock, Wilder RSI, post-signal-only TP/SL hit tracking, balanced high-quality signal generation, and adds periodic/focus updater re-checks so future mandatory updates appear without restarting the app.'
+          $m=[ordered]@{version='V.56.25';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.25.zip' -Force
+
+      - name: Refresh V.56.25 GitHub release assets
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          gh release upload v56.25 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.25.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.25.exe' --clobber
+          if($LASTEXITCODE -ne 0){throw 'release asset refresh failed'}
+
+      - name: Publish refreshed production updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.25.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.25.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.25.exe" './MH-Analysis-Setup-V.56.25.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.25.exe'
+          git commit -m 'Refresh MH Analysis V.56.25 updater runtime' || true
+          git push origin mh-analysis-update-channel
+
+      - name: Verify live updater manifest
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 4
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json?cb='+$cb
+          $live=(Invoke-WebRequest -UseBasicParsing $url).Content|ConvertFrom-Json
+          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
+          if($live.version -ne 'V.56.25'){throw "live version mismatch: $($live.version)"}
+          if($live.mandatory -ne $true){throw 'live mandatory flag false'}
+          if($live.sha256 -ne $local.sha256){throw 'live manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-V5625-live.exe'
+          Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne $live.sha256.ToLower()){throw 'live binary SHA mismatch'}
+          Write-Host 'LIVE V.56.25 updater refresh PASSED'
