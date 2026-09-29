@@ -1,0 +1,1 @@
+Trigger MH Analysis V.56.22 publication after permanent source-character fix.
