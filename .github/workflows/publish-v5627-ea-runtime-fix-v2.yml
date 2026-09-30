@@ -1,0 +1,181 @@
+name: Publish V5627 EA Runtime Fix V2
+
+on:
+  push:
+    branches: [v56.27-release]
+    paths:
+      - '.github/workflows/publish-v5627-ea-runtime-fix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.27-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply EA runtime fixes
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+
+          $p='web/app.js'
+          $s=Get-Content -Raw $p
+          $before=([regex]::Matches($s,'type:pending')).Count
+          if($before -lt 2){throw "expected at least 2 type:pending handoffs, found $before"}
+          $s=$s.Replace('type:pending,entry:','type:sig.direction,entry:')
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          $p='ea_modes_v558.go'
+          $s=Get-Content -Raw $p
+          $anchor="`tmux.HandleFunc(`"/api/mt5/fast-status`", v558FastStatusHandler)"
+          $idx=$s.IndexOf($anchor)
+          if($idx -lt 0){throw 'registerV558ModeRoutes anchor missing'}
+          $end=$idx+$anchor.Length
+          $insert=[Environment]::NewLine+"`t// V.56.27 startup sync: clear stale EA mode file state."+[Environment]::NewLine+"`t_ = v558PublishConfig()"+[Environment]::NewLine+"`tv558RefreshNativeButtons()"
+          $s=$s.Substring(0,$end)+$insert+$s.Substring($end)
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          'V.56.27'|Set-Content -Encoding ascii VERSION
+          foreach($spec in @(
+            @{p='updater.go'; old='const mhPublicVersionV001 = "V.56.25"'; new='const mhPublicVersionV001 = "V.56.27"'},
+            @{p='license_auth.go'; old='const licAppVersion = "V.56.25"'; new='const licAppVersion = "V.56.27"'},
+            @{p='webview2_host.go'; old='Version: V.56.25'; new='Version: V.56.27'},
+            @{p='web/index.html'; old='id="mhUpdateVersionV001">V.56.25<'; new='id="mhUpdateVersionV001">V.56.27<'}
+          )){
+            $x=Get-Content -Raw $spec.p
+            if(-not $x.Contains($spec.old)){throw "version anchor missing: $($spec.p)"}
+            $x=$x.Replace($spec.old,$spec.new)
+            [IO.File]::WriteAllText((Join-Path $PWD $spec.p),$x,(New-Object Text.UTF8Encoding($false)))
+          }
+
+      - name: Validate source and safety locks
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/app.js
+          node --check web/update-v001.js
+          gofmt -w *.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.27'){throw 'VERSION mismatch'}
+          $app=Get-Content -Raw web\app.js
+          if(([regex]::Matches($app,'type:sig\.direction')).Count -lt 2){throw 'dynamic EA direction handoff missing'}
+          if($app.Contains('type:pending,entry:')){throw 'stale pending subtype handoff remains'}
+          foreach($m in @('TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','ACTIVE TRADE PRESERVED','bestSetupV5625')){if(-not $app.Contains($m)){throw "V.56.25 protection missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
+          $modes=Get-Content -Raw ea_modes_v558.go
+          foreach($m in @('_ = v558PublishConfig()','v558RefreshNativeButtons()','v558Modes = v558ModeState{Progressive: true}')){if(-not $modes.Contains($m)){throw "startup sync missing: $m"}}
+          $ea=Get-Content -Raw ea_signal_bridge.go
+          foreach($m in @('ACTIVE_TRADE_REVERSAL_LOCK','managed_position_active','NO_MANAGED_EA_POSITION')){if(-not $ea.Contains($m)){throw "EA safety missing: $m"}}
+
+      - name: Commit fixed source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js ea_modes_v558.go VERSION updater.go license_auth.go webview2_host.go web/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'V.56.27 repair EA pending runtime and startup mode sync'
+            git push origin HEAD:v56.27-release
+          fi
+
+      - name: Build EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup install failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.27' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.27' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.27.exe'
+          if(-not(Test-Path $installer)){throw 'installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.27'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.27 repairs EA execution: dynamic BUY/SELL pending resolution uses the current MT5 broker quote on each retry, and startup now synchronizes config.txt so stale Fast Scalping state cannot disable normal ProcessMHSignal. V.56.25 RSI, TP40/SL, manual-trade isolation, signal quality and anti-spam protections are preserved.'
+          $m=[ordered]@{version='V.56.27';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.27.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.27
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.27.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.27.exe
+          if-no-files-found: error
+
+      - name: Publish release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.27 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.27 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.27.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.27.exe' --target v56.27-release --title 'MH Analysis V.56.27' --notes 'EA runtime hotfix: dynamic pending resolution and startup EA mode synchronization. Existing V.56.25 protections retained.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish production updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.27.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.27.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.27.exe" './MH-Analysis-Setup-V.56.27.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.27.exe'
+          git commit -m 'Publish MH Analysis V.56.27' || true
+          git push origin mh-analysis-update-channel
+
+      - name: Verify live updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 4
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
+          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+$cb)).Content|ConvertFrom-Json
+          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
+          if($live.version -ne 'V.56.27'){throw "live version mismatch: $($live.version)"}
+          if($live.mandatory -ne $true){throw 'mandatory flag false'}
+          if($live.sha256 -ne $local.sha256){throw 'manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-V5627-live.exe'
+          Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne $live.sha256.ToLower()){throw 'live EXE SHA mismatch'}
+          Write-Host 'LIVE V.56.27 updater verification PASSED'
