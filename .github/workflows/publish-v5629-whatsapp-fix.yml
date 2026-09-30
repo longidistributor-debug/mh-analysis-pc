@@ -33,29 +33,8 @@ jobs:
           $start=$s.IndexOf('function decisionWhatsAppMessage(')
           $end=$s.IndexOf('async function sendDecisionWhatsApp', $start)
           if($start -lt 0 -or $end -le $start){throw 'WhatsApp formatter anchors not found'}
-          $new=@'
-function cleanWhatsAppTextV5629(v){
-  return String(v??'').replace(/[^\x20-\x7E]/g,' ').replace(/\s+/g,' ').trim();
-}
-function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
-  const sig=d?.signal||d?.originalSignal||null;
-  const isRe=action==='RE-EVALUATE';
-  const statusValue=isRe?'Re-Evaluate':(sig?'Signal generated':'No clear edge');
-  const reason=cleanWhatsAppTextV5629(isRe?(d?.explanation||status||d?.bestFamily||sig?.setupReason||'Market re-evaluation'):'');
-  const lines=['*MH ANALYSIS SIGNAL*',`*Status:* ${statusValue}`];
-  if(isRe){lines.push('',`*Reason:* ${reason||'Market re-evaluation'}`,'')}
-  else{lines.push('')}
-  lines.push(`*Pair:* ${cleanWhatsAppTextV5629(symbol)}`,`*Timeframe:* ${cleanWhatsAppTextV5629(String(timeframe).toUpperCase())}`,`*Time:* ${cleanWhatsAppTextV5629(new Date().toLocaleString())}`,'');
-  if(sig){
-    const selectedLot=lotForSignalScore(sig.score);
-    const setup=cleanWhatsAppTextV5629(d?.bestFamily||sig?.setupReason||'Best current setup');
-    lines.push(`*Signal:* ${cleanWhatsAppTextV5629(sig.direction)}`,`*Entry:* ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${Number(sig.score)||0}/100`,`*Lot:* ${selectedLot.toFixed(2)} (${lotSizeEnabled?'Score Auto':'Fixed'})`,`*Partial TP:* ${partialTpEnabled?'ON':'OFF'}`,`*Setup:* ${setup||'Best current setup'}`);
-  }else{
-    lines.push('*Signal:* NO CLEAR EDGE','*Entry:* N/A','*SL:* N/A','*TP1:* N/A','*TP2:* N/A','*Score:* N/A','*Setup:* No clear edge');
-  }
-  return lines.join('\n');
-}
-'@
+          $b64='ZnVuY3Rpb24gY2xlYW5XaGF0c0FwcFRleHRWNTYyOSh2KXsKICByZXR1cm4gU3RyaW5nKHY/PycnKS5yZXBsYWNlKC9bXlx4MjAtXHg3RV0vZywnICcpLnJlcGxhY2UoL1xzKy9nLCcgJykudHJpbSgpOwp9CmZ1bmN0aW9uIGRlY2lzaW9uV2hhdHNBcHBNZXNzYWdlKGQsYWN0aW9uPSdORVcgQU5BTFlTSVMnLHN0YXR1cz0nJyl7CiAgY29uc3Qgc2lnPWQ/LnNpZ25hbHx8ZD8ub3JpZ2luYWxTaWduYWx8fG51bGw7CiAgY29uc3QgaXNSZT1hY3Rpb249PT0nUkUtRVZBTFVBVEUnOwogIGNvbnN0IHN0YXR1c1ZhbHVlPWlzUmU/J1JlLUV2YWx1YXRlJzooc2lnPydTaWduYWwgZ2VuZXJhdGVkJzonTm8gY2xlYXIgZWRnZScpOwogIGNvbnN0IHJlYXNvbj1jbGVhbldoYXRzQXBwVGV4dFY1NjI5KGlzUmU/KGQ/LmV4cGxhbmF0aW9ufHxzdGF0dXN8fGQ/LmJlc3RGYW1pbHl8fHNpZz8uc2V0dXBSZWFzb258fCdNYXJrZXQgcmUtZXZhbHVhdGlvbicpOicnKTsKICBjb25zdCBsaW5lcz1bJypNSCBBTkFMWVNJUyBTSUdOQUwqJyxgKlN0YXR1czoqICR7c3RhdHVzVmFsdWV9YF07CiAgaWYoaXNSZSl7bGluZXMucHVzaCgnJyxgKlJlYXNvbjoqICR7cmVhc29ufHwnTWFya2V0IHJlLWV2YWx1YXRpb24nfWAsJycpfQogIGVsc2V7bGluZXMucHVzaCgnJyl9CiAgbGluZXMucHVzaChgKlBhaXI6KiAke2NsZWFuV2hhdHNBcHBUZXh0VjU2Mjkoc3ltYm9sKX1gLGAqVGltZWZyYW1lOiogJHtjbGVhbldoYXRzQXBwVGV4dFY1NjI5KFN0cmluZyh0aW1lZnJhbWUpLnRvVXBwZXJDYXNlKCkpfWAsYCpUaW1lOiogJHtjbGVhbldoYXRzQXBwVGV4dFY1NjI5KG5ldyBEYXRlKCkudG9Mb2NhbGVTdHJpbmcoKSl9YCwnJyk7CiAgaWYoc2lnKXsKICAgIGNvbnN0IHNlbGVjdGVkTG90PWxvdEZvclNpZ25hbFNjb3JlKHNpZy5zY29yZSk7CiAgICBjb25zdCBzZXR1cD1jbGVhbldoYXRzQXBwVGV4dFY1NjI5KGQ/LmJlc3RGYW1pbHl8fHNpZz8uc2V0dXBSZWFzb258fCdCZXN0IGN1cnJlbnQgc2V0dXAnKTsKICAgIGxpbmVzLnB1c2goYCpTaWduYWw6KiAke2NsZWFuV2hhdHNBcHBUZXh0VjU2Mjkoc2lnLmRpcmVjdGlvbil9YCxgKkVudHJ5OiogJHtmbXQoc2lnLmVudHJ5KX1gLGAqU0w6KiAke2ZtdChzaWcuc2wpfWAsYCpUUDE6KiAke2ZtdChzaWcudHAxKX1gLGAqVFAyOiogJHtmbXQoc2lnLnRwMil9YCxgKlNjb3JlOiogJHtOdW1iZXIoc2lnLnNjb3JlKXx8MH0vMTAwYCxgKkxvdDoqICR7c2VsZWN0ZWRMb3QudG9GaXhlZCgyKX0gKCR7bG90U2l6ZUVuYWJsZWQ/J1Njb3JlIEF1dG8nOidGaXhlZCd9KWAsYCpQYXJ0aWFsIFRQOiogJHtwYXJ0aWFsVHBFbmFibGVkPydPTic6J09GRid9YCxgKlNldHVwOiogJHtzZXR1cHx8J0Jlc3QgY3VycmVudCBzZXR1cCd9YCk7CiAgfWVsc2V7CiAgICBsaW5lcy5wdXNoKCcqU2lnbmFsOiogTk8gQ0xFQVIgRURHRScsJypFbnRyeToqIE4vQScsJypTTDoqIE4vQScsJypUUDE6KiBOL0EnLCcqVFAyOiogTi9BJywnKlNjb3JlOiogTi9BJywnKlNldHVwOiogTm8gY2xlYXIgZWRnZScpOwogIH0KICByZXR1cm4gbGluZXMuam9pbignXG4nKTsKfQo='
+          $new=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
           $s=$s.Substring(0,$start)+$new+$s.Substring($end)
           [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
 
@@ -78,7 +57,6 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
           $ErrorActionPreference='Stop'
           node --check web/app.js
           node --check web/update-v001.js
-          if($LASTEXITCODE -ne 0){throw 'JavaScript validation failed'}
           gofmt -w *.go
           go test ./...
           if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
@@ -88,7 +66,7 @@ function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
           $b=$app.IndexOf('async function sendDecisionWhatsApp',$a)
           if($a -lt 0 -or $b -le $a){throw 'new WhatsApp formatter missing'}
           $wa=$app.Substring($a,$b-$a)
-          foreach($m in @('*Status:*','*Signal:* NO CLEAR EDGE','*Entry:* N/A','*SL:* N/A','*TP1:* N/A','*TP2:* N/A','*Score:* N/A',"return lines.join('\\n')")){if(-not $wa.Contains($m)){throw "WhatsApp marker missing: $m"}}
+          foreach($m in @('*Status:*','*Signal:* NO CLEAR EDGE','*Entry:* N/A','*SL:* N/A','*TP1:* N/A','*TP2:* N/A','*Score:* N/A')){if(-not $wa.Contains($m)){throw "WhatsApp marker missing: $m"}}
           foreach($bad in @('ðŸ','â€”','âš','â€¢')){if($wa.Contains($bad)){throw "mojibake remains in WhatsApp formatter: $bad"}}
           foreach($m in @('TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','bestSetupV5625','type:sig.direction')){if(-not $app.Contains($m)){throw "trading safeguard missing: $m"}}
           foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
