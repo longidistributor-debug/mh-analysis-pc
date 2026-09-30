@@ -1,0 +1,185 @@
+name: Publish V5628 Updater Hardening
+
+on:
+  push:
+    branches: [v56.28-release]
+    paths:
+      - '.github/workflows/publish-v5628-updater-hardening.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.28-release
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V.56.28 updater hardening
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          python scripts/v5628_updater_patch.py
+          if($LASTEXITCODE -ne 0){throw 'V.56.28 patch failed'}
+
+      - name: Validate updater and existing trading safeguards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/app.js
+          node --check web/update-v001.js
+          if($LASTEXITCODE -ne 0){throw 'JavaScript validation failed'}
+          gofmt -w *.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.28'){throw 'VERSION mismatch'}
+
+          $u=Get-Content -Raw updater.go
+          foreach($m in @(
+            'const mhPublicVersionV001 = "V.56.28"',
+            'mhFetchManifestFromURLV002',
+            'urls := []string{mhUpdateManifestURLV001}',
+            'mhVersionNumberV001(m.Version) >= mhVersionNumberV001(mhPublicVersionV001)',
+            'mhVersionNumberV001(m.Version) < mhVersionNumberV001(mhPublicVersionV001)',
+            'mhbin=',
+            'no-cache, no-store, max-age=0'
+          )){if(-not $u.Contains($m)){throw "updater hardening marker missing: $m"}}
+
+          $js=Get-Content -Raw web\update-v001.js
+          foreach($m in @("/api/update/status?mhui=","/api/update/start?mhui=","30000")){if(-not $js.Contains($m)){throw "updater UI marker missing: $m"}}
+
+          $app=Get-Content -Raw web\app.js
+          foreach($m in @('type:sig.direction','TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','ACTIVE TRADE PRESERVED','bestSetupV5625')){if(-not $app.Contains($m)){throw "trading safeguard missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
+
+          $modes=Get-Content -Raw ea_modes_v558.go
+          foreach($m in @('_ = v558PublishConfig()','v558RefreshNativeButtons()')){if(-not $modes.Contains($m)){throw "V.56.27 startup EA sync missing: $m"}}
+
+          $ea=Get-Content -Raw ea_signal_bridge.go
+          foreach($m in @('ACTIVE_TRADE_REVERSAL_LOCK','managed_position_active','NO_MANAGED_EA_POSITION')){if(-not $ea.Contains($m)){throw "EA bridge safety missing: $m"}}
+
+      - name: Commit V.56.28 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add updater.go web/update-v001.js VERSION license_auth.go webview2_host.go web/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'V.56.28 harden mandatory updater detection and cache bypass'
+            git push origin HEAD:v56.28-release
+          fi
+
+      - name: Build V.56.28 EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){
+            choco install innosetup -y --no-progress
+            if($LASTEXITCODE -ne 0){throw 'Inno Setup install failed'}
+          }
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.28' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.28' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.28.exe'
+          if(-not(Test-Path $installer)){throw 'installer missing'}
+
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.28'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.28 hardens mandatory updates: the canonical production manifest is always checked even if a stale environment override exists, same-version binary mismatches are repaired, manifest and EXE requests bypass cache, and the UI rechecks every 30 seconds. V.56.27 EA pending/runtime fixes and prior trading safeguards are preserved.'
+          $manifest=[ordered]@{
+            version='V.56.28'
+            mandatory=$true
+            download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'
+            sha256=$sha
+            notes=$notes
+          }|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$manifest,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.28.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.28
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.28.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.28.exe
+          if-no-files-found: error
+
+      - name: Publish V.56.28 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.28 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.28 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.28.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.28.exe' --target v56.28-release --title 'MH Analysis V.56.28' --notes 'Mandatory updater hardening: canonical manifest fallback, same-version binary repair, cache-busted manifest/binary requests, and 30-second update recheck. Existing trading logic preserved.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish production updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.28.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.28.exe"
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.28.exe" './MH-Analysis-Setup-V.56.28.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.28.exe'
+          git commit -m 'Publish MH Analysis V.56.28 updater hardening' || true
+          git push origin mh-analysis-update-channel
+
+      - name: Verify live production updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 5
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
+          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+$cb)).Content|ConvertFrom-Json
+          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
+          if($live.version -ne 'V.56.28'){throw "live version mismatch: $($live.version)"}
+          if($live.mandatory -ne $true){throw 'mandatory flag false'}
+          if($live.download_url -ne 'https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe'){throw 'live download URL mismatch'}
+          if($live.sha256 -ne $local.sha256){throw 'manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-V5628-live.exe'
+          Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne $live.sha256.ToLower()){throw 'live EXE SHA mismatch'}
+          $ver=(Invoke-WebRequest -UseBasicParsing ($base+'VERSION?cb='+$cb)).Content.Trim()
+          if($ver -ne 'V.56.28'){throw "live VERSION mismatch: $ver"}
+          Write-Host 'LIVE V.56.28 updater verification PASSED'
