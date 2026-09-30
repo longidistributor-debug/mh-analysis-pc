@@ -19,7 +19,7 @@ if(support){
 // V56.1 maintenance: keep the Bismillah text exact and remove decorative glyphs
 // that can render as odd characters on some Windows font setups.
 const bismillah=document.querySelector('.bismillah');
-if(bismillah){bismillah.textContent='بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';bismillah.setAttribute('dir','rtl');}
+if(bismillah){bismillah.textContent='بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ';bismillah.setAttribute('dir','rtl');}
 document.querySelectorAll('.bismillahArea .ornament').forEach(el=>{el.textContent='';});
 // V56.0 isolated UI/mode guard. Loaded separately so the proven baseline app.js
 // remains untouched.

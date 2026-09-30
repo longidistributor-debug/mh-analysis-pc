@@ -124,8 +124,8 @@ function smcIctFamilies(c,m,s){
   return[
     fam('BUY','SMC: BOS / CHoCH structure',42+Math.min(2,bullBos)*16+chochBull*18+bullPd*14,[`BOS pressure ${two(bullBos)} median range`,chochBull?'Bullish CHoCH detected':`Dealing-range discount ${Math.round(bullPd*100)}%`]),
     fam('SELL','SMC: BOS / CHoCH structure',42+Math.min(2,bearBos)*16+chochBear*18+bearPd*14,[`BOS pressure ${two(bearBos)} median range`,chochBear?'Bearish CHoCH detected':`Dealing-range premium ${Math.round(bearPd*100)}%`]),
-    fam('BUY','ICT: liquidity raid / displacement / PD array',38+bullRaid*24+disp*13+rng*8+bullPd*9+bullArray*4,[bullRaid?'Sell-side liquidity raid reclaimed':'Liquidity raid not required',`Displacement ${Math.round(disp*100)} Ã¢â‚¬Â¢ bullish PD arrays ${bullArray}`]),
-    fam('SELL','ICT: liquidity raid / displacement / PD array',38+bearRaid*24+disp*13+rng*8+bearPd*9+bearArray*4,[bearRaid?'Buy-side liquidity raid rejected':'Liquidity raid not required',`Displacement ${Math.round(disp*100)} Ã¢â‚¬Â¢ bearish PD arrays ${bearArray}`])
+    fam('BUY','ICT: liquidity raid / displacement / PD array',38+bullRaid*24+disp*13+rng*8+bullPd*9+bullArray*4,[bullRaid?'Sell-side liquidity raid reclaimed':'Liquidity raid not required',`Displacement ${Math.round(disp*100)} • bullish PD arrays ${bullArray}`]),
+    fam('SELL','ICT: liquidity raid / displacement / PD array',38+bearRaid*24+disp*13+rng*8+bearPd*9+bearArray*4,[bearRaid?'Buy-side liquidity raid rejected':'Liquidity raid not required',`Displacement ${Math.round(disp*100)} • bearish PD arrays ${bearArray}`])
   ];
 }
 
@@ -161,7 +161,7 @@ function buildSignal(sym,tf,c,m,s,dir,buyScore,sellScore,ranked){
   const tp1Obj=chooseObjectiveBounded(entry,allOpp,desiredTp1,dir,Math.max(model.noise*.35,profile.tp1Floor*.25),profile.tp1Cap),tp1=tp1Obj??(dir==='BUY'?entry+desiredTp1:entry-desiredTp1);
   const further=allOpp.filter(x=>dir==='BUY'?x>tp1:x<tp1),tp2Obj=chooseObjectiveBounded(entry,further,desiredTp2,dir,Math.abs(tp1-entry)*1.05,profile.tp2Cap),tp2=tp2Obj??(dir==='BUY'?entry+desiredTp2:entry-desiredTp2);
   const score=dir==='BUY'?buyScore:sellScore,risk=Math.max(Math.abs(entry-sl),1e-9),rr1=Math.abs(tp1-entry)/risk,rr2=Math.abs(tp2-entry)/risk,reasons=ranked.slice(0,7).flatMap(f=>[`${f.name} ${Math.round(f.score)}/100`,f.reasons[0]]).filter(Boolean).slice(0,14);
-  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,status:'PENDING',reasons,setupReason:`${dir} Ã¢â‚¬Â¢ BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL uses the selected structural invalidation plus current ${tf} wick/range behavior, bounded by the measured ${tf} risk envelope (${two(profile.riskMin)}Ã¢â‚¬â€œ${two(profile.riskMax)} median true-ranges); no fixed pip distance is used.`,tp1Reason:`TP1 uses reachable opposing structure/liquidity inside the measured ${tf} target envelope. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next reachable structure/liquidity objective inside the measured ${tf} stretch envelope. Current computed R:R ${two(rr2)}R.`,distanceModel:{...model,timeframeProfile:profile}};
+  return{id:crypto.randomUUID(),symbol:sym,timeframe:tf,direction:dir,entry,sl,tp1,tp2,score,bullScore:buyScore,bearScore:sellScore,createdAt:Date.now(),createdCandleTime:last.t,status:'PENDING',reasons,setupReason:`${dir} • BEST CURRENT SETUP: ${ranked[0]?.name||'Composite market structure'}. ${chosen.reason} selected the entry. SMC/ICT, structure, liquidity, momentum and video-reference evidence were ranked together.`,slReason:`SL uses the selected structural invalidation plus current ${tf} wick/range behavior, bounded by the measured ${tf} risk envelope (${two(profile.riskMin)}–${two(profile.riskMax)} median true-ranges); no fixed pip distance is used.`,tp1Reason:`TP1 uses reachable opposing structure/liquidity inside the measured ${tf} target envelope. Current computed R:R ${two(rr1)}R.`,tp2Reason:`TP2 uses the next reachable structure/liquidity objective inside the measured ${tf} stretch envelope. Current computed R:R ${two(rr2)}R.`,distanceModel:{...model,timeframeProfile:profile}};
 }
 
 function managedReconfirmedLevelsV552(prev,fresh,c){
@@ -224,7 +224,7 @@ function signalTouched(c,s,field){
   return buy?after.some(x=>x.h>=p):after.some(x=>x.l<=p);
 }
 function classifyReconfirmation(prev,fresh,c){if(!prev||!fresh||prev.direction!==fresh.direction)return null;if(signalTouched(c,prev,'sl')||signalTouched(c,prev,'tp1'))return null;const model=empiricalDistanceModel(c,prev.direction,stats(c)),d=Math.abs(Number(prev.entry)-Number(fresh.entry));if(d>model.entryTolerance)return null;const age=signalBarsAge(c,prev),life=adaptiveExpiryBars(c);return{distance:d,tolerance:model.entryTolerance,age,life}}
-function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} Ã¢â‚¬Â¢ Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
+function preserveReconfirmedSignal(prev,fresh,meta,c){const managed=managedReconfirmedLevelsV552(prev,fresh,c);return{...managed,id:prev.id,createdAt:prev.createdAt,createdCandleTime:prev.createdCandleTime,reconfirmedAt:Date.now(),reconfirmed:true,previousScore:prev.score,reconfirmMeta:meta,setupReason:`RECONFIRMED ${fresh.direction} • Earlier setup remains active. Entry is preserved, while SL/TP are re-managed from fresh same-timeframe structure, volatility, indications and video-reference evidence. ${fresh.setupReason}`}}
 
 function analyze(c,prev){
   c=c.slice(-300);const m=marketMap(c);if(c.length<60)return{signal:null,map:m,buyScore:0,sellScore:0,bestFamily:'-',runnerUpFamily:'-',explanation:`Only ${c.length} candles are available; need at least 60 direct ${timeframe} candles.`,reasons:[],warnings:[]};
@@ -242,11 +242,11 @@ function refreshReason(prev,d){const fresh=d.signal;if(!prev&&!fresh)return d.ex
 const recentSession=(()=>{try{const x=JSON.parse(localStorage.getItem('mh-recent-signals-stable')||'[]');return Array.isArray(x)?x.slice(0,6):[]}catch(e){return[]}})();
 function setDataState(kind,text){
   const top=$('#restState'),detail=$('#restDetail');
-  top.className=`statusPill ${kind}`;top.textContent=`MH Analysis By MHammadS Ã¢â‚¬Â¢ Data Ã¢â‚¬Â¢ ${text}`;
+  top.className=`statusPill ${kind}`;top.textContent=`MH Analysis By MHammadS • Data • ${text}`;
   detail.className=kind;detail.textContent=text;
 }
 function setContextMeta(count,source='Market history'){
-  $('#candleCount').textContent=count?`${count} Ã¢â‚¬Â¢ ${timeframe}`:'Ã¢â‚¬â€';
+  $('#candleCount').textContent=count?`${count} • ${timeframe}`:'—';
   $('#dataSource').textContent=source;
   $('#lastUpdate').textContent=new Date().toLocaleString();
 }
@@ -259,14 +259,14 @@ async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allow
   const requestKey=`${targetSymbol}|${targetTimeframe}`;
   if(fetchInFlight.has(requestKey))return fetchInFlight.get(requestKey);
   const job=(async()=>{
-    if(requestKey===keyFor())setDataState('warn',reason==='chart'?'Loading chartÃ¢â‚¬Â¦':'RefreshingÃ¢â‚¬Â¦');
+    if(requestKey===keyFor())setDataState('warn',reason==='chart'?'Loading chart…':'Refreshing…');
     let r;
     try{
       r=await fetch('/api/history',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:targetSymbol,period:targetTimeframe,reason}),cache:'no-store'});
     }catch(e){
       const cached=candleCache.get(requestKey)||restoreCandles(requestKey)||[];
       if(allowCacheFallback&&cached.length>=60){
-        if(requestKey===keyFor()){setDataState('warn',`Offline cache Ã¢â‚¬Â¢ ${cached.length}`);setContextMeta(cached.length,'Local cached history');setChartData(cached,false)}
+        if(requestKey===keyFor()){setDataState('warn',`Offline cache • ${cached.length}`);setContextMeta(cached.length,'Local cached history');setChartData(cached,false)}
         return{candles:cached.slice(-300),meta:{source:'cache fallback'},fromCache:true};
       }
       if(requestKey===keyFor())setDataState('bad','Network failed');
@@ -276,7 +276,7 @@ async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allow
     if(!r.ok){
       const cached=candleCache.get(requestKey)||restoreCandles(requestKey)||[];
       if(allowCacheFallback&&cached.length>=60){
-        if(requestKey===keyFor()){setDataState('warn',`Data ${r.status} Ã¢â‚¬Â¢ cached ${cached.length}`);setContextMeta(cached.length,'Local cached history');setChartData(cached,false)}
+        if(requestKey===keyFor()){setDataState('warn',`Data ${r.status} • cached ${cached.length}`);setContextMeta(cached.length,'Local cached history');setChartData(cached,false)}
         return{candles:cached.slice(-300),meta:{source:'cache fallback'},fromCache:true};
       }
       if(requestKey===keyFor())setDataState('bad',`Failed ${r.status}`);
@@ -288,8 +288,8 @@ async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allow
     if(requestKey===keyFor()){
       setChartData(out,reason==='chart');
       setDataState('good',`${out.length} candles`);
-      setContextMeta(out.length,'Market history Ã¢â‚¬Â¢ Chart');
-      $('#nativeFeedStatus').textContent=`${out.length} candles loaded Ã¢â‚¬Â¢ ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+      setContextMeta(out.length,'Market history • Chart');
+      $('#nativeFeedStatus').textContent=`${out.length} candles loaded • ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
     }
     return{candles:out,meta:j.meta||{},fromCache:false};
   })().finally(()=>fetchInFlight.delete(requestKey));
@@ -297,10 +297,10 @@ async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allow
 }
 async function loadContextChart(){
   const k=keyFor(),cached=candleCache.get(k)||restoreCandles(k)||[];
-  if(cached.length){setChartData(cached,true);setContextMeta(cached.length,'Local cached history');$('#nativeFeedStatus').textContent=`Cached ${cached.length} candles Ã¢â‚¬Â¢ refreshingÃ¢â‚¬Â¦`}
+  if(cached.length){setChartData(cached,true);setContextMeta(cached.length,'Local cached history');$('#nativeFeedStatus').textContent=`Cached ${cached.length} candles • refreshing…`}
   if(!savedApiKey()){
     setDataState('neutralDot','Access key not saved');
-    $('#nativeFeedStatus').textContent=cached.length?`Cached ${cached.length} candles Ã¢â‚¬Â¢ save API key for fresh data`:'Save Access Key to load chart';
+    $('#nativeFeedStatus').textContent=cached.length?`Cached ${cached.length} candles • save API key for fresh data`:'Save Access Key to load chart';
     return cached;
   }
   try{return (await fetchCandles(symbol,timeframe,{allowCacheFallback:true,reason:'chart'})).candles}catch(e){showError(e.message);return cached}
@@ -392,7 +392,7 @@ async function detectNewsRisk(c){
   const empiricalHigh=ratio>=2.6;
   const feedUnavailable=api.available!==true;
   const high=!!api.high||empiricalHigh||feedUnavailable;
-  const label=feedUnavailable?'News calendar unavailable Ã¢â‚¬â€ fail-closed':(eventNames.length?eventNames.join(' / '):(empiricalHigh?'Abnormal candle volatility detected':''));
+  const label=feedUnavailable?'News calendar unavailable — fail-closed':(eventNames.length?eventNames.join(' / '):(empiricalHigh?'Abnormal candle volatility detected':''));
   return{high,label,events:eventNames,ratio,calendarHigh:!!api.high,empiricalHigh,feedUnavailable};
 }
 function applyNewsRisk(d,risk){
@@ -402,7 +402,7 @@ function applyNewsRisk(d,risk){
   d.signal=null;
   const event=risk.label||'High-impact economic volatility';
   d.warnings=[`NEWS RISK: ${event}`,...(d.warnings||[])];
-  d.explanation=`HIGH VOLATILITY / NEWS RISK Ã¢â‚¬â€ ${event}. No new signal is issued during this risk window. Trade at your own risk.`;
+  d.explanation=`HIGH VOLATILITY / NEWS RISK — ${event}. No new signal is issued during this risk window. Trade at your own risk.`;
   return d;
 }
 
@@ -419,49 +419,49 @@ function inferDetails(d){
 function renderTopMap(d){
   const m=d.map||{},x=inferDetails(d),sig=d.signal;
   $('#mapRegime').textContent=x.regime;$('#mapRegime').className=sig?(sig.direction==='BUY'?'good':'bad'):'warn';
-  $('#mapAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'Ã¢â‚¬â€';$('#mapVwap').textContent=fmt(m.vwap);
+  $('#mapAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'—';$('#mapVwap').textContent=fmt(m.vwap);
   $('#mapBullOb').textContent=m.bullObLow!=null?'Yes':'No';$('#mapBullOb').className=m.bullObLow!=null?'good':'';
   $('#mapBearOb').textContent=m.bearObLow!=null?'Yes':'No';$('#mapBearOb').className=m.bearObLow!=null?'bad':'';
-  const fvgMapText=m.fvgType?`${m.fvgType==='BULLISH'?'B':'S'} ${fmt(m.fvgLow)}Ã¢â‚¬â€œ${fmt(m.fvgHigh)} Ã¢â‚¬Â¢ ${m.fvgFillPct}%`:'No active';
+  const fvgMapText=m.fvgType?`${m.fvgType==='BULLISH'?'B':'S'} ${fmt(m.fvgLow)}–${fmt(m.fvgHigh)} • ${m.fvgFillPct}%`:'No active';
   $('#mapFvg').textContent=fvgMapText;$('#mapFvg').title=fvgMapText;
   const eqMapText=`H ${m.equalHigh!=null?fmt(m.equalHigh):'No EQH'} / L ${m.equalLow!=null?fmt(m.equalLow):'No EQL'}`;
   $('#mapEq').textContent=eqMapText;$('#mapEq').title=eqMapText;
   $('#mapDiv').textContent=m.divergence||'No';
-  $('#buyScoreTop').textContent=d.buyScore??'Ã¢â‚¬â€';$('#sellScoreTop').textContent=d.sellScore??'Ã¢â‚¬â€';
+  $('#buyScoreTop').textContent=d.buyScore??'—';$('#sellScoreTop').textContent=d.sellScore??'—';
 
   $('#detailRegime').textContent=x.regime;$('#detailTrend').textContent=x.strength;$('#detailVol').textContent=x.vol;$('#detailStructure').textContent=x.structure;$('#detailPressure').textContent=x.pressure;
-  $('#indAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'Ã¢â‚¬â€';
-  $('#indDi').textContent=(Number.isFinite(m.plusDi)&&Number.isFinite(m.minusDi))?`${m.plusDi.toFixed(1)} / ${m.minusDi.toFixed(1)}`:'Ã¢â‚¬â€';
+  $('#indAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'—';
+  $('#indDi').textContent=(Number.isFinite(m.plusDi)&&Number.isFinite(m.minusDi))?`${m.plusDi.toFixed(1)} / ${m.minusDi.toFixed(1)}`:'—';
   $('#indVwap').textContent=fmt(m.vwap);
-  $('#indOb').textContent=`Bull ${m.bullObLow!=null?'Yes':'No'} Ã¢â‚¬Â¢ Bear ${m.bearObLow!=null?'Yes':'No'}`;
+  $('#indOb').textContent=`Bull ${m.bullObLow!=null?'Yes':'No'} • Bear ${m.bearObLow!=null?'Yes':'No'}`;
   $('#indFvg').textContent=m.fvgType?`${m.fvgType} ${m.fvgFillPct}% filled`:'No active FVG';
   $('#indDiv').textContent=m.divergence||'No';
   const ranked=d._ranked||[];
   const smc=ranked.find(x=>String(x.name||'').startsWith('SMC:'));
   const ict=ranked.find(x=>String(x.name||'').startsWith('ICT:'));
   const volRatio=Number(d.newsRisk?.ratio);
-  const mapRiskLabel=d.newsRisk?.high?'HIGH':(Number.isFinite(volRatio)?(volRatio>=1.6?'MEDIUM':'LOW'):'Ã¢â‚¬â€');
-  if($('#mapRisk')){$('#mapRisk').textContent=mapRiskLabel==='Ã¢â‚¬â€'?'Ã¢â‚¬â€':`${mapRiskLabel} ${Number.isFinite(volRatio)?volRatio.toFixed(2)+'Ãƒâ€”':''}`.trim();$('#mapRisk').className=mapRiskLabel==='HIGH'?'bad':mapRiskLabel==='MEDIUM'?'warn':mapRiskLabel==='LOW'?'good':'';}
-  if($('#indSmc'))$('#indSmc').textContent=smc?`${Math.round(smc.score)}/100 Ã¢â‚¬Â¢ ${(smc.reasons&&smc.reasons[0])||smc.name}`:'Ã¢â‚¬â€';
-  if($('#indIct'))$('#indIct').textContent=ict?`${Math.round(ict.score)}/100 Ã¢â‚¬Â¢ ${(ict.reasons&&ict.reasons[0])||ict.name}`:'Ã¢â‚¬â€';
-  if($('#indRisk'))$('#indRisk').textContent=d.newsRisk?.high?`NEWS RISK Ã¢â‚¬Â¢ ${d.newsRisk.label||'high-impact volatility'}`:(Number.isFinite(volRatio)?`${volRatio.toFixed(2)}Ãƒâ€” median true range`:'Normal');
+  const mapRiskLabel=d.newsRisk?.high?'HIGH':(Number.isFinite(volRatio)?(volRatio>=1.6?'MEDIUM':'LOW'):'—');
+  if($('#mapRisk')){$('#mapRisk').textContent=mapRiskLabel==='—'?'—':`${mapRiskLabel} ${Number.isFinite(volRatio)?volRatio.toFixed(2)+'×':''}`.trim();$('#mapRisk').className=mapRiskLabel==='HIGH'?'bad':mapRiskLabel==='MEDIUM'?'warn':mapRiskLabel==='LOW'?'good':'';}
+  if($('#indSmc'))$('#indSmc').textContent=smc?`${Math.round(smc.score)}/100 • ${(smc.reasons&&smc.reasons[0])||smc.name}`:'—';
+  if($('#indIct'))$('#indIct').textContent=ict?`${Math.round(ict.score)}/100 • ${(ict.reasons&&ict.reasons[0])||ict.name}`:'—';
+  if($('#indRisk'))$('#indRisk').textContent=d.newsRisk?.high?`NEWS RISK • ${d.newsRisk.label||'high-impact volatility'}`:(Number.isFinite(volRatio)?`${volRatio.toFixed(2)}× median true range`:'Normal');
   if($('#detailRisk'))$('#detailRisk').textContent=d.newsRisk?.high?'NEWS RISK / NO NEW TRADE':(sig?`Model edge ${Math.abs((d.buyScore||0)-(d.sellScore||0)).toFixed(1)} pts`:'WAIT / NO TRADE');
 
-  $('#lvlEntry').textContent=sig?fmt(sig.entry):'Ã¢â‚¬â€';
-  $('#lvlSl').textContent=sig?fmt(sig.sl):'Ã¢â‚¬â€';
-  $('#lvlTp1').textContent=sig?fmt(sig.tp1):'Ã¢â‚¬â€';
-  $('#lvlTp2').textContent=sig?fmt(sig.tp2):'Ã¢â‚¬â€';
-  $('#lvlEq').textContent=`${m.equalHigh!=null?fmt(m.equalHigh):'Ã¢â‚¬â€'} / ${m.equalLow!=null?fmt(m.equalLow):'Ã¢â‚¬â€'}`;
+  $('#lvlEntry').textContent=sig?fmt(sig.entry):'—';
+  $('#lvlSl').textContent=sig?fmt(sig.sl):'—';
+  $('#lvlTp1').textContent=sig?fmt(sig.tp1):'—';
+  $('#lvlTp2').textContent=sig?fmt(sig.tp2):'—';
+  $('#lvlEq').textContent=`${m.equalHigh!=null?fmt(m.equalHigh):'—'} / ${m.equalLow!=null?fmt(m.equalLow):'—'}`;
   const zones=[];
-  if(m.bullObLow!=null)zones.push(`Bull OB ${fmt(m.bullObLow)}Ã¢â‚¬â€œ${fmt(m.bullObHigh)}`);
-  if(m.bearObLow!=null)zones.push(`Bear OB ${fmt(m.bearObLow)}Ã¢â‚¬â€œ${fmt(m.bearObHigh)}`);
-  if(m.fvgLow!=null)zones.push(`${m.fvgType||'FVG'} ${fmt(m.fvgLow)}Ã¢â‚¬â€œ${fmt(m.fvgHigh)}`);
-  $('#lvlZones').textContent=zones.join(' Ã¢â‚¬Â¢ ')||'Ã¢â‚¬â€';
+  if(m.bullObLow!=null)zones.push(`Bull OB ${fmt(m.bullObLow)}–${fmt(m.bullObHigh)}`);
+  if(m.bearObLow!=null)zones.push(`Bear OB ${fmt(m.bearObLow)}–${fmt(m.bearObHigh)}`);
+  if(m.fvgLow!=null)zones.push(`${m.fvgType||'FVG'} ${fmt(m.fvgLow)}–${fmt(m.fvgHigh)}`);
+  $('#lvlZones').textContent=zones.join(' • ')||'—';
 }
 function renderTopSetups(d){
   const rows=[],source=(d._ranked||[]).slice(0,3);
   if(source.length){source.forEach((f,i)=>rows.push(`<div class="rankRow"><span>${i+1}. ${escapeHtml(f.name)} (${f.direction})</span><b>${Math.round(f.score)}</b></div>`))}
-  else if(d.bestFamily&&d.bestFamily!=='-'){rows.push(`<div class="rankRow"><span>1. ${escapeHtml(d.bestFamily)}</span><b>${d.signal?.score??Math.max(d.buyScore,d.sellScore)}</b></div>`);if(d.runnerUpFamily&&d.runnerUpFamily!=='-')rows.push(`<div class="rankRow"><span>2. ${escapeHtml(d.runnerUpFamily)}</span><b>Ã¢â‚¬â€</b></div>`)}
+  else if(d.bestFamily&&d.bestFamily!=='-'){rows.push(`<div class="rankRow"><span>1. ${escapeHtml(d.bestFamily)}</span><b>${d.signal?.score??Math.max(d.buyScore,d.sellScore)}</b></div>`);if(d.runnerUpFamily&&d.runnerUpFamily!=='-')rows.push(`<div class="rankRow"><span>2. ${escapeHtml(d.runnerUpFamily)}</span><b>—</b></div>`)}
   $('#topSetups').className='rankList';$('#topSetups').innerHTML=rows.join('')||'No ranking yet.';
 }
 
@@ -472,9 +472,9 @@ async function loadRecentSignalsV5413(){
     const j=await r.json();
     const rows=(Array.isArray(j?.records)?j.records:[]).slice().sort((a,b)=>Number(b?.created_at||0)-Number(a?.created_at||0)).slice(0,6).map(x=>{
       const ts=Number(x?.created_at||0)*1000;
-      const t=String(x?.local_time||'').trim()||(ts?new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'Ã¢â‚¬â€');
+      const t=String(x?.local_time||'').trim()||(ts?new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'—');
       const label=String(x?.direction||'').trim().toUpperCase()||'NO EDGE';
-      return {time:t,timeframe:String(x?.timeframe||'Ã¢â‚¬â€'),label,score:Math.round(Number(x?.score)||0),state:String(x?.status||''),key:String(x?.signal_id||x?.id||`${ts}|${label}`)};
+      return {time:t,timeframe:String(x?.timeframe||'—'),label,score:Math.round(Number(x?.score)||0),state:String(x?.status||''),key:String(x?.signal_id||x?.id||`${ts}|${label}`)};
     });
     if(rows.length){
       recentSession.splice(0,recentSession.length,...rows);
@@ -489,7 +489,7 @@ async function loadRecentSignalsV5413(){
 function renderRecentSignals(){
   const previous=recentSession.slice(0,5);
   $('#recentSignals').className='recentList';
-  $('#recentSignals').innerHTML=previous.length?previous.map(x=>`<div class="recentRow"><span>${x.time}</span><span class="recentTf">${x.timeframe||'Ã¢â‚¬â€'}</span><b class="${x.label==='BUY'?'good':x.label==='SELL'?'bad':'warn'}">${x.label}</b><span>${Math.round(Number(x.score)||0)}/100</span></div>`).join(''):'No recent signals yet.';
+  $('#recentSignals').innerHTML=previous.length?previous.map(x=>`<div class="recentRow"><span>${x.time}</span><span class="recentTf">${x.timeframe||'—'}</span><b class="${x.label==='BUY'?'good':x.label==='SELL'?'bad':'warn'}">${x.label}</b><span>${Math.round(Number(x.score)||0)}/100</span></div>`).join(''):'No recent signals yet.';
 }
 // MH_SAME_SIGNAL_GUARD_V30
 async function checkSameSignalV30(d){
@@ -510,7 +510,7 @@ async function reconcileRecordDuplicateV5625(d){
   return same;
 }
 function sameSignalMessageV30(d){
-  const s=d?.signal;return s?`SAME SIGNAL STILL ACTIVE Ã¢â‚¬â€ NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} Ã¢â‚¬Â¢ Entry ${fmt(s.entry)} Ã¢â‚¬Â¢ SL ${fmt(s.sl)} Ã¢â‚¬Â¢ TP1 ${fmt(s.tp1)} Ã¢â‚¬Â¢ TP2 ${fmt(s.tp2)}.`:'NO NEW SIGNAL';
+  const s=d?.signal;return s?`SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL. ${symbol} ${timeframe} ${s.direction} • Entry ${fmt(s.entry)} • SL ${fmt(s.sl)} • TP1 ${fmt(s.tp1)} • TP2 ${fmt(s.tp2)}.`:'NO NEW SIGNAL';
 }
 async function captureSignalRecordV30(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
@@ -545,7 +545,7 @@ function updateSignalHeadline(d){
   if(!sig){el.className='signalHeadline';el.textContent='NO ACTIVE SIGNAL';return}
   const rr=Math.abs(sig.tp1-sig.entry)/Math.max(Math.abs(sig.entry-sig.sl),1e-9);
   el.className=`signalHeadline moving ${sig.direction==='BUY'?'buyHeadline':'sellHeadline'}`;
-  el.textContent=`${sig.direction} ${sig.score}/100 Ã¢â‚¬Â¢ ENTRY ${fmt(sig.entry)} Ã¢â‚¬Â¢ SL ${fmt(sig.sl)} Ã¢â‚¬Â¢ TP1 ${fmt(sig.tp1)} Ã¢â‚¬Â¢ TP2 ${fmt(sig.tp2)} Ã¢â‚¬Â¢ RR ${rr.toFixed(2)} : 1 Ã¢â‚¬Â¢ ${d.bestFamily||'Best current setup'}   `;
+  el.textContent=`${sig.direction} ${sig.score}/100 • ENTRY ${fmt(sig.entry)} • SL ${fmt(sig.sl)} • TP1 ${fmt(sig.tp1)} • TP2 ${fmt(sig.tp2)} • RR ${rr.toFixed(2)} : 1 • ${d.bestFamily||'Best current setup'}   `;
 }
 function escapeHtml(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function cleanConfirmationTextV5624(v){
@@ -567,7 +567,7 @@ function renderConfirmationsV5624(d){
   ];
   root.className='detailText confirmationRowsV5624';
   root.replaceChildren();
-  if(!rows.length){root.textContent='Ã¢â‚¬â€';return}
+  if(!rows.length){root.textContent='—';return}
   for(const row of rows){
     const line=document.createElement('div');line.className=`confirmationRowV5624${row.warn?' warningRowV5624':''}`;
     const head=document.createElement('span');head.className='confirmationHeadV5624';head.textContent=row.label;
@@ -580,17 +580,17 @@ function renderDecision(d,reason,mode='NEW'){
   lastDecision.set(keyFor(),d);chartDecision=d;window.__MH_LAST_DECISION__=d;renderSignalLevels();const sig=d.signal,b=$('#signalBadge'),q=$('#signalQuality'),plan=$('#plan'),card=$('#signalCard');
   if(sig){
     const isBuy=sig.direction==='BUY';
-    b.className=`signalBadge ${isBuy?'buy':'sell'}`;b.textContent=`${isBuy?'Ã¢â€ â€”':'Ã¢â€ Ëœ'} ${sig.direction} SIGNAL`;
+    b.className=`signalBadge ${isBuy?'buy':'sell'}`;b.textContent=`${isBuy?'↗':'↘'} ${sig.direction} SIGNAL`;
     card.className=`panel signalPanel ${isBuy?'buyState':'sellState'}`;
-    q.className=isBuy?'good':'bad';q.textContent=`${sig.score} / 100 Ã¢â‚¬Â¢ ${d.bestFamily}`;
+    q.className=isBuy?'good':'bad';q.textContent=`${sig.score} / 100 • ${d.bestFamily}`;
     plan.className='plan';
     const risk=Math.max(Math.abs(sig.entry-sig.sl),1e-9),rr1=Math.abs(sig.tp1-sig.entry)/risk,rr2=Math.abs(sig.tp2-sig.entry)/risk;
     plan.innerHTML=`<div class="kv"><b>ENTRY</b><span>${fmt(sig.entry)}</span><b>SL</b><span>${fmt(sig.sl)}</span><b>TP1</b><span>${fmt(sig.tp1)}</span><b>TP2</b><span>${fmt(sig.tp2)}</span><b>RR (TP1)</b><span>${rr1.toFixed(2)} : 1</span><b>RR (TP2)</b><span>${rr2.toFixed(2)} : 1</span></div><div><b>CURRENT SETUP</b><br>${escapeHtml(sig.setupReason)}</div>`;
   } else {
     const newsBlocked=!!d.newsRisk?.high;
-    b.className='signalBadge neutral';b.textContent=newsBlocked?'Ã¢Å¡Â  NEWS RISK Ã¢â‚¬Â¢ NO SIGNAL':'NO CLEAR EDGE';card.className='panel signalPanel neutralState';q.className='warn';q.textContent=newsBlocked?'HIGH IMPACT / VOLATILITY':`BUY ${d.buyScore} Ã¢â‚¬Â¢ SELL ${d.sellScore}`;plan.className='plan muted';plan.textContent=newsBlocked?d.explanation:'Fresh ranking found no statistically clear directional edge. The previous signal is not blindly reused.';
+    b.className='signalBadge neutral';b.textContent=newsBlocked?'⚠ NEWS RISK • NO SIGNAL':'NO CLEAR EDGE';card.className='panel signalPanel neutralState';q.className='warn';q.textContent=newsBlocked?'HIGH IMPACT / VOLATILITY':`BUY ${d.buyScore} • SELL ${d.sellScore}`;plan.className='plan muted';plan.textContent=newsBlocked?d.explanation:'Fresh ranking found no statistically clear directional edge. The previous signal is not blindly reused.';
   }
-  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE Ã¢â‚¬â€ NO NEW SIGNAL':'NEW ANALYSIS');
+  $('#analysisStatusHeading').textContent=mode==='REEVAL'?'RE-EVALUATE SIGNAL':(d?._sameActiveSignal?'SAME SIGNAL STILL ACTIVE — NO NEW SIGNAL':'NEW ANALYSIS');
   $('#explanation').className='detailText';$('#explanation').textContent=reason||d.explanation;
   renderConfirmationsV5624(d);
   renderTopMap(d);renderTopSetups(d);if(mode!=='VIEW')addRecent(d,mode);updateSignalHeadline(d);
@@ -598,7 +598,7 @@ function renderDecision(d,reason,mode='NEW'){
 function buildRankedForUi(c,d){try{const m=d.map,s=stats(c),fs=[...trendFamilies(c,m,s),...structureFamilies(c,m,s),...liquidityFamilies(c,m,s),...breakoutFamilies(c,m,s),...reversalFamilies(c,m,s),...zoneFamilies(c,m,s),...momentumFamilies(c,m,s),...smcIctFamilies(c,m,s),...videoFamilies(c,m,s)];const dir=d.signal?.direction||(d.buyScore>=d.sellScore?'BUY':'SELL');return fs.filter(x=>x.direction===dir).sort((a,b)=>b.score-a.score)}catch(e){return[]}}
 function setBusy(on,msg=''){['#analyze','#reevaluate'].forEach(x=>$(x).disabled=on);if(on){$('#explanation').className='detailText muted';$('#explanation').textContent=msg}}
 function showError(msg){
-  $('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='ANALYSIS UNAVAILABLE';$('#signalQuality').textContent='Ã¢â‚¬â€';
+  $('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='ANALYSIS UNAVAILABLE';$('#signalQuality').textContent='—';
   $('#analysisStatusHeading').textContent='ANALYSIS STATUS';
   $('#explanation').className='detailText bad';$('#explanation').textContent=msg;
 }
@@ -634,21 +634,21 @@ function applyTickerCacheV549(j){
     if(Number.isFinite(Number(j?.usdjpy)))$('#tickerUSDJPY').textContent=Number(j.usdjpy).toFixed(3);
     if(Number.isFinite(Number(j?.gbpusd)))$('#tickerGBPUSD').textContent=Number(j.gbpusd).toFixed(5);
     if(Number.isFinite(Number(j?.gbpjpy)))$('#tickerGBPJPY').textContent=Number(j.gbpjpy).toFixed(3);
-    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'Ã¢â‚¬â€');
+    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
     document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{if(vals[i])el.textContent=vals[i]});
   }catch(e){}
 }
 function primeTickerV549(){
   try{const c=JSON.parse(localStorage.getItem('mh-public-ticker-stable')||'null');if(c)applyTickerCacheV549(c)}catch(e){}
-  try{const cached=(candleCache.get('XAUUSD|15m')||restoreCandles('XAUUSD|15m')||[]);if(cached.length&&(!$('#tickerGold').textContent||$('#tickerGold').textContent==='Ã¢â‚¬â€')){$('#tickerGold').textContent=`$${fmt(Number(cached.at(-1).c))}`}}catch(e){}
-  const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'Ã¢â‚¬â€');
-  document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>el.textContent=vals[i]||'Ã¢â‚¬â€');
+  try{const cached=(candleCache.get('XAUUSD|15m')||restoreCandles('XAUUSD|15m')||[]);if(cached.length&&(!$('#tickerGold').textContent||$('#tickerGold').textContent==='—')){$('#tickerGold').textContent=`$${fmt(Number(cached.at(-1).c))}`}}catch(e){}
+  const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
+  document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>el.textContent=vals[i]||'—');
 }
 async function refreshPublicTicker(){
   try{
     const cached=(candleCache.get('XAUUSD|15m')||candleCache.get(keyFor())||[]).map(normalizeCandle).filter(Boolean);
     if(cached.length){publicGoldPrice=Number(cached.at(-1).c);if(Number.isFinite(publicGoldPrice))$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`}
-    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'Ã¢â‚¬â€');
+    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
     document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{if(vals[i]!=null)el.textContent=vals[i]});
   }catch(e){}
   try{
@@ -657,8 +657,8 @@ async function refreshPublicTicker(){
       try{localStorage.setItem('mh-public-ticker-stable',JSON.stringify(j));applyTickerCacheV549(j)}catch(e){}
       savePersistentUICacheV5411({ticker:j});
       if(Number.isFinite(Number(j.gold_usd))&&Number(j.gold_usd)>0){publicGoldPrice=Number(j.gold_usd);$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`;if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624();}
-      if(Number.isFinite(Number(j.btc_usd)))$('#tickerBTC').textContent=`$${Number(j.btc_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.btc_change_24h))?` Ã¢â‚¬Â¢ ${Number(j.btc_change_24h)>=0?'+':''}${Number(j.btc_change_24h).toFixed(2)}%`:''}`;
-      if(Number.isFinite(Number(j.eth_usd)))$('#tickerETH').textContent=`$${Number(j.eth_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.eth_change_24h))?` Ã¢â‚¬Â¢ ${Number(j.eth_change_24h)>=0?'+':''}${Number(j.eth_change_24h).toFixed(2)}%`:''}`;
+      if(Number.isFinite(Number(j.btc_usd)))$('#tickerBTC').textContent=`$${Number(j.btc_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.btc_change_24h))?` • ${Number(j.btc_change_24h)>=0?'+':''}${Number(j.btc_change_24h).toFixed(2)}%`:''}`;
+      if(Number.isFinite(Number(j.eth_usd)))$('#tickerETH').textContent=`$${Number(j.eth_usd).toLocaleString(undefined,{maximumFractionDigits:2})}${Number.isFinite(Number(j.eth_change_24h))?` • ${Number(j.eth_change_24h)>=0?'+':''}${Number(j.eth_change_24h).toFixed(2)}%`:''}`;
       if(Number.isFinite(Number(j.eurusd)))$('#tickerEURUSD').textContent=Number(j.eurusd).toFixed(5);
       if(Number.isFinite(Number(j.usdjpy)))$('#tickerUSDJPY').textContent=Number(j.usdjpy).toFixed(3);
       if(Number.isFinite(Number(j.gbpusd)))$('#tickerGBPUSD').textContent=Number(j.gbpusd).toFixed(5);
@@ -675,7 +675,7 @@ async function refreshPublicTicker(){
     }
   }catch(e){}
   try{
-    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'Ã¢â‚¬â€');
+    const vals=['tickerGold','tickerBTC','tickerETH','tickerEURUSD','tickerUSDJPY','tickerGBPUSD','tickerGBPJPY'].map(id=>document.getElementById(id)?.textContent||'—');
     document.querySelectorAll('.tickerClone .tickerCell span').forEach((el,i)=>{ if(vals[i]!=null) el.textContent=vals[i]; });
   }catch(e){}
 }
@@ -686,14 +686,14 @@ function primeMovingTickerV547(){
     if(bar){bar.style.visibility='visible';bar.style.opacity='1'}
   }catch(e){}
 }
-function capFmt(v){const n=Number(v);if(!Number.isFinite(n))return'Ã¢â‚¬â€';if(n>=1e12)return`$${(n/1e12).toFixed(2)}T`;if(n>=1e9)return`$${(n/1e9).toFixed(2)}B`;if(n>=1e6)return`$${(n/1e6).toFixed(2)}M`;return`$${n.toLocaleString(undefined,{maximumFractionDigits:0})}`}
+function capFmt(v){const n=Number(v);if(!Number.isFinite(n))return'—';if(n>=1e12)return`$${(n/1e12).toFixed(2)}T`;if(n>=1e9)return`$${(n/1e9).toFixed(2)}B`;if(n>=1e6)return`$${(n/1e6).toFixed(2)}M`;return`$${n.toLocaleString(undefined,{maximumFractionDigits:0})}`}
 function setTopMetricLabels(title,a,b,c,d){$('#marketDataTitle').textContent=title;$('#metric1Label').textContent=a;$('#metric2Label').textContent=b;$('#metric3Label').textContent=c;$('#metric4Label').textContent=d}
 function renderGoldMetrics(){
   setTopMetricLabels('GOLD DATA','PRICE','24H HIGH','24H LOW','24H CHANGE');
   const arr=(candleCache.get(keyFor())||restoreCandles(keyFor())||[]).map(normalizeCandle).filter(Boolean).sort((a,b)=>a.t-b.t);
   if(!arr.length){
-    $('#btcMarketCap').textContent=Number.isFinite(publicGoldPrice)?`$${fmt(publicGoldPrice)}`:'Ã¢â‚¬â€';
-    $('#totalMarketCap').textContent='Ã¢â‚¬â€';$('#btcDominance').textContent='Ã¢â‚¬â€';$('#btcChange').textContent='Ã¢â‚¬â€';$('#btcChange').className='';
+    $('#btcMarketCap').textContent=Number.isFinite(publicGoldPrice)?`$${fmt(publicGoldPrice)}`:'—';
+    $('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—';$('#btcChange').className='';
     if(Number.isFinite(publicGoldPrice))$('#tickerGold').textContent=`$${fmt(publicGoldPrice)}`;
     return;
   }
@@ -705,7 +705,7 @@ function renderBTCMetricsV5624(){
   const k=`BTCUSDT|${timeframe}`;
   const arr=(candleCache.get(k)||restoreCandles(k)||[]).map(normalizeCandle).filter(Boolean).sort((a,b)=>a.t-b.t);
   if(!arr.length){
-    $('#btcMarketCap').textContent='Ã¢â‚¬â€';$('#totalMarketCap').textContent='Ã¢â‚¬â€';$('#btcDominance').textContent='Ã¢â‚¬â€';$('#btcChange').textContent='Ã¢â‚¬â€';$('#btcChange').className='';
+    $('#btcMarketCap').textContent='—';$('#totalMarketCap').textContent='—';$('#btcDominance').textContent='—';$('#btcChange').textContent='—';$('#btcChange').className='';
     return;
   }
   const last=arr.at(-1),cut=last.t-86400,day=arr.filter(x=>x.t>=cut),w=day.length?day:arr.slice(-Math.min(arr.length,96)),first=w[0];
@@ -773,7 +773,7 @@ const FIXED_REEVAL_OFFSET=5*60*1000;
 function fixedPhaseInfo(at=Date.now()){
   const d=new Date(at),minute=d.getMinutes(),phase=Math.floor(minute/15)+1,startMinute=(phase-1)*15,endMinute=phase*15;
   const cycleStart=new Date(d.getFullYear(),d.getMonth(),d.getDate(),d.getHours(),startMinute,0,0).getTime();
-  return{phase,startMinute,endMinute,cycleStart,reevalAt:cycleStart+FIXED_REEVAL_OFFSET,nextCycleAt:cycleStart+FIXED_PHASE_MS,label:`1H Phase ${phase}/4 Ã¢â‚¬Â¢ ${String(startMinute).padStart(2,'0')}:00Ã¢â‚¬â€œ${String(endMinute).padStart(2,'0')}:00`};
+  return{phase,startMinute,endMinute,cycleStart,reevalAt:cycleStart+FIXED_REEVAL_OFFSET,nextCycleAt:cycleStart+FIXED_PHASE_MS,label:`1H Phase ${phase}/4 • ${String(startMinute).padStart(2,'0')}:00–${String(endMinute).padStart(2,'0')}:00`};
 }
 function fixedRemain(ms){const v=Math.max(0,ms),m=Math.floor(v/60000),sec=Math.floor((v%60000)/1000);return`${m}:${String(sec).padStart(2,'0')}`}
 function fixedPhaseElapsed(info=fixedPhaseInfo()){return fixedRemain(Math.min(FIXED_PHASE_MS,Math.max(0,Date.now()-info.cycleStart)))}
@@ -792,8 +792,8 @@ function updateAutoButton(){
   b.className=`autoSignalToggle ${autoSignalEnabled?'on':'off'}`;
   if(!autoSignalEnabled){b.textContent='Get Signal: OFF';setAutoStatus('Manual only');return}
   const info=fixedPhaseInfo(),left=Math.max(0,autoSignalNextAt-Date.now());
-  b.textContent=`Get Signal: ON Ã¢â‚¬Â¢ ${fixedRemain(left)}`;
-  setAutoStatus(`${info.label} Ã¢â‚¬Â¢ Elapsed ${fixedPhaseElapsed(info)} / 15:00 Ã¢â‚¬Â¢ Next ${actionLabel(autoSignalNextAction)} in ${fixedRemain(left)}`,'good');
+  b.textContent=`Get Signal: ON • ${fixedRemain(left)}`;
+  setAutoStatus(`${info.label} • Elapsed ${fixedPhaseElapsed(info)} / 15:00 • Next ${actionLabel(autoSignalNextAction)} in ${fixedRemain(left)}`,'good');
 }
 function stopAutoTimers(){if(autoSignalTimer){clearTimeout(autoSignalTimer);autoSignalTimer=null}if(autoCountdownTimer){clearInterval(autoCountdownTimer);autoCountdownTimer=null}}
 function scheduleAutoAt(action,targetMs){
@@ -820,7 +820,7 @@ async function autoSendAndSchedule(d,action,status=''){
   if(!autoSignalEnabled)return;
   const completedAt=Date.now();
   try{
-    setAutoStatus(`${fixedPhaseInfo(completedAt).label} Ã¢â‚¬Â¢ Sending ${action.toLowerCase()}Ã¢â‚¬Â¦`,'warn');
+    setAutoStatus(`${fixedPhaseInfo(completedAt).label} • Sending ${action.toLowerCase()}…`,'warn');
     await sendDecisionWhatsApp(d,action,status);
   }catch(e){setAutoStatus(e.message,'bad')}
   scheduleAfterCompletedFixedAction(action,completedAt);
@@ -837,14 +837,14 @@ async function setAutoSignalEnabled(on){
     }
     if(!backendSettings.has_api_key){
       autoSignalEnabled=false;localStorage.setItem(STORAGE_AUTO,'0');stopAutoTimers();updateAutoButton();
-      setAutoStatus('Access key missing Ã¢â‚¬Â¢ add it from KEYS','bad');return;
+      setAutoStatus('Access key missing • add it from KEYS','bad');return;
     }
   }
   autoSignalEnabled=!!on;localStorage.setItem(STORAGE_AUTO,autoSignalEnabled?'1':'0');
   if(autoSignalEnabled){
     stopAutoTimers();
     const ev=nextFixedAutoEvent(Date.now(),true);
-    if(ev.catchup){setAutoStatus(`${ev.info.label} Ã¢â‚¬Â¢ Catch-up NEW ANALYZE now, then fixed RE-EVALUATE at +05`,'good');scheduleAutoAt('NEW',Date.now()+120);}
+    if(ev.catchup){setAutoStatus(`${ev.info.label} • Catch-up NEW ANALYZE now, then fixed RE-EVALUATE at +05`,'good');scheduleAutoAt('NEW',Date.now()+120);}
     else scheduleAutoAt(ev.action,ev.at<=Date.now()?Date.now()+120:ev.at);
   }else{stopAutoTimers();autoSignalNextAt=0;updateAutoButton()}
 }
@@ -866,11 +866,11 @@ async function sendUniqueSignalToEAV30(d){
     const r=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp:finalTp,lot:selectedLot,expiry:0})});
     let j={};try{j=await r.json()}catch(_){ }
     if(!r.ok)throw new Error(j.error||`EA bridge HTTP ${r.status}`);
-    setAutoStatus(`MT5 pending sent to EA Ã¢â‚¬Â¢ ${pending}`,'good');
+    setAutoStatus(`MT5 pending sent to EA • ${pending}`,'good');
     return j;
   }catch(e){
     console.warn('MT5 EA pending bridge failed',e);
-    setAutoStatus(`MT5 pending failed Ã¢â‚¬Â¢ ${e.message||e}`,'bad');
+    setAutoStatus(`MT5 pending failed • ${e.message||e}`,'bad');
     return null;
   }
 }
@@ -904,7 +904,7 @@ async function applyActiveTradeSafetyV552(d){
   if(activeDir&&activeDir!=='MIXED'&&activeDir!==newDir){
     d.blockedSignal=sig;d.signal=null;d._reversalBlocked=true;d._activeTradeState=st;
     d.warnings=[`ACTIVE TRADE SAFETY: MT5 has active ${activeDir}. Fresh analysis detected ${newDir}, but no reverse signal/order will be issued until the current position/pending order is resolved.`,...(d.warnings||[])];
-    d.explanation=`REVERSAL WARNING Ã¢â‚¬â€ fresh analysis currently favors ${newDir}, while MT5 still reports active ${activeDir}. Re-evaluation remains active for protection/SL management; reverse execution is locked until the current exposure is resolved.`;
+    d.explanation=`REVERSAL WARNING — fresh analysis currently favors ${newDir}, while MT5 still reports active ${activeDir}. Re-evaluation remains active for protection/SL management; reverse execution is locked until the current exposure is resolved.`;
   }
   return d;
 }
@@ -916,15 +916,15 @@ async function manageExistingMT5TradeV552(original,managed,status=''){
   try{
     const r=await fetch('/api/mt5/ea/manage',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({manage_id:`MHM${Date.now()}_${symbol}_${timeframe}`,symbol,direction:managed.direction,sl:Number(managed.sl),tp:partialTpEnabled?Number(managed.tp2):Number(managed.tp1),tp1:Number(managed.tp1),tp2:Number(managed.tp2),partial_tp:partialTpEnabled,reason:status||'RE-EVALUATE'})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||`EA manage HTTP ${r.status}`);
-    setAutoStatus(`MT5 active trade management queued Ã¢â‚¬Â¢ SL ${fmt(managed.sl)} Ã¢â‚¬Â¢ TP ${fmt(managed.tp1)}`,'good');return j;
-  }catch(e){console.warn('MT5 active trade management failed',e);setAutoStatus(`MT5 manage failed Ã¢â‚¬Â¢ ${e.message||e}`,'bad');return null}
+    setAutoStatus(`MT5 active trade management queued • SL ${fmt(managed.sl)} • TP ${fmt(managed.tp1)}`,'good');return j;
+  }catch(e){console.warn('MT5 active trade management failed',e);setAutoStatus(`MT5 manage failed • ${e.message||e}`,'bad');return null}
 }
 
 // V36_CANONICAL_SIGNAL_FANOUT: one signal id, one record, one EA pending handoff.
 async function dispatchUniqueSignalV36(d){
   const sig=d?.signal;if(!sig||d?._sameActiveSignal)return null;
   const live=await readMT5ActiveStateV552(symbol);
-  if(hasManagedSignalExposureV5625(live,sig)){d._sameActiveSignal=true;d._sameSignalStatus='ACTIVE IN MT5';setAutoStatus('Same EA trade/pending is active in MT5 Ã¢â‚¬Â¢ no duplicate pending','warn');return{duplicate:true,source:'mt5'};}
+  if(hasManagedSignalExposureV5625(live,sig)){d._sameActiveSignal=true;d._sameSignalStatus='ACTIVE IN MT5';setAutoStatus('Same EA trade/pending is active in MT5 • no duplicate pending','warn');return{duplicate:true,source:'mt5'};}
   const baseSignalId=`MH${Date.now()}_${symbol}_${timeframe}`,selectedLot=lotForSignalScore(sig.score),signalId=partialTpEnabled?`${baseSignalId}__PT1_${Number(sig.tp1).toFixed(10)}`:baseSignalId,finalTp=partialTpEnabled?Number(sig.tp2):Number(sig.tp1);
   const market=Number((candleCache.get(keyFor())||[]).at(-1)?.c)||Number(sig.entry),pending=derivePendingTypeV30(sig.direction,Number(sig.entry),market);
   const er=await fetch('/api/mt5/ea/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({signal_id:signalId,symbol,type:sig.direction,entry:Number(sig.entry),sl:Number(sig.sl),tp:finalTp,lot:selectedLot,expiry:0})});
@@ -933,7 +933,7 @@ async function dispatchUniqueSignalV36(d){
   let rj=null,recordError='';
   try{const rr=await fetch('/api/records-v2/capture',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(recordPayload)});try{rj=await rr.json()}catch(_){rj={}}if(!rr.ok)throw new Error(rj.error||`Records HTTP ${rr.status}`)}catch(e){recordError=String(e?.message||e);console.warn('Record sync failed after MT5 pending was sent',e)}
   try{await prepareMT5SignalV796(d,'NEW')}catch(_){}
-  setAutoStatus(recordError?`MT5 pending sent Ã¢â‚¬Â¢ ${pending} Ã¢â‚¬Â¢ Record sync pending`:`Signal recorded Ã¢â‚¬Â¢ MT5 pending sent Ã¢â‚¬Â¢ ${pending} Ã¢â‚¬Â¢ Lot ${selectedLot.toFixed(2)} Ã¢â‚¬Â¢ Partial TP ${partialTpEnabled?'ON':'OFF'}`,recordError?'warn':'good');
+  setAutoStatus(recordError?`MT5 pending sent • ${pending} • Record sync pending`:`Signal recorded • MT5 pending sent • ${pending} • Lot ${selectedLot.toFixed(2)} • Partial TP ${partialTpEnabled?'ON':'OFF'}`,recordError?'warn':'good');
   return{record:rj,ea:ej,signal_id:signalId,record_error:recordError};
 }
 function waitForUiCommitV5623(){
@@ -943,7 +943,7 @@ function waitForUiCommitV5623(){
   });
 }
 async function executeNewAnalysis(fromAuto=false){
-  if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO Ã¢â‚¬Â¢ ':''}NEW ANALYZE Ã¢â‚¬Â¢ fetching one fresh candle snapshotÃ¢â‚¬Â¦`);
+  if(busy)return null;autoActionStartedAt=Date.now();busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}NEW ANALYZE • fetching one fresh candle snapshot…`);
   try{
     const k=keyFor(),prev=(active.get(k)||restoreActiveSignal(k))?.signal||null;
     const f=await candlesForAnalysis(),c=f.candles,d=analyze(c,null),newsRisk=await detectNewsRisk(c);
@@ -953,23 +953,23 @@ async function executeNewAnalysis(fromAuto=false){
     d._ranked=buildRankedForUi(c,d);let reason=refreshReason(prev,d);
     if(d.signal){const same=await reconcileRecordDuplicateV5625(d);if(same?.duplicate&&d._sameActiveSignal)reason=sameSignalMessageV30(d);}
     const mt5ExistingState=prev?await readMT5ActiveStateV552(symbol):null;
-if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE Ã¢â‚¬Â¢ NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}
+if(d.signal){const obj={signal:d.signal,state:d.signal.reconfirmed?'RECONFIRMED':'PENDING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(d._reversalBlocked&&prev){const obj={signal:prev,state:'REVERSAL WARNING',candles:c};active.set(k,obj);persistActiveSignal(k,obj)}else if(prev&&mt5ExistingState?.active){const obj={signal:prev,state:'ACTIVE • NEW SIGNAL BLOCKED',candles:c};active.set(k,obj);persistActiveSignal(k,obj);d._activeSignalPreserved=true;d.warnings=[`ACTIVE TRADE PRESERVED: no new order was issued (${d.executionGate?.reason||d.newsRisk?.label||'no validated fresh edge'}), while MT5 still reports active exposure.`,...(d.warnings||[])]}else{active.delete(k);persistActiveSignal(k,null)}
     renderDecision(d,reason,'NEW');busy=false;setBusy(false);
     await waitForUiCommitV5623();
     if(d.signal&&!d._sameActiveSignal){
     try{await dispatchUniqueSignalV36(d)}catch(e){console.warn('Record/EA handoff failed after analysis completed',e)}
   } // V5623_UI_COMMIT_BEFORE_SIGNAL_FANOUT
-    if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK Ã¢â‚¬â€ no signal':(d.signal?'Signal generated':'No clear edge'));
+    if(autoSignalEnabled)await autoSendAndSchedule(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
     else{
       try{
-        await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK Ã¢â‚¬â€ no signal':(d.signal?'Signal generated':'No clear edge'));
-        if(d._sameActiveSignal)setAutoStatus('NEW ANALYZE queued to WhatsApp Ã¢â‚¬Â¢ same signal active Ã¢â‚¬Â¢ no duplicate Record / MT5 pending','good');
+        await sendDecisionWhatsApp(d,'NEW ANALYSIS',d.newsRisk?.high?'NEWS RISK — no signal':(d.signal?'Signal generated':'No clear edge'));
+        if(d._sameActiveSignal)setAutoStatus('NEW ANALYZE queued to WhatsApp • same signal active • no duplicate Record / MT5 pending','good');
         else setAutoStatus('NEW ANALYZE queued to WhatsApp','good');
-      }catch(e){setAutoStatus(`WhatsApp queue failed Ã¢â‚¬Â¢ ${e.message||e}`,'bad')}
+      }catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
     return d;
   }catch(e){
-    showError(e.message);if(autoSignalEnabled){setAutoStatus('Analysis failed Ã¢â‚¬Â¢ staying on fixed 15m clock','bad');scheduleFixedAfterDecision(null,'NEW ANALYSIS',autoActionStartedAt||Date.now())}return null;
+    showError(e.message);if(autoSignalEnabled){setAutoStatus('Analysis failed • staying on fixed 15m clock','bad');scheduleFixedAfterDecision(null,'NEW ANALYSIS',autoActionStartedAt||Date.now())}return null;
   }finally{busy=false;setBusy(false)}
 }
 async function executeReevaluate(fromAuto=false){
@@ -981,17 +981,17 @@ async function executeReevaluate(fromAuto=false){
     try{
       await refreshBackendSettings();
       if(backendSettings.has_whatsapp){
-        await sendDecisionWhatsApp(skipped,'RE-EVALUATE','Skipped Ã¢â‚¬â€ no active signal');
+        await sendDecisionWhatsApp(skipped,'RE-EVALUATE','Skipped — no active signal');
         if(!autoSignalEnabled)setAutoStatus('RE-EVALUATE status sent to WhatsApp','good');
       }
-    }catch(e){setAutoStatus(`WhatsApp send failed Ã¢â‚¬Â¢ ${e.message||e}`,'bad')}
+    }catch(e){setAutoStatus(`WhatsApp send failed • ${e.message||e}`,'bad')}
     if(autoSignalEnabled){
-      setAutoStatus(`${fixedPhaseInfo(autoActionStartedAt).label} Ã¢â‚¬Â¢ Re-evaluation skipped`,'warn');
+      setAutoStatus(`${fixedPhaseInfo(autoActionStartedAt).label} • Re-evaluation skipped`,'warn');
       scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt);
     }
     return null;
   }
-  busy=true;setBusy(true,`${fromAuto?'AUTO Ã¢â‚¬Â¢ ':''}RE-EVALUATE Ã¢â‚¬Â¢ testing the original signal against fresh dataÃ¢â‚¬Â¦`);
+  busy=true;setBusy(true,`${fromAuto?'AUTO • ':''}RE-EVALUATE • testing the original signal against fresh data…`);
   try{
     const f=await candlesForAnalysis(),c=f.candles,s=a.signal,current=analyze(c,s),newsRisk=await detectNewsRisk(c),age=signalBarsAge(c,s),life=adaptiveExpiryBars(c),last=c.at(-1),model=empiricalDistanceModel(c,s.direction,stats(c));
     current.newsRisk=newsRisk;
@@ -1000,15 +1000,15 @@ async function executeReevaluate(fromAuto=false){
     current._ranked=buildRankedForUi(c,current);current.originalSignal=s;let status='',keep=false,displayOriginal=false;
     const slHit=signalTouched(c,s,'sl'),tp2Hit=signalTouched(c,s,'tp2'),tp1Hit=signalTouched(c,s,'tp1'),same=current.signal?.direction===s.direction,opposite=current.signal&&current.signal.direction!==s.direction;
     const favorable=s.direction==='BUY'?last.c>=s.entry:last.c<=s.entry,entryRelevant=Math.abs(last.c-s.entry)<=model.entryTolerance;
-    if(newsRisk.high){status=`NEWS RISK Ã¢â‚¬â€ ${newsRisk.label||'high-impact volatility'}. Existing setup is not freshly revalidated. No new trade signal; trade at your own risk.`;keep=true;displayOriginal=true;}
-    else if(slHit){status='INVALID Ã¢â‚¬â€ original structural invalidation / SL was breached';}
-    else if(tp2Hit){status='TARGET REACHED Ã¢â‚¬â€ TP2 reached';}
-    else if(tp1Hit&&same){status='TP1 REACHED Ã¢â‚¬â€ existing trade remains structurally valid toward TP2';keep=true;displayOriginal=true;}
-    else if(opposite){status=`REVERSAL WARNING Ã¢â‚¬â€ fresh data now ranks ${current.signal.direction} above the original ${s.direction}; reverse execution remains locked while the active trade/pending order exists`;keep=true;displayOriginal=true;current.signal=protectOnReversalV552(s,c);}
-    else if(!same&&age>life){status=`EXPIRED Ã¢â‚¬â€ ${age} bars old versus an adaptive structure lifecycle of about ${life} bars, and fresh data no longer confirms the original side`;}
-    else if(same&&age>life&&!entryRelevant&&favorable){status='STILL VALID FOR AN EXISTING TRADE Ã¢â‚¬â€ ORIGINAL ENTRY EXPIRED FOR A NEW ENTRY';keep=true;displayOriginal=true;}
-    else if(same){status='STILL VALID Ã¢â‚¬â€ original structure remains supported by fresh data';keep=true;displayOriginal=true;}
-    else{status='WEAKENING Ã¢â‚¬â€ no fresh opposite signal, but directional confirmation is no longer clear';keep=true;displayOriginal=true;}
+    if(newsRisk.high){status=`NEWS RISK — ${newsRisk.label||'high-impact volatility'}. Existing setup is not freshly revalidated. No new trade signal; trade at your own risk.`;keep=true;displayOriginal=true;}
+    else if(slHit){status='INVALID — original structural invalidation / SL was breached';}
+    else if(tp2Hit){status='TARGET REACHED — TP2 reached';}
+    else if(tp1Hit&&same){status='TP1 REACHED — existing trade remains structurally valid toward TP2';keep=true;displayOriginal=true;}
+    else if(opposite){status=`REVERSAL WARNING — fresh data now ranks ${current.signal.direction} above the original ${s.direction}; reverse execution remains locked while the active trade/pending order exists`;keep=true;displayOriginal=true;current.signal=protectOnReversalV552(s,c);}
+    else if(!same&&age>life){status=`EXPIRED — ${age} bars old versus an adaptive structure lifecycle of about ${life} bars, and fresh data no longer confirms the original side`;}
+    else if(same&&age>life&&!entryRelevant&&favorable){status='STILL VALID FOR AN EXISTING TRADE — ORIGINAL ENTRY EXPIRED FOR A NEW ENTRY';keep=true;displayOriginal=true;}
+    else if(same){status='STILL VALID — original structure remains supported by fresh data';keep=true;displayOriginal=true;}
+    else{status='WEAKENING — no fresh opposite signal, but directional confirmation is no longer clear';keep=true;displayOriginal=true;}
     if(displayOriginal){const sideScore=s.direction==='BUY'?current.buyScore:current.sellScore;if(same&&current.signal)current.signal={...current.signal,score:sideScore,status};else current.signal={...(current.signal||s),score:sideScore,status};current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Age ${age} bars; adaptive lifecycle ${life} bars.`}
     else{current.signal=null;current.explanation=`Re-evaluation tested the ORIGINAL ${s.direction} signal, not a new trade. ${status}. Fresh ranking: BUY ${current.buyScore} vs SELL ${current.sellScore}. Run NEW ANALYZE if you want a new setup.`}
     if(displayOriginal&&current.signal){const [protectState,modeState]=await Promise.all([readMT5ActiveStateV552(symbol),readMT5ModesV5625()]);if(modeState?.sl_adjustment===true&&hasManagedPositionV5625(protectState,s))current.signal=applyTP2ProtectionV5625(s,current.signal,c);else current.signal={...current.signal,sl:Number(s.sl)}}
@@ -1018,10 +1018,10 @@ async function executeReevaluate(fromAuto=false){
     if(keep&&displayOriginal&&current.signal)await manageExistingMT5TradeV552(s,current.signal,status);
     if(autoSignalEnabled)await autoSendAndSchedule(current,'RE-EVALUATE',status);
     else{
-      try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE queued to WhatsApp','good')}catch(e){setAutoStatus(`WhatsApp queue failed Ã¢â‚¬Â¢ ${e.message||e}`,'bad')}
+      try{await sendDecisionWhatsApp(current,'RE-EVALUATE',status);setAutoStatus('RE-EVALUATE queued to WhatsApp','good')}catch(e){setAutoStatus(`WhatsApp queue failed • ${e.message||e}`,'bad')}
     }
     return current;
-  }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed Ã¢â‚¬Â¢ staying on fixed quarter-hour boundary','bad');scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
+  }catch(e){showError(e.message);if(autoSignalEnabled){setAutoStatus('Re-evaluate failed • staying on fixed quarter-hour boundary','bad');scheduleFixedAfterDecision(null,'RE-EVALUATE',autoActionStartedAt||Date.now())}return null}
   finally{busy=false;setBusy(false)}
 }
 async function runAnalyze(){return executeNewAnalysis(false)}
@@ -1056,15 +1056,15 @@ function renderLoadedMap(arr){
     const trs=trueRanges(arr),base=Math.max(median(trs.slice(-120)),1e-9),recent=Math.max(...trs.slice(-3),0),ratio=recent/base;
     const risk=ratio>=2.6?'HIGH':ratio>=1.6?'MEDIUM':'LOW';
     $('#mapRegime').textContent=reg;$('#mapRegime').className=reg==='TRENDING'?'good':reg==='RANGING'?'warn':'';
-    $('#mapAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'Ã¢â‚¬â€';
+    $('#mapAdx').textContent=Number.isFinite(m.adx)?m.adx.toFixed(1):'—';
     $('#mapVwap').textContent=fmt(m.vwap);
     $('#mapBullOb').textContent=m.bullObLow!=null?'Yes':'No';$('#mapBullOb').className=m.bullObLow!=null?'good':'';
     $('#mapBearOb').textContent=m.bearObLow!=null?'Yes':'No';$('#mapBearOb').className=m.bearObLow!=null?'bad':'';
-    const fvgText=m.fvgType?`${m.fvgType==='BULLISH'?'B':'S'} ${fmt(m.fvgLow)}Ã¢â‚¬â€œ${fmt(m.fvgHigh)} Ã¢â‚¬Â¢ ${m.fvgFillPct}%`:'No active';
+    const fvgText=m.fvgType?`${m.fvgType==='BULLISH'?'B':'S'} ${fmt(m.fvgLow)}–${fmt(m.fvgHigh)} • ${m.fvgFillPct}%`:'No active';
     $('#mapFvg').textContent=fvgText;$('#mapFvg').title=fvgText;
     const eqText=`H ${m.equalHigh!=null?fmt(m.equalHigh):'No EQH'} / L ${m.equalLow!=null?fmt(m.equalLow):'No EQL'}`;
     $('#mapEq').textContent=eqText;$('#mapEq').title=eqText;
-    if($('#mapRisk')){$('#mapRisk').textContent=`${risk} ${ratio.toFixed(2)}Ãƒâ€”`;$('#mapRisk').className=risk==='HIGH'?'bad':risk==='MEDIUM'?'warn':'good'}
+    if($('#mapRisk')){$('#mapRisk').textContent=`${risk} ${ratio.toFixed(2)}×`;$('#mapRisk').className=risk==='HIGH'?'bad':risk==='MEDIUM'?'warn':'good'}
     $('#mapDiv').textContent=m.divergence||'No';
   }catch(e){}
 }
@@ -1110,7 +1110,7 @@ function drawRsiChart(canvas,arr){
   const {w,h,d}=canvasSize(canvas),ctx=canvas.getContext('2d');
   ctx.clearRect(0,0,w,h);ctx.fillStyle='#050a0d';ctx.fillRect(0,0,w,h);
   ctx.font=`${9*d}px Segoe UI`;
-  if(!arr.length){ctx.fillStyle='#b6c5c1';ctx.fillText('RSI (14) Ã¢â‚¬â€',8*d,13*d);return;}
+  if(!arr.length){ctx.fillStyle='#b6c5c1';ctx.fillText('RSI (14) —',8*d,13*d);return;}
   const closes=arr.map(x=>x.c),vals=[];
   for(let i=0;i<closes.length;i++)vals.push(i<14?50:rsi(closes.slice(0,i+1),14));
   const y=v=>6*d+(100-v)/100*(h-12*d),x=i=>8*d+i*(w-16*d)/Math.max(1,vals.length-1);
@@ -1124,8 +1124,8 @@ function drawRsiChart(canvas,arr){
   ctx.fillStyle='#dbe7e3';ctx.font=`${9*d}px Segoe UI`;ctx.fillText(`RSI (14) ${current.toFixed(2)}`,8*d,13*d);
 }
 function loadChart(){
-  $('#chartLabel').textContent=`${symbol} Ã¢â‚¬Â¢ ${timeframe}`;
-  $('#currentPair').textContent=`${symbol} Ã¢â‚¬Â¢ ${timeframe}`;
+  $('#chartLabel').textContent=`${symbol} • ${timeframe}`;
+  $('#currentPair').textContent=`${symbol} • ${timeframe}`;
   $('#nativeSymbol').textContent=symbol;
   $$('.nativeTfButtons button').forEach(b=>b.classList.toggle('active',b.dataset.chartTf===timeframe));
   if(!lwChart||!candleSeries)setupLightweightChart();
@@ -1135,7 +1135,7 @@ function loadChart(){
   clearSignalLevels();
   const empty=$('#chartEmpty');
   if(empty){empty.classList.remove('hidden');empty.textContent='Press NEW ANALYZE or RE-EVALUATE to load this timeframe.';}
-  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Ready Ã¢â‚¬Â¢ no market request yet';
+  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Ready • no market request yet';
 }
 function setupChartControls(){
   $$('.nativeTfButtons button').forEach(b=>b.onclick=()=>{const tf=b.dataset.chartTf;if(tf===timeframe)return;timeframe=tf;$('#timeframe').value=tf;contextChanged()});
@@ -1148,13 +1148,13 @@ function resetViewForContext(){
   // Manual pair/timeframe browsing is VIEW-ONLY. Never restore an old decision
   // into the newly selected context and never imply that fresh market data was
   // requested. The screen remains blank until an explicit analysis action.
-  $('#signalCard').className='panel signalPanel neutralState';$('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='NO ANALYSIS';$('#signalQuality').textContent='Ã¢â‚¬â€';
+  $('#signalCard').className='panel signalPanel neutralState';$('#signalBadge').className='signalBadge neutral';$('#signalBadge').textContent='NO ANALYSIS';$('#signalQuality').textContent='—';
   $('#plan').className='plan muted';$('#plan').textContent=`${symbol} ${timeframe} selected. Press NEW ANALYZE to request fresh data, or RE-EVALUATE an existing signal.`;
-  ['#mapRegime','#mapAdx','#mapVwap','#mapBullOb','#mapBearOb','#mapFvg','#mapEq','#mapDiv','#buyScoreTop','#sellScoreTop'].forEach(id=>$(id).textContent='Ã¢â‚¬â€');
-  if($('#mapRisk')){$('#mapRisk').textContent='Ã¢â‚¬â€';$('#mapRisk').className=''}
+  ['#mapRegime','#mapAdx','#mapVwap','#mapBullOb','#mapBearOb','#mapFvg','#mapEq','#mapDiv','#buyScoreTop','#sellScoreTop'].forEach(id=>$(id).textContent='—');
+  if($('#mapRisk')){$('#mapRisk').textContent='—';$('#mapRisk').className=''}
   $('#analysisStatusHeading').textContent='ANALYSIS STATUS';
-  $('#explanation').className='detailText muted';$('#explanation').textContent='Manual selection only Ã¢â‚¬Â¢ no market/API request has been made.';
-  $('#reasons').className='detailText';$('#reasons').textContent='Ã¢â‚¬â€';$('#topSetups').textContent='No ranking yet.';
+  $('#explanation').className='detailText muted';$('#explanation').textContent='Manual selection only • no market/API request has been made.';
+  $('#reasons').className='detailText';$('#reasons').textContent='—';$('#topSetups').textContent='No ranking yet.';
   chartDecision=null;updateSignalHeadline(null);clearSignalLevels();
 }
 async function contextChanged(){
@@ -1163,7 +1163,7 @@ async function contextChanged(){
   loadChart();
   resetViewForContext();
   if(symbol==='XAUUSD')renderGoldMetrics();else if(symbol==='BTCUSDT')renderBTCMetricsV5624(); // V5624_SELECTED_SYMBOL_METRICS
-  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection Ã¢â‚¬Â¢ no market request Ã¢â‚¬Â¢ press NEW ANALYZE or RE-EVALUATE';
+  const feed=$('#nativeFeedStatus');if(feed)feed.textContent='Manual selection • no market request • press NEW ANALYZE or RE-EVALUATE';
 }
 
 async function saveBackendSetting(payload){const r=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});if(!r.ok)throw new Error('Could not save setting.');await refreshBackendSettings();return backendSettings}
@@ -1210,7 +1210,7 @@ async function loadEconomicCalendarV545(){
   try{const cached=JSON.parse(localStorage.getItem('mh-economic-calendar-stable')||localStorage.getItem('mh-economic-calendar-v546')||localStorage.getItem('mh-economic-calendar-v545')||'null');if(cached?.days)renderEconomicCalendarV546(root,cached.days)}catch(e){}
   const ctl=new AbortController();const kill=setTimeout(()=>ctl.abort(),3200);
   try{const r=await fetch('/api/economic-calendar',{cache:'no-store',signal:ctl.signal});const j=await r.json();if(!r.ok)throw new Error('Calendar unavailable');const days=Array.isArray(j.days)?j.days:[];if(days.length){renderEconomicCalendarV546(root,days);try{localStorage.setItem('mh-economic-calendar-stable',JSON.stringify({days,at:Date.now()}))}catch(e){}
-      savePersistentUICacheV5411({calendar:days});}else if(!root.children.length)root.innerHTML='<div class="calendarLoading">No upcoming calendar events.</div>'}catch(e){if(!root.querySelector('.calDayV545'))root.innerHTML='<div class="calendarLoading">Calendar data refreshingÃ¢â‚¬Â¦</div>';setTimeout(loadEconomicCalendarV545,1500)}finally{clearTimeout(kill)}
+      savePersistentUICacheV5411({calendar:days});}else if(!root.children.length)root.innerHTML='<div class="calendarLoading">No upcoming calendar events.</div>'}catch(e){if(!root.querySelector('.calDayV545'))root.innerHTML='<div class="calendarLoading">Calendar data refreshing…</div>';setTimeout(loadEconomicCalendarV545,1500)}finally{clearTimeout(kill)}
 }
 $('#openKey').onclick=openNativeApiSettings;
 const supportBtn=$('#openWhatsappTab');if(supportBtn)supportBtn.onclick=async()=>{try{await fetch('/api/open-whatsapp',{method:'POST'})}catch(_){}};
@@ -1219,7 +1219,7 @@ $$('.pair').forEach(b=>b.onclick=()=>{$$('.pair').forEach(x=>x.classList.remove(
 $('#timeframe').onchange=e=>{timeframe=e.target.value;contextChanged()};
 
 // V55.1 startup: last-known UI values paint BEFORE any awaited backend work.
-// This removes the old 2Ã¢â‚¬â€œ3 minute blank ticker/calendar caused by waiting for Records/MT5 sync.
+// This removes the old 2–3 minute blank ticker/calendar caused by waiting for Records/MT5 sync.
 primeTickerV549();
 primeMovingTickerV547();
 renderRecentSignals();
