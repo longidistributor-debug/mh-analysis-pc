@@ -287,9 +287,10 @@ async function fetchCandles(targetSymbol=symbol,targetTimeframe=timeframe,{allow
     candleCache.set(requestKey,out);persistCandles(requestKey,out);
     if(requestKey===keyFor()){
       setChartData(out,reason==='chart');
-      setDataState('good',`${out.length} candles`);
-      setContextMeta(out.length,'Market history • Chart');
-      $('#nativeFeedStatus').textContent=`${out.length} candles loaded • ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+      const meta=j.meta||{},live=meta.live_merged===true;
+      setDataState('good',`${out.length} candles${live?' • LIVE':''}`);
+      setContextMeta(out.length,live?'FCS API v4 • LIVE':'FCS API v4 • History');
+      $('#nativeFeedStatus').textContent=`${out.length} candles loaded • ${live?'live FCS candle merged':'direct FCS history'} • ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
     }
     return{candles:out,meta:j.meta||{},fromCache:false};
   })().finally(()=>fetchInFlight.delete(requestKey));

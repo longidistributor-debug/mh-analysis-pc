@@ -89,7 +89,7 @@ func main() {
 	mux.HandleFunc("/api/update/start", mhUpdateStartHandlerV001)
 	mux.HandleFunc("/api/update/progress", mhUpdateProgressHandlerV001)
 	mux.HandleFunc("/api/settings", settingsHandler)
-	mux.HandleFunc("/api/history", desktopHistoryHandler) // V5624_SYMBOL_SCOPED_HISTORY_CACHE
+	mux.HandleFunc("/api/history", desktopHistoryLiveHandlerV5631) // V5631_FCS_HISTORY_PLUS_LIVE
 	mux.HandleFunc("/api/public-ticker", publicTickerHandlerV5411)
 	mux.HandleFunc("/api/ui-cache", uiCacheHandlerV5411)
 	mux.HandleFunc("/api/marketcap", marketcapHandler)
