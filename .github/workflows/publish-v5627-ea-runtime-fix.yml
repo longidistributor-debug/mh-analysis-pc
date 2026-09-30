@@ -28,38 +28,17 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference='Stop'
-
-          # 1) Do not freeze a pending subtype using the web quote. Send only BUY/SELL
-          # so the decoder chooses LIMIT/STOP from the live broker quote on every retry.
           $p='web/app.js'; $s=Get-Content -Raw $p
           $before=([regex]::Matches($s,'type:pending')).Count
           if($before -lt 2){throw "expected at least 2 type:pending handoffs, found $before"}
           $s=$s.Replace('type:pending,entry:','type:sig.direction,entry:')
           [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
 
-          # 2) Synchronize config.txt immediately at desktop startup. A stale prior
-          # Fast Scalping=true file otherwise makes decoder OnTimer skip ProcessMHSignal.
           $p='ea_modes_v558.go'; $s=Get-Content -Raw $p
-          $old=@'
-func registerV558ModeRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/mt5/modes", v558ModesHandler)
-	mux.HandleFunc("/api/mt5/fast-send", v558FastSendHandler)
-	mux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)
-}
-'@
-          $new=@'
-func registerV558ModeRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("/api/mt5/modes", v558ModesHandler)
-	mux.HandleFunc("/api/mt5/fast-send", v558FastSendHandler)
-	mux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)
-	// V.56.27: desktop mode state is authoritative on every process start.
-	// Clear stale Fast Scalping / SL state in Common Files before the EA timer reads it.
-	_ = v558PublishConfig()
-	v558RefreshNativeButtons()
-}
-'@
-          if(-not $s.Contains($old)){throw 'registerV558ModeRoutes anchor missing'}
-          $s=$s.Replace($old,$new)
+          $needle="`tmux.HandleFunc(`"/api/mt5/fast-status`", v558FastStatusHandler)`n}"
+          $replacement="`tmux.HandleFunc(`"/api/mt5/fast-status`", v558FastStatusHandler)`n`t// V.56.27: desktop mode state is authoritative on every process start.`n`t// Clear stale Fast Scalping / SL state before the EA timer reads it.`n`t_ = v558PublishConfig()`n`tv558RefreshNativeButtons()`n}"
+          if(-not $s.Contains($needle)){throw 'registerV558ModeRoutes anchor missing'}
+          $s=$s.Replace($needle,$replacement)
           [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
 
           'V.56.27'|Set-Content -Encoding ascii VERSION
