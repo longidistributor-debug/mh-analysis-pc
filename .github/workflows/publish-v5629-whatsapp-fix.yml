@@ -1,0 +1,197 @@
+name: Publish V5629 WhatsApp Formatting Fix
+
+on:
+  push:
+    branches: [v56.29-release]
+    paths:
+      - '.github/workflows/publish-v5629-whatsapp-fix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.29-release
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V.56.29 WhatsApp formatting fix only
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $p='web/app.js'
+          $s=Get-Content -Raw $p
+          $start=$s.IndexOf('function decisionWhatsAppMessage(')
+          $end=$s.IndexOf('async function sendDecisionWhatsApp', $start)
+          if($start -lt 0 -or $end -le $start){throw 'WhatsApp formatter anchors not found'}
+          $new=@'
+function cleanWhatsAppTextV5629(v){
+  return String(v??'').replace(/[^\x20-\x7E]/g,' ').replace(/\s+/g,' ').trim();
+}
+function decisionWhatsAppMessage(d,action='NEW ANALYSIS',status=''){
+  const sig=d?.signal||d?.originalSignal||null;
+  const isRe=action==='RE-EVALUATE';
+  const statusValue=isRe?'Re-Evaluate':(sig?'Signal generated':'No clear edge');
+  const reason=cleanWhatsAppTextV5629(isRe?(d?.explanation||status||d?.bestFamily||sig?.setupReason||'Market re-evaluation'):'');
+  const lines=['*MH ANALYSIS SIGNAL*',`*Status:* ${statusValue}`];
+  if(isRe){lines.push('',`*Reason:* ${reason||'Market re-evaluation'}`,'')}
+  else{lines.push('')}
+  lines.push(`*Pair:* ${cleanWhatsAppTextV5629(symbol)}`,`*Timeframe:* ${cleanWhatsAppTextV5629(String(timeframe).toUpperCase())}`,`*Time:* ${cleanWhatsAppTextV5629(new Date().toLocaleString())}`,'');
+  if(sig){
+    const selectedLot=lotForSignalScore(sig.score);
+    const setup=cleanWhatsAppTextV5629(d?.bestFamily||sig?.setupReason||'Best current setup');
+    lines.push(`*Signal:* ${cleanWhatsAppTextV5629(sig.direction)}`,`*Entry:* ${fmt(sig.entry)}`,`*SL:* ${fmt(sig.sl)}`,`*TP1:* ${fmt(sig.tp1)}`,`*TP2:* ${fmt(sig.tp2)}`,`*Score:* ${Number(sig.score)||0}/100`,`*Lot:* ${selectedLot.toFixed(2)} (${lotSizeEnabled?'Score Auto':'Fixed'})`,`*Partial TP:* ${partialTpEnabled?'ON':'OFF'}`,`*Setup:* ${setup||'Best current setup'}`);
+  }else{
+    lines.push('*Signal:* NO CLEAR EDGE','*Entry:* N/A','*SL:* N/A','*TP1:* N/A','*TP2:* N/A','*Score:* N/A','*Setup:* No clear edge');
+  }
+  return lines.join('\n');
+}
+'@
+          $s=$s.Substring(0,$start)+$new+$s.Substring($end)
+          [IO.File]::WriteAllText((Join-Path $PWD $p),$s,(New-Object Text.UTF8Encoding($false)))
+
+          'V.56.29'|Set-Content -Encoding ascii VERSION
+          foreach($spec in @(
+            @{p='updater.go'; old='const mhPublicVersionV001 = "V.56.28"'; new='const mhPublicVersionV001 = "V.56.29"'},
+            @{p='license_auth.go'; old='const licAppVersion = "V.56.28"'; new='const licAppVersion = "V.56.29"'},
+            @{p='webview2_host.go'; old='Version: V.56.28'; new='Version: V.56.29'},
+            @{p='web/index.html'; old='id="mhUpdateVersionV001">V.56.28<'; new='id="mhUpdateVersionV001">V.56.29<'}
+          )){
+            $x=Get-Content -Raw $spec.p
+            if(-not $x.Contains($spec.old)){throw "version anchor missing: $($spec.p)"}
+            $x=$x.Replace($spec.old,$spec.new)
+            [IO.File]::WriteAllText((Join-Path $PWD $spec.p),$x,(New-Object Text.UTF8Encoding($false)))
+          }
+
+      - name: Validate formatter and preserve trading safeguards
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web/app.js
+          node --check web/update-v001.js
+          if($LASTEXITCODE -ne 0){throw 'JavaScript validation failed'}
+          gofmt -w *.go
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.29'){throw 'VERSION mismatch'}
+          $app=Get-Content -Raw web\app.js
+          $a=$app.IndexOf('function cleanWhatsAppTextV5629')
+          $b=$app.IndexOf('async function sendDecisionWhatsApp',$a)
+          if($a -lt 0 -or $b -le $a){throw 'new WhatsApp formatter missing'}
+          $wa=$app.Substring($a,$b-$a)
+          foreach($m in @('*Status:*','*Signal:* NO CLEAR EDGE','*Entry:* N/A','*SL:* N/A','*TP1:* N/A','*TP2:* N/A','*Score:* N/A',"return lines.join('\\n')")){if(-not $wa.Contains($m)){throw "WhatsApp marker missing: $m"}}
+          foreach($bad in @('ðŸ','â€”','âš','â€¢')){if($wa.Contains($bad)){throw "mojibake remains in WhatsApp formatter: $bad"}}
+          foreach($m in @('TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','bestSetupV5625','type:sig.direction')){if(-not $app.Contains($m)){throw "trading safeguard missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
+          $up=Get-Content -Raw updater.go
+          foreach($m in @('func mhFetchManifestFromURLV001','func mhFetchManifestV001','versionAhead := mhNewerVersionV001','binaryMismatchAtSameVersion','mhCacheBustURLV001(m.DownloadURL)')){if(-not $up.Contains($m)){throw "V.56.28 updater hardening missing: $m"}}
+
+      - name: Commit V.56.29 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web/app.js VERSION updater.go license_auth.go webview2_host.go web/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'V.56.29 fix WhatsApp signal text encoding'
+            git push origin HEAD:v56.29-release
+          fi
+
+      - name: Build V.56.29 EXE and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress; if($LASTEXITCODE -ne 0){throw 'Inno Setup install failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path
+          $out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.29' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.29' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.29.exe'
+          if(-not(Test-Path $installer)){throw 'installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.29'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.29 fixes WhatsApp signal text corruption/mojibake. Signal messages now use clean encoding-safe text, and NO CLEAR EDGE fields show N/A instead of broken symbols. V.56.28 updater hardening and all V.56.27 EA/trading safeguards are preserved.'
+          $m=[ordered]@{version='V.56.29';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.29.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.29
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.29.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.29.exe
+          if-no-files-found: error
+
+      - name: Publish V.56.29 release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.29 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.29 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.29.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.29.exe' --target v56.29-release --title 'MH Analysis V.56.29' --notes 'WhatsApp signal formatting hotfix: removes mojibake/broken symbols and shows clean N/A values for NO CLEAR EDGE. Existing updater and trading safeguards preserved.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish production updater channel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/pub"
+          cp 'dist/MH Analysis.exe' "$RUNNER_TEMP/pub/MH Analysis.exe"
+          cp dist/update.json "$RUNNER_TEMP/pub/update.json"
+          cp dist/VERSION "$RUNNER_TEMP/pub/VERSION"
+          cp dist/SHA256SUMS.txt "$RUNNER_TEMP/pub/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.29.exe' "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.29.exe"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          git checkout -B mh-analysis-update-channel origin/mh-analysis-update-channel
+          cp "$RUNNER_TEMP/pub/MH Analysis.exe" './MH Analysis.exe'
+          cp "$RUNNER_TEMP/pub/update.json" update.json
+          cp "$RUNNER_TEMP/pub/VERSION" VERSION
+          cp "$RUNNER_TEMP/pub/SHA256SUMS.txt" SHA256SUMS.txt
+          cp "$RUNNER_TEMP/pub/MH-Analysis-Setup-V.56.29.exe" './MH-Analysis-Setup-V.56.29.exe'
+          git add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.29.exe'
+          git commit -m 'Publish MH Analysis V.56.29' || true
+          git push origin mh-analysis-update-channel
+
+      - name: Verify live V.56.29 updater
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 4
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
+          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+$cb)).Content|ConvertFrom-Json
+          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
+          if($live.version -ne 'V.56.29'){throw "live version mismatch: $($live.version)"}
+          if($live.mandatory -ne $true){throw 'mandatory flag false'}
+          if($live.sha256 -ne $local.sha256){throw 'manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-V5629-live.exe'
+          Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne $live.sha256.ToLower()){throw 'live EXE SHA mismatch'}
+          Write-Host 'LIVE V.56.29 updater verification PASSED'
