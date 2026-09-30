@@ -1,0 +1,268 @@
+name: Publish V5630 Global UI Encoding Fix V2
+
+on:
+  push:
+    branches: [v56.30-release]
+    paths:
+      - '.github/workflows/publish-v5630-global-ui-encoding-fix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.30-release
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Repair global UI text and replace legacy mojibake sanitizer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PYTHONIOENCODING='utf-8'
+          python -m pip install --disable-pip-version-check --no-cache-dir ftfy==6.3.1
+          @'
+          from pathlib import Path
+          from ftfy import fix_text
+
+          exts={'.html','.js','.css'}
+          skip={Path('web/v562-text-fix.js')}
+          changed=[]
+          for p in Path('web').rglob('*'):
+              if not p.is_file() or p.suffix.lower() not in exts or p in skip:
+                  continue
+              old=p.read_text(encoding='utf-8')
+              new=old
+              for _ in range(6):
+                  fixed=fix_text(new)
+                  if fixed==new:
+                      break
+                  new=fixed
+              if new!=old:
+                  with p.open('w',encoding='utf-8',newline='\n') as f:f.write(new)
+                  changed.append(str(p))
+
+          clean_sanitizer=r'''(()=>{
+          'use strict';
+          // V.56.30: clean UTF-8 display sanitizer. No hard-coded mojibake literals.
+          // This only repairs legacy cached/display text; trading, signal, EA, lot and SL logic are untouched.
+          const root=document.querySelector('.appShell');
+          if(!root)return;
+          const cp1252=new Map([
+            [0x20AC,0x80],[0x201A,0x82],[0x0192,0x83],[0x201E,0x84],[0x2026,0x85],[0x2020,0x86],[0x2021,0x87],[0x02C6,0x88],[0x2030,0x89],[0x0160,0x8A],[0x2039,0x8B],[0x0152,0x8C],[0x017D,0x8E],
+            [0x2018,0x91],[0x2019,0x92],[0x201C,0x93],[0x201D,0x94],[0x2022,0x95],[0x2013,0x96],[0x2014,0x97],[0x02DC,0x98],[0x2122,0x99],[0x0161,0x9A],[0x203A,0x9B],[0x0153,0x9C],[0x017E,0x9E],[0x0178,0x9F]
+          ]);
+          function suspiciousScore(s){return (String(s).match(/[\u00C3\u00C2\u00E2\u00F0\uFFFD]/g)||[]).length;}
+          function decodeCp1252Utf8(s){
+            const bytes=[];
+            for(const ch of s){
+              const cp=ch.codePointAt(0);
+              if(cp<=255)bytes.push(cp);
+              else if(cp1252.has(cp))bytes.push(cp1252.get(cp));
+              else return null;
+            }
+            try{return new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(bytes));}catch(_){return null;}
+          }
+          function cleanText(value){
+            let s=String(value??'');
+            for(let i=0;i<5;i++){
+              if(!suspiciousScore(s))break;
+              const next=decodeCp1252Utf8(s);
+              if(!next||next===s||suspiciousScore(next)>suspiciousScore(s))break;
+              s=next;
+            }
+            return s.replace(/\uFFFD/g,'');
+          }
+          function setText(el,text){if(el&&el.textContent!==text){el.textContent=text;return true}return false}
+          function fixTickerIcons(){
+            document.querySelectorAll('.goldIcon,.goldAsset').forEach(el=>setText(el,'●'));
+            document.querySelectorAll('.btcIcon,.btcAsset').forEach(el=>setText(el,'₿'));
+            document.querySelectorAll('.ethAsset').forEach(el=>setText(el,'◆'));
+            document.querySelectorAll('.capTitle .globe').forEach(el=>setText(el,'◉'));
+            document.querySelectorAll('.tickerCell').forEach(cell=>{
+              const label=(cell.querySelector('b')?.textContent||'').trim().toUpperCase(),icon=cell.querySelector('.assetIcon');
+              if(!icon)return;
+              const wanted=label==='GOLD'?'●':label==='BTCUSD'?'₿':label==='ETHUSD'?'◆':label==='EURUSD'?'€':label==='USDJPY'?'¥':(label==='GBPUSD'||label==='GBPJPY')?'£':'';
+              if(wanted)setText(icon,wanted);
+            });
+          }
+          function fixKnownLabels(){
+            const set=(sel,text)=>setText(document.querySelector(sel),text);
+            set('#analyze','NEW ANALYZE');set('#reevaluate','RE-EVALUATE');set('.contextPanel h3','MARKET CONTEXT');set('.confirmationsInside h4','CONFIRMATIONS / WARNINGS');set('.topSetupPanel h3','TOP SETUP');set('.recentPanel h3','RECENT SIGNALS');set('.liveDot','Interactive');
+            const footer=document.querySelector('.mhMainCopyright'),footerText='MH ANALYSIS By: Muhammad Hammad Shaukat - © All Rights Reserved 2026';if(footer)setText(footer,footerText);
+            fixTickerIcons();
+          }
+          function walk(node){
+            const w=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);let n;
+            while((n=w.nextNode())){const next=cleanText(n.nodeValue);if(next!==n.nodeValue)n.nodeValue=next;}
+          }
+          let applying=false,queued=false;
+          function apply(){if(applying)return;applying=true;try{fixKnownLabels();walk(root)}finally{applying=false}}
+          function queueApply(){if(queued)return;queued=true;setTimeout(()=>{queued=false;apply()},40)}
+          apply();const observer=new MutationObserver(queueApply);observer.observe(root,{subtree:true,childList:true,characterData:true});
+          })();
+          '''
+          p=Path('web/v562-text-fix.js')
+          with p.open('w',encoding='utf-8',newline='\n') as f:f.write(clean_sanitizer)
+          changed.append(str(p))
+
+          replacements={
+            Path('updater.go'):('const mhPublicVersionV001 = "V.56.29"','const mhPublicVersionV001 = "V.56.30"'),
+            Path('license_auth.go'):('const licAppVersion = "V.56.29"','const licAppVersion = "V.56.30"'),
+            Path('webview2_host.go'):('Version: V.56.29','Version: V.56.30'),
+            Path('web/index.html'):('id="mhUpdateVersionV001">V.56.29<','id="mhUpdateVersionV001">V.56.30<'),
+          }
+          for p,(old,new) in replacements.items():
+              text=p.read_text(encoding='utf-8')
+              if old not in text:raise SystemExit(f'version anchor missing: {p}')
+              with p.open('w',encoding='utf-8',newline='\n') as f:f.write(text.replace(old,new))
+          Path('VERSION').write_text('V.56.30\n',encoding='ascii')
+          print('UI files repaired:',len(set(changed)))
+          for p in sorted(set(changed)):print(' -',p)
+          '@ | Set-Content -Encoding utf8 .github\v5630_repair_v2.py
+          python .github\v5630_repair_v2.py
+
+      - name: Validate zero mojibake and unchanged trading backend
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PYTHONIOENCODING='utf-8'
+          @'
+          from pathlib import Path
+          suspects=('Ã','Â','â','ð','�')
+          bad=[]
+          for p in Path('web').rglob('*'):
+              if not p.is_file() or p.suffix.lower() not in {'.html','.js','.css'}:continue
+              text=p.read_text(encoding='utf-8')
+              for marker in suspects:
+                  if marker in text:
+                      for n,line in enumerate(text.splitlines(),1):
+                          if marker in line:
+                              bad.append(f'{p}:{n}:U+{ord(marker):04X}')
+                              if len(bad)>=50:break
+                  if len(bad)>=50:break
+              if len(bad)>=50:break
+          if bad:
+              print('Remaining suspicious markers:')
+              print('\n'.join(bad))
+              raise SystemExit(1)
+          print('PASS: zero mojibake markers in web HTML/JS/CSS')
+          '@ | Set-Content -Encoding utf8 .github\v5630_scan_v2.py
+          python .github\v5630_scan_v2.py
+
+          Get-ChildItem web -Recurse -Filter *.js | ForEach-Object {
+            node --check $_.FullName
+            if($LASTEXITCODE -ne 0){throw "JavaScript syntax failed: $($_.FullName)"}
+          }
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.30'){throw 'VERSION mismatch'}
+          $app=Get-Content -Raw -Encoding utf8 web\app.js
+          foreach($m in @('function cleanWhatsAppTextV5629','*Signal:* NO CLEAR EDGE','*Entry:* N/A','TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','bestSetupV5625','type:sig.direction')){if(-not $app.Contains($m)){throw "required safeguard missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
+          git diff --exit-code HEAD -- ea_modes_v558.go ea_signal_bridge.go records_mt5_local.go
+          if($LASTEXITCODE -ne 0){throw 'EA/trading backend files changed unexpectedly'}
+          $idx=Get-Content -Raw -Encoding utf8 web\index.html
+          if(-not $idx.Contains('<meta charset="utf-8"')){throw 'UTF-8 meta missing'}
+          if(-not $idx.Contains('id="mhUpdateVersionV001">V.56.30<')){throw 'V.56.30 UI version missing'}
+
+      - name: Commit V.56.30 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/v5630_repair_v2.py .github/v5630_scan_v2.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add web VERSION updater.go license_auth.go webview2_host.go
+          if ! git diff --cached --quiet; then
+            git commit -m 'V.56.30 clean global UI encoding and legacy sanitizer'
+            git push origin HEAD:v56.30-release
+          fi
+
+      - name: Build V.56.30 EXE and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress;if($LASTEXITCODE -ne 0){throw 'Inno Setup install failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path;$out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.30' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.30' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.30.exe';if(-not(Test-Path $installer)){throw 'installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.30'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.30 repairs global UI text encoding, startup placeholders, dynamic labels and legacy cached-text sanitation. Broken character flashes are removed. V.56.29 WhatsApp fix and all prior EA/trading safeguards are preserved.'
+          $m=[ordered]@{version='V.56.30';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.30.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.30
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.30.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.30.exe
+          if-no-files-found: error
+
+      - name: Publish V.56.30 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.30 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.30 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.30.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.30.exe' --target v56.30-release --title 'MH Analysis V.56.30' --notes 'Global UI encoding cleanup. Removes broken/mojibake characters from startup and dynamic views while preserving WhatsApp and EA/trading safeguards.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish production updater through clean worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          WT="$RUNNER_TEMP/mh-update-v5630-v2";rm -rf "$WT"
+          git worktree add --force -B mh-analysis-update-channel "$WT" origin/mh-analysis-update-channel
+          cp 'dist/MH Analysis.exe' "$WT/MH Analysis.exe"
+          cp dist/update.json "$WT/update.json";cp dist/VERSION "$WT/VERSION";cp dist/SHA256SUMS.txt "$WT/SHA256SUMS.txt"
+          cp 'dist-installer/MH-Analysis-Setup-V.56.30.exe' "$WT/MH-Analysis-Setup-V.56.30.exe"
+          git -C "$WT" add 'MH Analysis.exe' update.json VERSION SHA256SUMS.txt 'MH-Analysis-Setup-V.56.30.exe'
+          git -C "$WT" commit -m 'Publish MH Analysis V.56.30' || true
+          git -C "$WT" push origin mh-analysis-update-channel
+
+      - name: Verify live V.56.30 updater and binary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop';Start-Sleep -Seconds 4
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();$base='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/'
+          $live=(Invoke-WebRequest -UseBasicParsing ($base+'update.json?cb='+$cb)).Content|ConvertFrom-Json
+          $local=(Get-Content -Raw dist\update.json)|ConvertFrom-Json
+          if($live.version -ne 'V.56.30'){throw "live version mismatch: $($live.version)"};if($live.mandatory -ne $true){throw 'mandatory flag false'};if($live.sha256 -ne $local.sha256){throw 'manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-V5630-live.exe';Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower();if($sha -ne $live.sha256.ToLower()){throw 'live EXE SHA mismatch'}
+          Write-Host 'LIVE V.56.30 updater verification PASSED'
