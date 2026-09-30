@@ -1,0 +1,79 @@
+name: Publish V5629 Production Updater Only
+
+on:
+  push:
+    branches: [v56.29-release]
+    paths:
+      - '.github/workflows/publish-v5629-production-only.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.29-release
+          fetch-depth: 0
+
+      - name: Download exact V.56.29 release assets and create manifest
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $dir=Join-Path $env:RUNNER_TEMP 'v5629-release'
+          New-Item -ItemType Directory -Force $dir|Out-Null
+          gh release download v56.29 --pattern 'MH.Analysis.exe' --pattern 'MH-Analysis-Setup-V.56.29.exe' --dir $dir --clobber
+          if($LASTEXITCODE -ne 0){throw 'release asset download failed'}
+          $exe=Join-Path $dir 'MH.Analysis.exe'
+          $installer=Join-Path $dir 'MH-Analysis-Setup-V.56.29.exe'
+          if(-not(Test-Path $exe) -or -not(Test-Path $installer)){throw 'release assets missing'}
+          $sha=(Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne '126a57a1c87c31533fc14d98655c339a0d2f343b8eda2518e7c579044f3c355d'){throw "release EXE digest changed: $sha"}
+          $notes='V.56.29 fixes WhatsApp signal text corruption. Messages now use encoding-safe text and NO CLEAR EDGE fields show N/A. V.56.28 updater hardening and prior EA/trading safeguards are preserved.'
+          $m=[ordered]@{version='V.56.29';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $dir 'update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          'V.56.29'|Set-Content -Encoding ascii (Join-Path $dir 'VERSION')
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii (Join-Path $dir 'SHA256SUMS.txt')
+
+      - name: Publish through clean update-channel worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          PUB="$(cygpath -u "$RUNNER_TEMP")/v5629-release"
+          WT="$(cygpath -u "$RUNNER_TEMP")/mh-update-channel-wt"
+          rm -rf "$WT"
+          git worktree add -B mh-analysis-update-channel "$WT" origin/mh-analysis-update-channel
+          cp "$PUB/MH.Analysis.exe" "$WT/MH Analysis.exe"
+          cp "$PUB/MH-Analysis-Setup-V.56.29.exe" "$WT/MH-Analysis-Setup-V.56.29.exe"
+          cp "$PUB/update.json" "$WT/update.json"
+          cp "$PUB/VERSION" "$WT/VERSION"
+          cp "$PUB/SHA256SUMS.txt" "$WT/SHA256SUMS.txt"
+          git -C "$WT" add 'MH Analysis.exe' 'MH-Analysis-Setup-V.56.29.exe' update.json VERSION SHA256SUMS.txt
+          git -C "$WT" commit -m 'Publish MH Analysis V.56.29 WhatsApp fix' || true
+          git -C "$WT" push origin HEAD:mh-analysis-update-channel
+
+      - name: Verify live production manifest and binary
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          Start-Sleep -Seconds 5
+          $cb=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+          $manifestUrl='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json?cb='+$cb
+          $live=(Invoke-WebRequest -UseBasicParsing $manifestUrl).Content|ConvertFrom-Json
+          if($live.version -ne 'V.56.29'){throw "live version mismatch: $($live.version)"}
+          if($live.mandatory -ne $true){throw 'live mandatory is false'}
+          if($live.sha256 -ne '126a57a1c87c31533fc14d98655c339a0d2f343b8eda2518e7c579044f3c355d'){throw "manifest SHA mismatch: $($live.sha256)"}
+          $tmp=Join-Path $env:RUNNER_TEMP 'live-v5629.exe'
+          Invoke-WebRequest -UseBasicParsing ($live.download_url+'?cb='+$cb) -OutFile $tmp
+          $sha=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($sha -ne $live.sha256.ToLower()){throw "live EXE SHA mismatch: $sha"}
+          Write-Host 'LIVE V.56.29 PRODUCTION UPDATER VERIFIED'
