@@ -25,6 +25,9 @@ func registerV558ModeRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/mt5/modes", v558ModesHandler)
 	mux.HandleFunc("/api/mt5/fast-send", v558FastSendHandler)
 	mux.HandleFunc("/api/mt5/fast-status", v558FastStatusHandler)
+	// V.56.27 startup sync: clear stale EA mode file state.
+	_ = v558PublishConfig()
+	v558RefreshNativeButtons()
 }
 
 func v558Snapshot() v558ModeState {
