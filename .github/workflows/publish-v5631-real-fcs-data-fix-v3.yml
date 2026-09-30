@@ -1,0 +1,185 @@
+name: Publish V5631 Real FCS Data Fix V3
+
+on:
+  push:
+    branches: [v56.31-release]
+    paths:
+      - '.github/workflows/publish-v5631-real-fcs-data-fix-v3.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-publish:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v56.31-release
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: false
+
+      - name: Apply V.56.31 source patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PYTHONIOENCODING='utf-8'
+          @'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p=Path(path)
+              s=p.read_text(encoding='utf-8')
+              if old not in s:
+                  raise SystemExit(f'anchor missing in {path}: {old}')
+              p.write_text(s.replace(old,new,1),encoding='utf-8',newline='\n')
+
+          replace_once('main.go',
+              'mux.HandleFunc("/api/history", desktopHistoryHandler) // V5624_SYMBOL_SCOPED_HISTORY_CACHE',
+              'mux.HandleFunc("/api/history", desktopHistoryLiveHandlerV5631) // V5631_FCS_HISTORY_PLUS_LIVE')
+
+          replace_once('web/app.js',
+              "      setDataState('good',`${out.length} candles`);",
+              "      const meta=j.meta||{},live=meta.live_merged===true;\n      setDataState('good',`${out.length} candles${live?' • LIVE':''}`);")
+          replace_once('web/app.js',
+              "      setContextMeta(out.length,'Market history • Chart');",
+              "      setContextMeta(out.length,live?'FCS API v4 • LIVE':'FCS API v4 • History');")
+          replace_once('web/app.js',
+              "      $('#nativeFeedStatus').textContent=`${out.length} candles loaded • ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;",
+              "      $('#nativeFeedStatus').textContent=`${out.length} candles loaded • ${live?'live FCS candle merged':'direct FCS history'} • ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;")
+
+          replace_once('updater.go','const mhPublicVersionV001 = "V.56.30"','const mhPublicVersionV001 = "V.56.31"')
+          replace_once('license_auth.go','const licAppVersion = "V.56.30"','const licAppVersion = "V.56.31"')
+          replace_once('webview2_host.go','Version: V.56.30','Version: V.56.31')
+          replace_once('web/index.html','id="mhUpdateVersionV001">V.56.30<','id="mhUpdateVersionV001">V.56.31<')
+          Path('VERSION').write_text('V.56.31\n',encoding='ascii')
+          '@ | Set-Content -Encoding utf8 .github\v5631_patch_v3.py
+          python .github\v5631_patch_v3.py
+          if($LASTEXITCODE -ne 0){throw 'V.56.31 source patch failed'}
+          gofmt -w history_live_v5631.go main.go
+
+      - name: Validate V.56.31 real-data path and preserved trading logic
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          node --check web\app.js
+          if($LASTEXITCODE -ne 0){throw 'app.js syntax failed'}
+          go test ./...
+          if($LASTEXITCODE -ne 0){throw 'Go tests failed'}
+          if((Get-Content VERSION -Raw).Trim() -ne 'V.56.31'){throw 'VERSION mismatch'}
+
+          $main=Get-Content -Raw -Encoding utf8 main.go
+          foreach($m in @('desktopHistoryLiveHandlerV5631','https://api-v4.fcsapi.com/forex/history','https://api-v4.fcsapi.com/crypto/history','BINANCE:BTCUSDT')){if(-not $main.Contains($m)){throw "history marker missing: $m"}}
+          $liveSrc=Get-Content -Raw -Encoding utf8 history_live_v5631.go
+          foreach($m in @('fetchFCSLatestCandleV5631','extractFCSActiveCandleV5631','mergeLiveCandleV5631','periodSecondsV5631','https://api-v4.fcsapi.com/forex/latest','https://api-v4.fcsapi.com/crypto/latest','BINANCE:BTCUSDT','live_merged','live-merged')){if(-not $liveSrc.Contains($m)){throw "live-data marker missing: $m"}}
+
+          $app=Get-Content -Raw -Encoding utf8 web\app.js
+          foreach($m in @('FCS API v4 • LIVE','live FCS candle merged','TP2_BE_PROGRESS_V5625=.40','TP2_BE_LOCK_USD_V5625=2.50','TP1_LOCK_OFFSET_USD_V5625=6.50','bestSetupV5625','type:sig.direction','function cleanWhatsAppTextV5629')){if(-not $app.Contains($m)){throw "required safeguard missing: $m"}}
+          foreach($m in @('if(n>=83)return 0.05;','if(n>=73)return 0.04;','if(n>=66)return 0.03;','if(!lotSizeEnabled)return 0.02;')){if(-not $app.Contains($m)){throw "lot map changed: $m"}}
+          git diff --exit-code HEAD -- ea_modes_v558.go ea_signal_bridge.go records_mt5_local.go
+          if($LASTEXITCODE -ne 0){throw 'EA/trading backend files changed unexpectedly'}
+
+      - name: Commit V.56.31 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/v5631_patch_v3.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add history_live_v5631.go main.go web/app.js VERSION updater.go license_auth.go webview2_host.go web/index.html
+          if ! git diff --cached --quiet; then
+            git commit -m 'V.56.31 restore real FCS history plus live candle fetch'
+            git push origin HEAD:v56.31-release
+          fi
+
+      - name: Build V.56.31 EXE and installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force dist,dist-installer|Out-Null
+          $env:GOOS='windows';$env:GOARCH='amd64';$env:CGO_ENABLED='0'
+          go build -trimpath -ldflags='-H=windowsgui -s -w' -o 'dist/MH Analysis.exe' .
+          if($LASTEXITCODE -ne 0 -or -not(Test-Path 'dist/MH Analysis.exe')){throw 'Windows EXE build failed'}
+          $iscc='C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if(-not(Test-Path $iscc)){choco install innosetup -y --no-progress;if($LASTEXITCODE -ne 0){throw 'Inno Setup install failed'}}
+          $src=(Resolve-Path 'dist\MH Analysis.exe').Path;$out=(Resolve-Path dist-installer).Path
+          & $iscc '/Qp' "/DMySourceExe=$src" "/DMyOutputDir=$out" '/DMyAppVersion=V.56.31' '/DMyOutputBaseFilename=MH-Analysis-Setup-V.56.31' 'installer\MHAnalysis-V01.iss'
+          if($LASTEXITCODE -ne 0){throw 'installer build failed'}
+          $installer='dist-installer\MH-Analysis-Setup-V.56.31.exe';if(-not(Test-Path $installer)){throw 'installer missing'}
+          $sha=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          "$sha  MH Analysis.exe"|Set-Content -Encoding ascii dist\SHA256SUMS.txt
+          'V.56.31'|Set-Content -Encoding ascii dist\VERSION
+          $notes='V.56.31 restores fresh FCS API v4 market data by merging the active latest candle with selected-timeframe history for NEW ANALYZE and RE-EVALUATE. V.56.30 UI encoding fixes and all existing EA, lot, SL and TP safeguards are preserved.'
+          $m=[ordered]@{version='V.56.31';mandatory=$true;download_url='https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe';sha256=$sha;notes=$notes}|ConvertTo-Json -Compress
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist\update.json'),$m,(New-Object Text.UTF8Encoding($false)))
+          Compress-Archive -Path 'dist\MH Analysis.exe','dist\SHA256SUMS.txt','dist\update.json','dist\VERSION',$installer -DestinationPath 'dist\MH-Analysis-V.56.31.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MH-Analysis-V.56.31
+          path: |
+            dist/MH Analysis.exe
+            dist/MH-Analysis-V.56.31.zip
+            dist/SHA256SUMS.txt
+            dist/update.json
+            dist/VERSION
+            dist-installer/MH-Analysis-Setup-V.56.31.exe
+          if-no-files-found: error
+
+      - name: Publish V.56.31 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference='Continue'
+          gh release delete v56.31 --yes --cleanup-tag 2>$null
+          $global:LASTEXITCODE=0
+          $ErrorActionPreference='Stop'
+          gh release create v56.31 'dist\MH Analysis.exe' 'dist\MH-Analysis-V.56.31.zip' 'dist\SHA256SUMS.txt' 'dist-installer\MH-Analysis-Setup-V.56.31.exe' --target v56.31-release --title 'MH Analysis V.56.31' --notes 'Real FCS data fix: selected-timeframe history is fetched from FCS API v4 and the active latest candle is merged for NEW ANALYZE / RE-EVALUATE. Existing UI, WhatsApp, EA, lot, SL and TP safeguards are preserved.'
+          if($LASTEXITCODE -ne 0){throw 'release publish failed'}
+
+      - name: Publish V.56.31 production updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin mh-analysis-update-channel
+          WT="$RUNNER_TEMP/mh-update-v5631-v3";rm -rf "$WT"
+          git worktree add --force -B mh-analysis-update-channel "$WT" origin/mh-analysis-update-channel
+          cp 'dist/MH Analysis.exe' "$WT/MH Analysis.exe"
+          cp dist/update.json "$WT/update.json"
+          cp dist/SHA256SUMS.txt "$WT/SHA256SUMS.txt"
+          cp dist/VERSION "$WT/VERSION"
+          cd "$WT"
+          git add 'MH Analysis.exe' update.json SHA256SUMS.txt VERSION
+          if ! git diff --cached --quiet; then git commit -m 'Publish V.56.31 production updater'; fi
+          git push origin HEAD:mh-analysis-update-channel
+
+      - name: Verify live V.56.31 updater and EXE SHA
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $expected=(Get-FileHash 'dist\MH Analysis.exe' -Algorithm SHA256).Hash.ToLower()
+          $manifest=$null
+          for($i=0;$i -lt 12;$i++){
+            try{
+              $u="https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/update.json?cb=$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+              $manifest=(Invoke-WebRequest -UseBasicParsing $u -Headers @{'Cache-Control'='no-cache'}).Content|ConvertFrom-Json
+              if($manifest.version -eq 'V.56.31' -and $manifest.sha256 -eq $expected){break}
+            }catch{}
+            Start-Sleep -Seconds 3
+          }
+          if($null -eq $manifest -or $manifest.version -ne 'V.56.31'){throw 'live manifest is not V.56.31'}
+          if($manifest.sha256 -ne $expected){throw 'live manifest SHA mismatch'}
+          $tmp=Join-Path $env:RUNNER_TEMP 'MH-Analysis-live-v5631.exe'
+          Invoke-WebRequest -UseBasicParsing ("https://raw.githubusercontent.com/longidistributor-debug/mh-analysis-pc/mh-analysis-update-channel/MH%20Analysis.exe?cb="+[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) -OutFile $tmp -Headers @{'Cache-Control'='no-cache'}
+          $liveHash=(Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+          if($liveHash -ne $expected){throw "live EXE SHA mismatch $liveHash != $expected"}
+          Write-Host "LIVE V.56.31 VERIFIED SHA256=$expected"
