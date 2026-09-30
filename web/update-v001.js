@@ -46,7 +46,7 @@
   async function startUpdate(){
     if(starting)return;starting=true;showGate();retry.classList.remove('show');btn.style.display='none';wrap.classList.add('show');percent(0);title.textContent='Preparing Update';sub.textContent='A newer MH Analysis version was found.';state.textContent='Starting automatic download and installation…';
     try{
-      const r=await fetch('/api/update/start',{method:'POST',cache:'no-store'});
+      const r=await fetch('/api/update/start?mhui='+Date.now(),{method:'POST',cache:'no-store'});
       if(!r.ok)throw new Error('Update could not start.');
       const j=await r.json().catch(()=>({}));setLatest(j.latest||j.version);
       if(!progressTimer)progressTimer=setInterval(pollProgress,250);pollProgress();
@@ -59,7 +59,7 @@
       document.body.classList.add('mhUpdateCheckingV001');showGate();title.textContent='Checking for Updates';sub.textContent='Please wait…';btn.style.display='none';retry.classList.remove('show');wrap.classList.remove('show');state.textContent='Checking the MH Analysis update manifest before login…';
     }
     try{
-      const r=await fetch('/api/update/status',{cache:'no-store'});
+      const r=await fetch('/api/update/status?mhui='+Date.now(),{cache:'no-store'});
       if(!r.ok)throw new Error('offline');
       const j=await r.json();
       setLatest(j.latest);
@@ -76,7 +76,7 @@
   btn.addEventListener('click',startUpdate);
   retry.addEventListener('click',()=>checkVersion(false));
   checkVersion(false);
-  setInterval(()=>checkVersion(true),60000);
+  setInterval(()=>checkVersion(true),30000);
   window.addEventListener('focus',()=>checkVersion(true));
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkVersion(true)});
 })();
